@@ -57,16 +57,46 @@ ask away.
 
 ## Automating the daily sync
 
-To keep the local database fresh without running the command by hand, add a
-cron job (Linux/macOS):
+The repo includes `daily_update.sh`, a script that runs `tridata sync` and
+`tridata export`, and logs everything with a timestamp to `sync.log`.
+
+### Linux (systemd — recommended)
+
+Ideal for laptops: if the machine is off at the scheduled time, the job runs
+automatically on next boot.
+
+```bash
+# Copy the unit files
+cp daily_update.sh ~/projects/tridata/
+chmod +x ~/projects/tridata/daily_update.sh
+mkdir -p ~/.config/systemd/user
+cp .config/systemd/user/tridata-sync.* ~/.config/systemd/user/
+
+# Enable and start
+systemctl --user daemon-reload
+systemctl --user enable --now tridata-sync.timer
+```
+
+The timer fires every day at **08:00**. If the computer was off at that time,
+it runs as soon as you log in.
+
+Check status and logs:
+
+```bash
+systemctl --user status tridata-sync.timer   # next trigger time
+journalctl --user -u tridata-sync.service    # execution log
+tail -20 ~/projects/tridata/sync.log         # script output log
+```
+
+### macOS / Linux (cron fallback)
 
 ```bash
 crontab -e
-# Run every day at 23:00
-0 23 * * * cd /path/to/tridata && .venv/bin/tridata sync >> sync.log 2>&1
+# Run every day at 08:00
+0 8 * * * /path/to/tridata/daily_update.sh
 ```
 
-On Windows, use Task Scheduler to run the same command daily.
+Note: cron does not recover missed runs if the machine was off.
 
 ## Project structure
 

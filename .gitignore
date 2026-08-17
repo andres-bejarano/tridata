@@ -13,8 +13,9 @@ dist/
 .venv/
 venv/
 
-# Exports (user-generated, not part of the repo)
+# Exports and logs (user-generated, not part of the repo)
 garmin_export.*
+sync.log
 
 # Editors / OS
 .vscode/

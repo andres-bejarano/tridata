@@ -18,7 +18,7 @@ It keeps a local SQLite database of everything it has pulled, so:
 ## Install
 
 ```bash
-git clone https://github.com/<your-username>/tridata.git
+git clone https://github.com/andres-bejarano/tridata.git
 cd tridata
 python3 -m venv .venv
 source .venv/bin/activate

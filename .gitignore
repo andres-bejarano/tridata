@@ -1,0 +1,22 @@
+# Secrets
+.env
+
+# Garmin session tokens and local database
+.garmin_claude_bridge/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Exports (user-generated, not part of the repo)
+garmin_export.*
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

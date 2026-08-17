@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tridata"
+version = "0.1.0"
+description = "Pull your Garmin Connect data and hand it to Claude for free analysis — no paid connectors required."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Andrés Bejarano" }]
+dependencies = [
+    "garminconnect>=0.2.8",
+    "garth>=0.4.46",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+tridata = "tridata.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

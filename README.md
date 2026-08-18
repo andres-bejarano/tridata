@@ -62,22 +62,20 @@ The repo includes `daily_update.sh`, a script that runs `tridata sync` and
 
 ### Linux (systemd — recommended)
 
-Ideal for laptops: if the machine is off at the scheduled time, the job runs
-automatically on next boot.
+The repo ships the unit files in `.config/systemd/user/`. Systemd is
+preferred over cron because `Persistent=true` makes the timer catch up
+automatically if the machine was off at the scheduled time.
 
 ```bash
-# Copy the unit files
-cp daily_update.sh ~/projects/tridata/
 chmod +x ~/projects/tridata/daily_update.sh
 mkdir -p ~/.config/systemd/user
 cp .config/systemd/user/tridata-sync.* ~/.config/systemd/user/
 
-# Enable and start
 systemctl --user daemon-reload
 systemctl --user enable --now tridata-sync.timer
 ```
 
-The timer fires every day at **08:00**. If the computer was off at that time,
+The timer fires every day at **06:00**. If the computer was off at that time,
 it runs as soon as you log in.
 
 Check status and logs:
@@ -88,15 +86,13 @@ journalctl --user -u tridata-sync.service    # execution log
 tail -20 ~/projects/tridata/sync.log         # script output log
 ```
 
-### macOS / Linux (cron fallback)
+### macOS / Linux (cron)
 
 ```bash
-crontab -e
-# Run every day at 08:00
-0 8 * * * /path/to/tridata/daily_update.sh
+(crontab -l 2>/dev/null; echo "0 6 * * * /path/to/tridata/daily_update.sh") | crontab -
 ```
 
-Note: cron does not recover missed runs if the machine was off.
+Note: cron does not recover missed runs if the machine was off at 06:00.
 
 ## Project structure
 

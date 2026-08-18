@@ -79,6 +79,23 @@ class TestGetTrainingReadiness:
         assert result.recovery_time_minutes == 8    # 480 // 60
         assert result.hrv_weekly_avg == 52
 
+    def test_picks_latest_timestamp_regardless_of_list_order(self, client):
+        # Regression: API may return multiple readings per day in any order.
+        # We must select the one with the highest timestamp, not assume index 0.
+        c, api = client
+        api.get_training_readiness.return_value = [
+            {"timestampLocal": "2026-08-04T04:00:00.0", "score": 30, "level": "POOR",
+             "feedbackShort": "REST", "sleepScore": 60, "recoveryTime": 600, "hrvWeeklyAverage": 40},
+            {"timestampLocal": "2026-08-04T08:00:00.0", "score": 85, "level": "EXCELLENT",
+             "feedbackShort": "TRAIN_AS_USUAL", "sleepScore": 90, "recoveryTime": 120, "hrvWeeklyAverage": 58},
+            {"timestampLocal": "2026-08-04T06:00:00.0", "score": 50, "level": "MODERATE",
+             "feedbackShort": "LIGHT", "sleepScore": 70, "recoveryTime": 300, "hrvWeeklyAverage": 48},
+        ]
+        result = c.get_training_readiness(DAY)
+        # The 08:00 reading is the most recent — must win even though it's in the middle.
+        assert result.score == 85
+        assert result.level == "EXCELLENT"
+
     def test_returns_none_when_api_returns_empty(self, client):
         c, api = client
         api.get_training_readiness.return_value = []

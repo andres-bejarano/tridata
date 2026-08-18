@@ -161,7 +161,11 @@ class GarminClient:
         raw_list = self.api.get_training_readiness(day.isoformat())
         if not raw_list:
             return None
-        raw = raw_list[0]  # most recent reading of the day
+        # Pick the reading with the latest timestamp — the API may return them in any order.
+        raw = max(
+            raw_list,
+            key=lambda r: r.get("timestampLocal") or r.get("timestamp") or "",
+        )
         recovery_secs = raw.get("recoveryTime")
         return TrainingReadiness(
             readiness_date=day,

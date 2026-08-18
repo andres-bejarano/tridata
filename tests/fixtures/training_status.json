@@ -1,0 +1,11 @@
+{
+  "userId": 100000001,
+  "mostRecentTrainingStatus": {
+    "latestTrainingStatusData": {
+      "9000000001": {
+        "calendarDate": "2026-08-16",
+        "trainingStatus": 4
+      }
+    }
+  }
+}

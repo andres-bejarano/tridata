@@ -51,4 +51,37 @@ class SyncService:
             if hrv:
                 self._store.save_hrv(hrv)
 
+        # -- Extended metrics (skipped when client does not implement them) ----
+        _daily_extended = [
+            ("vo2max",             "vo2max_date",     "get_vo2max",             "save_vo2max"),
+            ("training_readiness", "readiness_date",  "get_training_readiness", "save_training_readiness"),
+            ("training_status",    "status_date",     "get_training_status",    "save_training_status"),
+            ("body_battery",       "bb_date",         "get_body_battery",       "save_body_battery"),
+            ("spo2",               "spo2_date",       "get_spo2",               "save_spo2"),
+            ("respiration",        "respiration_date","get_respiration",         "save_respiration"),
+            ("floors",             "floors_date",     "get_floors",             "save_floors"),
+            ("intensity_minutes",  "intensity_date",  "get_intensity_minutes",  "save_intensity_minutes"),
+            ("hydration",          "hydration_date",  "get_hydration",          "save_hydration"),
+        ]
+        for table, col, getter_name, saver_name in _daily_extended:
+            getter = getattr(self._client, getter_name, None)
+            if not callable(getter):
+                continue
+            saver = getattr(self._store, saver_name)
+            for day in self._store.missing_dates(table, col, since, until):
+                record = getter(day)
+                if record:
+                    saver(record)
+
+        if callable(getattr(self._client, "get_personal_records", None)):
+            records = self._client.get_personal_records()
+            if records:
+                self._store.save_personal_records(records)
+
+        if callable(getattr(self._client, "get_race_predictions", None)):
+            if self._store.missing_dates("race_predictions", "prediction_date", since, until):
+                prediction = self._client.get_race_predictions()
+                if prediction:
+                    self._store.save_race_predictions(prediction)
+
         logger.info("Sync complete: %s to %s", since, until)

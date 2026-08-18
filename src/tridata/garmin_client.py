@@ -13,7 +13,12 @@ from pathlib import Path
 
 from garminconnect import Garmin
 
-from .models import Activity, DailyStats, HRVRecord, SleepRecord
+from .models import (
+    Activity, BodyBatteryDay, DailyStats, FloorsRecord, HRVRecord,
+    HydrationRecord, IntensityMinutes, PersonalRecord, RacePrediction,
+    RespirationRecord, SleepRecord, SpO2Record, TrainingReadiness,
+    TrainingStatus, VO2MaxRecord,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +140,162 @@ class GarminClient:
             last_night_high=summary.get("lastNight5MinHigh"),
             last_night_low=summary.get("lastNightLow"),
             status=summary.get("status"),
+            raw=raw,
+        )
+
+    def get_vo2max(self, day: date) -> VO2MaxRecord | None:
+        raw_list = self.api.get_max_metrics(day.isoformat())
+        if not raw_list:
+            return None
+        raw = raw_list[0]
+        generic = raw.get("generic") or {}
+        cycling = raw.get("cycling") or {}
+        return VO2MaxRecord(
+            vo2max_date=day,
+            vo2max_running=generic.get("vo2MaxPreciseValue"),
+            vo2max_cycling=cycling.get("vo2MaxPreciseValue") if cycling else None,
+            raw=raw,
+        )
+
+    def get_training_readiness(self, day: date) -> TrainingReadiness | None:
+        raw_list = self.api.get_training_readiness(day.isoformat())
+        if not raw_list:
+            return None
+        raw = raw_list[0]  # most recent reading of the day
+        recovery_secs = raw.get("recoveryTime")
+        return TrainingReadiness(
+            readiness_date=day,
+            score=raw.get("score"),
+            level=raw.get("level"),
+            feedback_short=raw.get("feedbackShort"),
+            sleep_score=raw.get("sleepScore"),
+            recovery_time_minutes=int(recovery_secs / 60) if recovery_secs else None,
+            hrv_weekly_avg=raw.get("hrvWeeklyAverage"),
+            raw=raw,
+        )
+
+    def get_training_status(self, day: date) -> TrainingStatus | None:
+        raw = self.api.get_training_status(day.isoformat())
+        if not raw:
+            return None
+        status_map = (raw.get("mostRecentTrainingStatus") or {}).get("latestTrainingStatusData") or {}
+        first_device = next(iter(status_map.values()), {}) if status_map else {}
+        return TrainingStatus(
+            status_date=day,
+            training_status=first_device.get("trainingStatus"),
+            raw=raw,
+        )
+
+    def get_body_battery(self, day: date) -> BodyBatteryDay | None:
+        raw_list = self.api.get_body_battery(day.isoformat(), day.isoformat())
+        if not raw_list:
+            return None
+        raw = raw_list[0]
+        return BodyBatteryDay(
+            bb_date=day,
+            charged=raw.get("charged"),
+            drained=raw.get("drained"),
+            values=raw.get("bodyBatteryValuesArray"),
+            raw=raw,
+        )
+
+    def get_spo2(self, day: date) -> SpO2Record | None:
+        raw = self.api.get_spo2_data(day.isoformat())
+        if not raw:
+            return None
+        return SpO2Record(
+            spo2_date=day,
+            avg_spo2=raw.get("averageSpO2"),
+            lowest_spo2=raw.get("lowestSpO2"),
+            avg_sleep_spo2=raw.get("avgSleepSpO2"),
+            raw=raw,
+        )
+
+    def get_respiration(self, day: date) -> RespirationRecord | None:
+        raw = self.api.get_respiration_data(day.isoformat())
+        if not raw:
+            return None
+        return RespirationRecord(
+            respiration_date=day,
+            lowest_value=raw.get("lowestRespirationValue"),
+            highest_value=raw.get("highestRespirationValue"),
+            avg_waking=raw.get("avgWakingRespirationValue"),
+            avg_sleep=raw.get("avgSleepRespirationValue"),
+            raw=raw,
+        )
+
+    def get_floors(self, day: date) -> FloorsRecord | None:
+        raw = self.api.get_floors(day.isoformat())
+        if not raw or "floorValuesArray" not in raw:
+            return None
+        arr = raw.get("floorValuesArray") or []
+        # each element: [startGMT, endGMT, floorsAscended, floorsDescended]
+        ascended  = sum(row[2] for row in arr if len(row) > 2)
+        descended = sum(row[3] for row in arr if len(row) > 3)
+        return FloorsRecord(
+            floors_date=day,
+            floors_ascended=ascended,
+            floors_descended=descended,
+            raw=raw,
+        )
+
+    def get_intensity_minutes(self, day: date) -> IntensityMinutes | None:
+        raw = self.api.get_intensity_minutes_data(day.isoformat())
+        if not raw:
+            return None
+        return IntensityMinutes(
+            intensity_date=day,
+            weekly_moderate=raw.get("weeklyModerate"),
+            weekly_vigorous=raw.get("weeklyVigorous"),
+            weekly_total=raw.get("weeklyTotal"),
+            week_goal=raw.get("weekGoal"),
+            raw=raw,
+        )
+
+    def get_hydration(self, day: date) -> HydrationRecord | None:
+        raw = self.api.get_hydration_data(day.isoformat())
+        if not raw:
+            return None
+        return HydrationRecord(
+            hydration_date=day,
+            value_ml=raw.get("valueInML"),
+            goal_ml=raw.get("goalInML"),
+            sweat_loss_ml=raw.get("sweatLossInML"),
+            raw=raw,
+        )
+
+    def get_personal_records(self) -> list[PersonalRecord]:
+        raw_list = self.api.get_personal_record()
+        if not raw_list:
+            return []
+        records = []
+        for raw in raw_list:
+            pr_date = None
+            date_str = raw.get("actStartDateTimeInGMTFormatted")
+            if date_str:
+                pr_date = date.fromisoformat(date_str[:10])
+            records.append(PersonalRecord(
+                record_id=str(raw.get("id")),
+                type_id=raw.get("typeId"),
+                activity_type=raw.get("activityType"),
+                value=raw.get("value"),
+                pr_date=pr_date,
+                raw=raw,
+            ))
+        return records
+
+    def get_race_predictions(self) -> RacePrediction | None:
+        raw = self.api.get_race_predictions()
+        if not raw:
+            return None
+        date_str = raw.get("calendarDate")
+        pred_date = date.fromisoformat(date_str) if date_str else date.today()
+        return RacePrediction(
+            prediction_date=pred_date,
+            time_5k_seconds=raw.get("time5K"),
+            time_10k_seconds=raw.get("time10K"),
+            time_half_marathon_seconds=raw.get("timeHalfMarathon"),
+            time_marathon_seconds=raw.get("timeMarathon"),
             raw=raw,
         )
 

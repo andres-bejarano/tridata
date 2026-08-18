@@ -1,0 +1,8 @@
+{
+  "userProfilePK": 100000001,
+  "calendarDate": "2026-08-16",
+  "lowestRespirationValue": 7.0,
+  "highestRespirationValue": 22.0,
+  "avgWakingRespirationValue": 15.0,
+  "avgSleepRespirationValue": 14.0
+}

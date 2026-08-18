@@ -120,7 +120,7 @@ class GarminClient:
             light_sleep_seconds=dto.get("lightSleepSeconds"),
             rem_sleep_seconds=dto.get("remSleepSeconds"),
             awake_seconds=dto.get("awakeSleepSeconds"),
-            sleep_score=(raw.get("sleepScores") or {}).get("overall", {}).get("value"),
+            sleep_score=(dto.get("sleepScores") or {}).get("overall", {}).get("value"),
             raw=raw,
         )
 

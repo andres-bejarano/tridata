@@ -7,6 +7,10 @@ Examples:
     # Daily cron run: just catch up on whatever's missing
     tridata sync
 
+    # Sync from a different source (skeleton only — requires partner credentials)
+    tridata sync --source suunto
+    tridata sync --source coros
+
     # Write out a Claude-ready Markdown file with your full history
     tridata export --format markdown --out export.md
 """
@@ -21,8 +25,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .clients import CorosClient, FitnessClient, GarminAuthError, GarminClient, SuuntoClient
 from .exporters import JSONExporter, MarkdownExporter
-from .garmin_client import GarminAuthError, GarminClient
 from .storage import DataStore
 from .sync import SyncService
 
@@ -31,15 +35,41 @@ EXPORTERS = {
     "markdown": MarkdownExporter,
 }
 
+SOURCES = ("garmin", "suunto", "coros")
+
+
+def _build_client(source: str) -> FitnessClient:
+    """Instantiate the right client for *source*; exits early on missing env vars."""
+    if source == "garmin":
+        email = os.environ.get("GARMIN_EMAIL")
+        password = os.environ.get("GARMIN_PASSWORD")
+        if not email or not password:
+            print(
+                "Missing GARMIN_EMAIL / GARMIN_PASSWORD. Copy .env.example to .env and fill it in.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        return GarminClient(email, password)
+    if source == "suunto":
+        return SuuntoClient()
+    if source == "coros":
+        return CorosClient()
+    print(f"Unknown source '{source}'. Choose from: {', '.join(SOURCES)}", file=sys.stderr)
+    raise SystemExit(1)
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tridata")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sync_cmd = sub.add_parser("sync", help="Pull new data from Garmin Connect into the local store")
+    sync_cmd = sub.add_parser("sync", help="Pull new data from a fitness platform into the local store")
+    sync_cmd.add_argument(
+        "--source", choices=SOURCES, default="garmin",
+        help="Which fitness platform to sync from (default: garmin).",
+    )
     sync_cmd.add_argument(
         "--since", type=date.fromisoformat, default=None,
-        help="Backfill from this date (YYYY-MM-DD). Defaults to 30 days ago.",
+        help="Backfill from this date (YYYY-MM-DD). Defaults to the first day of the current month.",
     )
 
     export_cmd = sub.add_parser("export", help="Write everything in the local store to a file")
@@ -56,22 +86,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    email = os.environ.get("GARMIN_EMAIL")
-    password = os.environ.get("GARMIN_PASSWORD")
-    if not email or not password:
-        print(
-            "Missing GARMIN_EMAIL / GARMIN_PASSWORD. Copy .env.example to .env and fill it in.",
-            file=sys.stderr,
-        )
-        return 1
-
     store = DataStore()
 
     if args.command == "sync":
-        since = args.since or (date.today().replace(day=1))
-        client = GarminClient(email, password)
+        since = args.since or date.today().replace(day=1)
+        client = _build_client(args.source)
         try:
             SyncService(client, store).sync(since=since)
+        except NotImplementedError as exc:
+            print(
+                f"'{args.source}' integration is not yet available: {exc}",
+                file=sys.stderr,
+            )
+            return 1
         except GarminAuthError as exc:
             print(f"Login failed: {exc}", file=sys.stderr)
             return 1

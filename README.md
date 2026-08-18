@@ -1,14 +1,18 @@
 # tridata
 
-Pull your own Garmin Connect data (activities, sleep, HRV, daily stats) and
-hand it to Claude for analysis — free, local, and yours. No TrainingPeaks
-subscription, no Strava premium, no third-party connector required.
+Pull your fitness data (activities, sleep, HRV, daily stats) from supported
+platforms and hand it to Claude for analysis — free, local, and yours. No
+TrainingPeaks subscription, no Strava premium, no third-party connector
+required.
+
+**Currently functional:** Garmin Connect  
+**Planned (pending partner credentials):** Suunto, COROS
 
 ## Why
 
-Garmin Connect already has all your training data. This tool exports it into
-a clean, structured file you can paste straight into Claude (or attach) and
-ask questions like *"how has my resting heart rate trended since I started
+Your fitness platform already has all your training data. This tool exports it
+into a clean, structured file you can paste straight into Claude (or attach)
+and ask questions like *"how has my resting heart rate trended since I started
 marathon training?"* or *"summarize my training load this month."*
 
 It keeps a local SQLite database of everything it has pulled, so:
@@ -28,7 +32,7 @@ cp .env.example .env
 ```
 
 Your credentials stay local in `.env` (git-ignored) and are only used to
-authenticate directly against Garmin Connect via
+authenticate directly against the platform via
 [`garminconnect`](https://github.com/cyberjunky/python-garminconnect) /
 [`garth`](https://github.com/matin/garth). Nothing is sent anywhere else.
 
@@ -44,6 +48,14 @@ Daily catch-up (only fetches what's missing):
 
 ```bash
 tridata sync
+```
+
+Both commands default to `--source garmin`. When other platforms become
+available, pass `--source suunto` or `--source coros` to switch:
+
+```bash
+tridata sync --source suunto   # not yet available — requires partner API key
+tridata sync --source coros    # not yet available — requires partner API key
 ```
 
 Export everything to a Claude-ready Markdown file:
@@ -66,13 +78,11 @@ Ideal for laptops: if the machine is off at the scheduled time, the job runs
 automatically on next boot.
 
 ```bash
-# Copy the unit files
 cp daily_update.sh ~/projects/tridata/
 chmod +x ~/projects/tridata/daily_update.sh
 mkdir -p ~/.config/systemd/user
 cp .config/systemd/user/tridata-sync.* ~/.config/systemd/user/
 
-# Enable and start
 systemctl --user daemon-reload
 systemctl --user enable --now tridata-sync.timer
 ```
@@ -83,9 +93,9 @@ it runs as soon as you log in.
 Check status and logs:
 
 ```bash
-systemctl --user status tridata-sync.timer   # next trigger time
-journalctl --user -u tridata-sync.service    # execution log
-tail -20 ~/projects/tridata/sync.log         # script output log
+systemctl --user status tridata-sync.timer
+journalctl --user -u tridata-sync.service
+tail -20 ~/projects/tridata/sync.log
 ```
 
 ### macOS / Linux (cron fallback)
@@ -102,19 +112,35 @@ Note: cron does not recover missed runs if the machine was off.
 
 ```
 src/tridata/
-├── garmin_client.py   # GarminClient — auth + typed fetch methods
+├── clients/
+│   ├── base.py         # FitnessClient — Protocol every brand client implements
+│   ├── garmin.py       # re-export shim (implementation in garmin_client.py)
+│   ├── suunto.py       # skeleton — pending Suunto partner API key
+│   └── coros.py        # skeleton — pending COROS developer API approval
+├── garmin_client.py    # GarminClient — auth + typed fetch methods
 ├── models.py           # Activity, DailyStats, SleepRecord, HRVRecord
-├── storage.py           # DataStore — local SQLite repository
-├── exporters.py         # Exporter (abstract) -> JSONExporter, MarkdownExporter
-├── sync.py               # SyncService — orchestrates incremental sync
-└── cli.py                 # command-line entry point
+├── storage.py          # DataStore — local SQLite repository
+├── exporters.py        # JSONExporter, MarkdownExporter
+├── sync.py             # SyncService — orchestrates incremental sync
+└── cli.py              # command-line entry point (tridata sync / export)
 ```
+
+## Adding a new platform
+
+1. Implement the five methods of `FitnessClient` in `src/tridata/clients/<brand>.py`.
+2. Register it in `src/tridata/clients/__init__.py` and `cli.py` (`_build_client`).
+3. Add fixture JSON files under `tests/fixtures/<brand>_*.json`.
+4. Remove the `@pytest.mark.skip` from `TestSuuntoContract` / `TestCorosContract`
+   in `tests/test_client_contract.py` — all contract assertions run automatically.
 
 ## Roadmap
 
-- [x] v1: CLI sync + export to Markdown/JSON
-- [ ] v2: ready-made analysis prompt templates (training load, VO2max trend...)
-- [ ] v3: lightweight dashboard / historical comparisons
+- [x] v1: CLI sync + export to Markdown/JSON (Garmin)
+- [x] v1.1: regression tests for GarminClient and SyncService
+- [x] v1.2: multi-brand `FitnessClient` architecture + Suunto/COROS skeletons
+- [ ] v2: Suunto and COROS once partner credentials are obtained
+- [ ] v3: ready-made analysis prompt templates (training load, VO2max trend…)
+- [ ] v4: lightweight dashboard / historical comparisons
 
 ## License
 

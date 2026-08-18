@@ -1,0 +1,9 @@
+[
+  {
+    "activityId": 9100000099,
+    "startTimeLocal": "2026-08-05 07:00:00",
+    "activityType": { "typeKey": "strength_training" },
+    "activityName": "Gym Session",
+    "duration": 3600.0
+  }
+]

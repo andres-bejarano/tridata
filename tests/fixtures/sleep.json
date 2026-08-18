@@ -1,0 +1,12 @@
+{
+  "dailySleepDTO": {
+    "sleepTimeSeconds": 25200,
+    "deepSleepSeconds": 5400,
+    "lightSleepSeconds": 10800,
+    "remSleepSeconds": 7200,
+    "awakeSleepSeconds": 1800
+  },
+  "sleepScores": {
+    "overall": { "value": 78 }
+  }
+}

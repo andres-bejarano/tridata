@@ -1,0 +1,28 @@
+[
+  {
+    "activityId": 9100000001,
+    "startTimeLocal": "2026-08-04 08:30:00",
+    "activityType": { "typeKey": "running" },
+    "activityName": "Morning Run",
+    "duration": 3240.0,
+    "distance": 9000.0,
+    "averageHR": 145.0,
+    "maxHR": 172.0,
+    "calories": 520.0,
+    "aerobicTrainingEffect": 3.2,
+    "anaerobicTrainingEffect": 1.1
+  },
+  {
+    "activityId": 9100000002,
+    "startTimeLocal": "2026-08-04 18:00:00",
+    "activityType": { "typeKey": "lap_swimming" },
+    "activityName": "Evening Swim",
+    "duration": 2400.0,
+    "distance": 1500.0,
+    "averageHR": 128.0,
+    "maxHR": 148.0,
+    "calories": 310.0,
+    "aerobicTrainingEffect": 2.8,
+    "anaerobicTrainingEffect": 0.4
+  }
+]

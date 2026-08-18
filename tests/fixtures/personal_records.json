@@ -1,0 +1,16 @@
+[
+  {
+    "id": 2000000001,
+    "typeId": 1,
+    "activityType": "running",
+    "actStartDateTimeInGMTFormatted": "2026-06-15T07:00:00.0",
+    "value": 3600.0
+  },
+  {
+    "id": 2000000002,
+    "typeId": 2,
+    "activityType": "running",
+    "actStartDateTimeInGMTFormatted": "2026-05-10T08:00:00.0",
+    "value": 12000.0
+  }
+]

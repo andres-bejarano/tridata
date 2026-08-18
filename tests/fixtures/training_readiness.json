@@ -1,0 +1,12 @@
+[
+  {
+    "userProfilePK": 100000001,
+    "calendarDate": "2026-08-04",
+    "level": "GOOD",
+    "feedbackShort": "TRAIN_AS_USUAL",
+    "score": 72,
+    "sleepScore": 80,
+    "recoveryTime": 480,
+    "hrvWeeklyAverage": 52
+  }
+]

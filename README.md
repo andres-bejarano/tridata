@@ -1,7 +1,8 @@
 # tridata
 
-Pull your own Garmin Connect data (activities, sleep, HRV, daily stats) and
-hand it to Claude for analysis — free, local, and yours. No TrainingPeaks
+Pull your Garmin Connect data and hand it to Claude for analysis — free, local, and yours.
+
+**Synced metrics:** activities · sleep · HRV · daily stats · VO2max · Training Readiness · Training Status · Body Battery (with intraday curve) · respiration rate · floors · intensity minutes · hydration · personal records · race predictions No TrainingPeaks
 subscription, no Strava premium, no third-party connector required.
 
 ## Why

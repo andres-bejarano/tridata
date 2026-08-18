@@ -1,0 +1,14 @@
+[
+  {
+    "userId": 100000001,
+    "generic": {
+      "calendarDate": "2026-08-04",
+      "vo2MaxPreciseValue": 45.0,
+      "vo2MaxValue": 45.0,
+      "fitnessAge": null,
+      "fitnessAgeDescription": null,
+      "maxMetCategory": 0
+    },
+    "cycling": null
+  }
+]

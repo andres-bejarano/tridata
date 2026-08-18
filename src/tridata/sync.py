@@ -8,14 +8,14 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 
-from .garmin_client import GarminClient
+from .clients.base import FitnessClient
 from .storage import DataStore
 
 logger = logging.getLogger(__name__)
 
 
 class SyncService:
-    def __init__(self, client: GarminClient, store: DataStore) -> None:
+    def __init__(self, client: FitnessClient, store: DataStore) -> None:
         self._client = client
         self._store = store
 

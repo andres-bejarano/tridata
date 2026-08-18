@@ -150,6 +150,17 @@ class TestGetSleep:
         assert result.awake_seconds == 1800
         assert result.sleep_score == 78
 
+    def test_sleep_score_not_read_from_raw_root(self, client):
+        # Regression: sleepScores must be read from dailySleepDTO, not from raw.
+        # If it were read from raw root, this would return score=99 instead of None.
+        c, api = client
+        api.get_sleep_data.return_value = {
+            "dailySleepDTO": {"sleepTimeSeconds": 25200},
+            "sleepScores": {"overall": {"value": 99}},
+        }
+        result = c.get_sleep(date(2026, 8, 4))
+        assert result.sleep_score is None
+
     def test_returns_none_when_no_daily_sleep_dto(self, client):
         c, api = client
         api.get_sleep_data.return_value = {"someOtherKey": {}}

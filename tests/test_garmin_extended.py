@@ -16,7 +16,7 @@ from tridata.models import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
-DAY = date(2026, 8, 16)
+DAY = date(2026, 8, 4)
 
 
 def _load(name: str) -> dict | list:
@@ -47,7 +47,7 @@ class TestGetVO2Max:
         result = c.get_vo2max(DAY)
         assert isinstance(result, VO2MaxRecord)
         assert result.vo2max_date == DAY
-        assert result.vo2max_running == 58.3
+        assert result.vo2max_running == 45.0
         assert result.vo2max_cycling is None  # cycling key is null in fixture
 
     def test_returns_none_when_api_returns_empty(self, client):
@@ -72,12 +72,12 @@ class TestGetTrainingReadiness:
         result = c.get_training_readiness(DAY)
         assert isinstance(result, TrainingReadiness)
         assert result.readiness_date == DAY
-        assert result.score == 6
-        assert result.level == "POOR"
-        assert result.feedback_short == "LET_YOUR_BODY_RECOVER"
-        assert result.sleep_score == 62
-        assert result.recovery_time_minutes == 49   # 2979 // 60
-        assert result.hrv_weekly_avg == 44
+        assert result.score == 72
+        assert result.level == "GOOD"
+        assert result.feedback_short == "TRAIN_AS_USUAL"
+        assert result.sleep_score == 80
+        assert result.recovery_time_minutes == 8    # 480 // 60
+        assert result.hrv_weekly_avg == 52
 
     def test_returns_none_when_api_returns_empty(self, client):
         c, api = client
@@ -101,7 +101,7 @@ class TestGetTrainingStatus:
         result = c.get_training_status(DAY)
         assert isinstance(result, TrainingStatus)
         assert result.status_date == DAY
-        assert result.training_status == 4
+        assert result.training_status == 5
 
     def test_returns_none_when_api_returns_none(self, client):
         c, api = client
@@ -126,11 +126,11 @@ class TestGetBodyBattery:
         result = c.get_body_battery(DAY)
         assert isinstance(result, BodyBatteryDay)
         assert result.bb_date == DAY
-        assert result.charged == 44
-        assert result.drained == 50
+        assert result.charged == 70
+        assert result.drained == 40
         assert isinstance(result.values, list)
         assert len(result.values) == 5
-        assert result.values[1] == [1786855680000, 57]
+        assert result.values[1] == [1000010000000, 70]
 
     def test_returns_none_when_api_returns_empty(self, client):
         c, api = client
@@ -175,10 +175,10 @@ class TestGetRespiration:
         result = c.get_respiration(DAY)
         assert isinstance(result, RespirationRecord)
         assert result.respiration_date == DAY
-        assert result.lowest_value == 7.0
-        assert result.highest_value == 22.0
-        assert result.avg_waking == 15.0
-        assert result.avg_sleep == 14.0
+        assert result.lowest_value == 8.0
+        assert result.highest_value == 19.0
+        assert result.avg_waking == 13.0
+        assert result.avg_sleep == 12.0
 
     def test_returns_none_when_api_returns_none(self, client):
         c, api = client
@@ -222,10 +222,10 @@ class TestGetIntensityMinutes:
         result = c.get_intensity_minutes(DAY)
         assert isinstance(result, IntensityMinutes)
         assert result.intensity_date == DAY
-        assert result.weekly_moderate == 157
-        assert result.weekly_vigorous == 278
-        assert result.weekly_total == 713
-        assert result.week_goal == 4200
+        assert result.weekly_moderate == 90
+        assert result.weekly_vigorous == 45
+        assert result.weekly_total == 180
+        assert result.week_goal == 150
 
     def test_returns_none_when_api_returns_none(self, client):
         c, api = client
@@ -269,8 +269,8 @@ class TestGetPersonalRecords:
         assert first.record_id == "2000000001"
         assert first.type_id == 1
         assert first.activity_type == "running"
-        assert first.value == 207.38
-        assert first.pr_date == date(2026, 7, 31)
+        assert first.value == 3600.0
+        assert first.pr_date == date(2026, 6, 15)
 
     def test_returns_empty_list_when_api_returns_none(self, client):
         c, api = client
@@ -293,11 +293,11 @@ class TestGetRacePredictions:
         api.get_race_predictions.return_value = _load("race_predictions.json")
         result = c.get_race_predictions()
         assert isinstance(result, RacePrediction)
-        assert result.prediction_date == date(2026, 8, 18)
-        assert result.time_5k_seconds == 1024
-        assert result.time_10k_seconds == 2225
-        assert result.time_half_marathon_seconds == 5053
-        assert result.time_marathon_seconds == 11293
+        assert result.prediction_date == date(2026, 8, 4)
+        assert result.time_5k_seconds == 1500
+        assert result.time_10k_seconds == 3300
+        assert result.time_half_marathon_seconds == 7800
+        assert result.time_marathon_seconds == 16800
 
     def test_returns_none_when_api_returns_none(self, client):
         c, api = client

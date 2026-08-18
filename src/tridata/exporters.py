@@ -167,7 +167,7 @@ class MarkdownExporter(Exporter):
                 lines.append(
                     f"- **{h['hydration_date']}** — intake {h.get('value_ml'):.0f} ml, "
                     f"goal {h.get('goal_ml'):.0f} ml, sweat loss {h.get('sweat_loss_ml'):.0f} ml"
-                    if h.get("value_ml") is not None else
+                    if h.get("value_ml") is not None and h.get("goal_ml") is not None and h.get("sweat_loss_ml") is not None else
                     f"- **{h['hydration_date']}** — no data"
                 )
             lines.append("")

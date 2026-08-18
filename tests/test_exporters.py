@@ -31,3 +31,15 @@ def test_markdown_exporter_includes_activity_summary(tmp_path):
     assert "Morning run" in content
     assert "5.00 km" in content
     assert "avg HR 150" in content
+
+
+def test_markdown_exporter_hydration_partial_none_does_not_raise(tmp_path):
+    # Regression: value_ml present but goal_ml/sweat_loss_ml None must not TypeError.
+    data = {**SAMPLE_DATA, "hydration": [
+        {"hydration_date": "2026-08-04", "value_ml": 500.0, "goal_ml": None, "sweat_loss_ml": None},
+        {"hydration_date": "2026-08-05", "value_ml": None,  "goal_ml": None, "sweat_loss_ml": None},
+    ]}
+    exporter = MarkdownExporter()
+    out = exporter.export(data, tmp_path / "out.md")
+    content = out.read_text()
+    assert content.count("no data") == 2

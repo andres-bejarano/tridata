@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .models import (
-    Activity, BodyBatteryDay, DailyStats, FloorsRecord, HRVRecord,
+    Activity, ActivityLap, BodyBatteryDay, DailyStats, FloorsRecord, HRVRecord,
     HydrationRecord, IntensityMinutes, PersonalRecord, RacePrediction,
     RespirationRecord, SleepRecord, SpO2Record, TrainingReadiness,
     TrainingStatus, VO2MaxRecord,
@@ -90,6 +90,12 @@ CREATE TABLE IF NOT EXISTS personal_records (
 CREATE TABLE IF NOT EXISTS race_predictions (
     prediction_date TEXT PRIMARY KEY,
     payload TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS activity_laps (
+    activity_id TEXT NOT NULL,
+    lap_index INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (activity_id, lap_index)
 );
 """
 
@@ -223,6 +229,14 @@ class DataStore:
                 (record.prediction_date.isoformat(), json.dumps(record.to_dict())),
             )
 
+    def save_activity_laps(self, laps: list[ActivityLap]) -> None:
+        with self._connect() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO activity_laps (activity_id, lap_index, payload) "
+                "VALUES (?, ?, ?)",
+                [(lap.activity_id, lap.lap_index, json.dumps(lap.to_dict())) for lap in laps],
+            )
+
     # -- Reads -----------------------------------------------------------
 
     def last_synced_date(self, table: str, date_column: str) -> date | None:
@@ -249,6 +263,36 @@ class DataStore:
                 missing.append(current)
             current += timedelta(days=1)
         return missing
+
+    def activity_ids_with_laps(self) -> set[str]:
+        """Return the set of activity_ids that already have laps stored."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT activity_id FROM activity_laps"
+            ).fetchall()
+        return {r[0] for r in rows}
+
+    def get_activity_ids_by_type(self, types: tuple[str, ...]) -> list[str]:
+        """Return activity IDs (newest first) whose type is one of `types`."""
+        placeholders = ",".join("?" * len(types))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT activity_id FROM activities "  # noqa: S608
+                f"WHERE json_extract(payload,'$.activity_type') IN ({placeholders}) "
+                f"ORDER BY activity_date DESC",
+                types,
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_laps(self, activity_id: str) -> list[dict]:
+        """Return stored laps for an activity, ordered by lap_index."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM activity_laps "
+                "WHERE activity_id = ? ORDER BY lap_index",
+                (activity_id,),
+            ).fetchall()
+        return [json.loads(r[0]) for r in rows]
 
     def export_all(self) -> dict:
         """Dump everything in the store, keyed by category, oldest-first."""

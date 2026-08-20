@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -97,6 +97,19 @@ CREATE TABLE IF NOT EXISTS activity_laps (
     payload TEXT NOT NULL,
     PRIMARY KEY (activity_id, lap_index)
 );
+CREATE TABLE IF NOT EXISTS activity_lap_sync_state (
+    activity_id TEXT PRIMARY KEY,
+    lap_count INTEGER NOT NULL,
+    synced_at TEXT NOT NULL
+);
+"""
+
+# Populate sync-state from any laps that pre-date this table (one-time migration).
+_MIGRATE_LAP_SYNC_STATE = """
+INSERT OR IGNORE INTO activity_lap_sync_state (activity_id, lap_count, synced_at)
+SELECT activity_id, COUNT(*), '2000-01-01T00:00:00'
+FROM activity_laps
+GROUP BY activity_id;
 """
 
 
@@ -108,6 +121,7 @@ class DataStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            conn.executescript(_MIGRATE_LAP_SYNC_STATE)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -263,6 +277,24 @@ class DataStore:
                 missing.append(current)
             current += timedelta(days=1)
         return missing
+
+    def mark_laps_synced(self, activity_id: str, lap_count: int) -> None:
+        """Record that lap-sync was attempted for this activity (even if 0 laps)."""
+        synced_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO activity_lap_sync_state "
+                "(activity_id, lap_count, synced_at) VALUES (?, ?, ?)",
+                (activity_id, lap_count, synced_at),
+            )
+
+    def activity_ids_lap_synced(self) -> set[str]:
+        """Return IDs of activities whose lap-sync has already been attempted."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT activity_id FROM activity_lap_sync_state"
+            ).fetchall()
+        return {r[0] for r in rows}
 
     def activity_ids_with_laps(self) -> set[str]:
         """Return the set of activity_ids that already have laps stored."""

@@ -102,7 +102,7 @@ class SyncService:
         self._client.login()
 
         candidate_ids = self._store.get_activity_ids_by_type(self._LAP_TYPES)
-        already_done = self._store.activity_ids_with_laps()
+        already_done = self._store.activity_ids_lap_synced()
         pending = [aid for aid in candidate_ids if aid not in already_done][:limit]
 
         total = len(pending)
@@ -111,6 +111,7 @@ class SyncService:
             laps = self._client.get_activity_laps(activity_id)
             if laps:
                 self._store.save_activity_laps(laps)
+            self._store.mark_laps_synced(activity_id, len(laps))
             logger.info("Laps synced for activity %s (%d laps)", activity_id, len(laps))
 
         logger.info("Lap sync complete: %d/%d activities processed", total, len(candidate_ids))

@@ -177,6 +177,43 @@ class TestDataStoreLaps:
         store.save_activity_laps(_make_laps("act2"))
         assert store.activity_ids_with_laps() == {"act1", "act2"}
 
+    def test_mark_laps_synced_records_attempt(self, store):
+        store.mark_laps_synced("act-zero", 0)
+        assert "act-zero" in store.activity_ids_lap_synced()
+
+    def test_mark_laps_synced_with_real_laps(self, store):
+        store.mark_laps_synced("act-real", 10)
+        assert "act-real" in store.activity_ids_lap_synced()
+
+    def test_activity_ids_lap_synced_empty(self, store):
+        assert store.activity_ids_lap_synced() == set()
+
+    def test_migration_populates_sync_state_from_existing_laps(self, tmp_path):
+        # Simulate existing laps with no sync-state (pre-migration DB):
+        # write laps directly, then re-open DataStore so migration runs.
+        import sqlite3 as _sqlite3
+        db = tmp_path / "migrate.sqlite3"
+        # Bootstrap schema without migration table, insert raw laps.
+        conn = _sqlite3.connect(db)
+        conn.executescript("""
+            CREATE TABLE activity_laps (
+                activity_id TEXT NOT NULL,
+                lap_index INTEGER NOT NULL,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (activity_id, lap_index)
+            );
+            INSERT INTO activity_laps VALUES ('legacy1', 1, '{}');
+            INSERT INTO activity_laps VALUES ('legacy1', 2, '{}');
+            INSERT INTO activity_laps VALUES ('legacy2', 1, '{}');
+        """)
+        conn.commit()
+        conn.close()
+        # Opening DataStore triggers schema + migration.
+        s = DataStore(db)
+        synced = s.activity_ids_lap_synced()
+        assert "legacy1" in synced
+        assert "legacy2" in synced
+
     def test_get_activity_ids_by_type(self, store):
         store.save_activities([
             Activity("r1", date(2026, 1, 10), "running",  "Run A", 1800.0),
@@ -205,8 +242,8 @@ class TestSyncLapsIdempotency:
 
     def test_already_synced_activity_not_refetched(self, store):
         self._seed_activities(store)
-        # Mark old-act as already having laps
-        store.save_activity_laps([ActivityLap("old-act", 1, distance_meters=1000.0)])
+        # Mark old-act as already synced (via sync-state table, not laps table).
+        store.mark_laps_synced("old-act", 5)
 
         mock_client = MagicMock()
         mock_client.get_activity_laps.return_value = [
@@ -216,6 +253,24 @@ class TestSyncLapsIdempotency:
         SyncService(mock_client, store).sync_laps(limit=20)
 
         mock_client.get_activity_laps.assert_called_once_with("new-act")
+
+    def test_zero_lap_activity_not_retried_on_second_sync(self, store):
+        # Regression: an activity that genuinely has no laps (empty list) must
+        # be marked as synced and skipped in subsequent runs — not retried forever.
+        store.save_activities([
+            Activity("no-laps-act", date(2026, 3, 1), "running", "Short run", 600.0),
+        ])
+
+        mock_client = MagicMock()
+        mock_client.get_activity_laps.return_value = []  # Garmin returns nothing
+
+        # First sync attempt.
+        SyncService(mock_client, store).sync_laps(limit=20)
+        assert mock_client.get_activity_laps.call_count == 1
+
+        # Second sync attempt — must NOT call get_activity_laps again.
+        SyncService(mock_client, store).sync_laps(limit=20)
+        assert mock_client.get_activity_laps.call_count == 1  # still 1, not 2
 
     def test_limit_caps_activities_processed(self, store):
         store.save_activities([

@@ -27,6 +27,14 @@ class Activity:
     calories: float | None = None
     training_effect_aerobic: float | None = None
     training_effect_anaerobic: float | None = None
+    avg_pace_seconds_per_km: float | None = None
+    avg_cadence: float | None = None
+    avg_stride_length_cm: float | None = None
+    avg_vertical_oscillation_cm: float | None = None
+    avg_ground_contact_time_ms: float | None = None
+    avg_power: float | None = None
+    elevation_gain_m: float | None = None
+    elevation_loss_m: float | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:

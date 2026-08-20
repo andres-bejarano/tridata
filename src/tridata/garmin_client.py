@@ -80,6 +80,8 @@ class GarminClient:
         )
         activities: list[Activity] = []
         for raw in raw_activities:
+            speed = raw.get("averageSpeed")
+            pace = 1000.0 / speed if speed else None
             activities.append(
                 Activity(
                     activity_id=str(raw.get("activityId")),
@@ -93,6 +95,14 @@ class GarminClient:
                     calories=raw.get("calories"),
                     training_effect_aerobic=raw.get("aerobicTrainingEffect"),
                     training_effect_anaerobic=raw.get("anaerobicTrainingEffect"),
+                    avg_pace_seconds_per_km=pace,
+                    avg_cadence=raw.get("averageRunningCadenceInStepsPerMinute"),
+                    avg_stride_length_cm=raw.get("avgStrideLength"),
+                    avg_vertical_oscillation_cm=raw.get("avgVerticalOscillation"),
+                    avg_ground_contact_time_ms=raw.get("avgGroundContactTime"),
+                    avg_power=raw.get("avgPower"),
+                    elevation_gain_m=raw.get("elevationGain"),
+                    elevation_loss_m=raw.get("elevationLoss"),
                     raw=raw,
                 )
             )

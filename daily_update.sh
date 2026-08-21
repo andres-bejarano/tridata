@@ -21,4 +21,25 @@ else
     exit 1
 fi
 
+if "$TRIDATA" sync --laps >> "$LOG" 2>&1; then
+    echo "sync --laps OK" >> "$LOG"
+else
+    echo "sync --laps FAILED (exit $?)" >> "$LOG"
+    exit 1
+fi
+
+if "$TRIDATA" export-metrics >> "$LOG" 2>&1; then
+    echo "export-metrics OK" >> "$LOG"
+else
+    echo "export-metrics FAILED (exit $?)" >> "$LOG"
+    exit 1
+fi
+
+if "$TRIDATA" export-running >> "$LOG" 2>&1; then
+    echo "export-running OK" >> "$LOG"
+else
+    echo "export-running FAILED (exit $?)" >> "$LOG"
+    exit 1
+fi
+
 echo "Done." >> "$LOG"

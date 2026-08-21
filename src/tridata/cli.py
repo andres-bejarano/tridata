@@ -31,12 +31,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .exporters import JSONExporter, MarkdownExporter, MetricsMarkdownExporter
+from .exporters import JSONExporter, MarkdownExporter, MetricsMarkdownExporter, RunningMarkdownExporter
 from .garmin_client import GarminAuthError, GarminClient
 from .storage import DataStore
-from .sync import SyncService
+from .sync import RUNNING_TYPES, SyncService
 
-_LAP_COLUMNS = ("dist", "pace", "HR", "cadence", "stride", "elev")
 
 EXPORTERS = {
     "json": JSONExporter,
@@ -74,6 +73,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Export daily metrics (sleep, HRV, training status, etc.) without per-activity lines",
     )
     metrics_cmd.add_argument("--out", type=Path, default=Path("metrics.md"))
+
+    running_cmd = sub.add_parser(
+        "export-running",
+        help="Export running activities with per-lap breakdown",
+    )
+    running_cmd.add_argument("--out", type=Path, default=Path("running.md"))
 
     return parser
 
@@ -127,16 +132,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Wrote {out_path}")
         return 0
 
+    if args.command == "export-running":
+        data = store.get_activities_with_laps(RUNNING_TYPES)
+        out_path = RunningMarkdownExporter().export(data, args.out)
+        print(f"Wrote {out_path}")
+        return 0
+
     parser.print_help()
     return 1
-
-
-def _fmt_pace(seconds_per_km: float | None) -> str:
-    if seconds_per_km is None:
-        return "—"
-    total = int(round(seconds_per_km))
-    m, s = divmod(total, 60)
-    return f"{m}:{s:02d}"
 
 
 def _cmd_show_laps(store: DataStore, activity_id: str) -> int:
@@ -147,40 +150,7 @@ def _cmd_show_laps(store: DataStore, activity_id: str) -> int:
 
     print(f"Activity {activity_id} — {len(laps)} laps\n")
     for lap in laps:
-        idx = lap.get("lap_index", "?")
-        dist_km = (lap["distance_meters"] / 1000) if lap.get("distance_meters") else None
-        pace = _fmt_pace(lap.get("avg_pace_seconds_per_km"))
-        hr = lap.get("avg_hr")
-        max_hr = lap.get("max_hr")
-        cadence = lap.get("avg_cadence")
-        stride = lap.get("avg_stride_length_cm")
-        gain = lap.get("elevation_gain_m")
-        loss = lap.get("elevation_loss_m")
-        itype = lap.get("intensity_type", "")
-
-        parts = [f"Lap {idx:>2}"]
-        parts.append(f"{dist_km:.2f} km" if dist_km is not None else "  —  ")
-        parts.append(f"{pace}/km")
-        if hr is not None:
-            hr_str = f"HR {hr:.0f}"
-            if max_hr is not None:
-                hr_str += f" (max {max_hr:.0f})"
-            parts.append(hr_str)
-        if cadence is not None:
-            parts.append(f"{cadence:.0f} spm")
-        if stride is not None:
-            parts.append(f"stride {stride:.0f} cm")
-        elev_parts = []
-        if gain is not None:
-            elev_parts.append(f"+{gain:.0f}m")
-        if loss is not None:
-            elev_parts.append(f"-{loss:.0f}m")
-        if elev_parts:
-            parts.append(" / ".join(elev_parts))
-        if itype:
-            parts.append(f"[{itype}]")
-
-        print("   ".join(parts))
+        print(MarkdownExporter._fmt_lap_line(lap))
 
     return 0
 

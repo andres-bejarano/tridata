@@ -13,6 +13,14 @@ from .storage import DataStore
 
 logger = logging.getLogger(__name__)
 
+RUNNING_TYPES = (
+    "running", "trail_running", "treadmill_running", "indoor_running",
+)
+CYCLING_TYPES = (
+    "cycling", "road_biking", "mountain_biking", "indoor_cycling",
+    "virtual_ride", "gravel_cycling",
+)
+
 
 class SyncService:
     def __init__(self, client: GarminClient, store: DataStore) -> None:
@@ -86,12 +94,7 @@ class SyncService:
 
         logger.info("Sync complete: %s to %s", since, until)
 
-    # Activity types that typically have meaningful per-lap splits.
-    _LAP_TYPES = (
-        "running", "trail_running", "treadmill_running", "indoor_running",
-        "cycling", "road_biking", "mountain_biking", "indoor_cycling",
-        "virtual_ride", "gravel_cycling",
-    )
+    _LAP_TYPES = RUNNING_TYPES + CYCLING_TYPES
 
     def sync_laps(self, limit: int = 20) -> int:
         """Fetch per-lap splits for up to `limit` activities that have none yet.

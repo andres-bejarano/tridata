@@ -326,6 +326,27 @@ class DataStore:
             ).fetchall()
         return [json.loads(r[0]) for r in rows]
 
+    def get_activity(self, activity_id: str) -> dict | None:
+        """Return the stored payload for one activity, or None if not found."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM activities WHERE activity_id = ?",
+                (activity_id,),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def get_activities_with_laps(self, types: tuple[str, ...]) -> list[dict]:
+        """Return activities of the given types (newest first), each enriched
+        with a 'laps' key containing its stored lap list (empty list if none)."""
+        result = []
+        for activity_id in self.get_activity_ids_by_type(types):
+            activity = self.get_activity(activity_id)
+            if activity is None:
+                continue
+            activity["laps"] = self.get_laps(activity_id)
+            result.append(activity)
+        return result
+
     def export_all(self) -> dict:
         """Dump everything in the store, keyed by category, oldest-first."""
         def _rows(conn, sql):

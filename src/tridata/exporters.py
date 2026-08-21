@@ -44,9 +44,31 @@ class MarkdownExporter(Exporter):
 
     def render(self, data: dict[str, Any]) -> str:
         lines: list[str] = ["# Garmin Connect data export", ""]
+        lines += self._render_activities(data)
+        lines += self._render_daily_stats(data)
+        lines += self._render_sleep(data)
+        lines += self._render_hrv(data)
+        lines += self._render_vo2max(data)
+        lines += self._render_training_readiness(data)
+        lines += self._render_training_status(data)
+        lines += self._render_body_battery(data)
+        lines += self._render_spo2(data)
+        lines += self._render_respiration(data)
+        lines += self._render_floors(data)
+        lines += self._render_intensity_minutes(data)
+        lines += self._render_hydration(data)
+        lines += self._render_personal_records(data)
+        lines += self._render_race_predictions(data)
+        return "\n".join(lines)
 
+    # ------------------------------------------------------------------
+    # Section renderers — each returns a list[str] ready to extend into
+    # the parent lines list. Subclasses pick which ones to include.
+    # ------------------------------------------------------------------
+
+    def _render_activities(self, data: dict[str, Any]) -> list[str]:
         activities = data.get("activities", [])
-        lines.append(f"## Activities ({len(activities)})")
+        lines = [f"## Activities ({len(activities)})"]
         for a in activities:
             line = (
                 f"- **{a['activity_date']}** — {a['name']} ({a['activity_type']}), "
@@ -60,148 +82,191 @@ class MarkdownExporter(Exporter):
             )
             lines.append(line)
         lines.append("")
+        return lines
 
+    def _render_daily_stats(self, data: dict[str, Any]) -> list[str]:
         stats = data.get("daily_stats", [])
-        lines.append(f"## Daily stats ({len(stats)} days)")
+        lines = [f"## Daily stats ({len(stats)} days)"]
         for s in stats:
             lines.append(
                 f"- **{s['stat_date']}** — steps: {s.get('steps')}, "
                 f"resting HR: {s.get('resting_hr')}, stress avg: {s.get('stress_avg')}"
             )
         lines.append("")
+        return lines
 
+    def _render_sleep(self, data: dict[str, Any]) -> list[str]:
         sleep = data.get("sleep", [])
-        lines.append(f"## Sleep ({len(sleep)} nights)")
+        lines = [f"## Sleep ({len(sleep)} nights)"]
         for s in sleep:
             total_h = (s.get("total_sleep_seconds") or 0) / 3600
             lines.append(f"- **{s['sleep_date']}** — {total_h:.1f}h total, score: {s.get('sleep_score')}")
         lines.append("")
+        return lines
 
+    def _render_hrv(self, data: dict[str, Any]) -> list[str]:
         hrv = data.get("hrv", [])
-        lines.append(f"## HRV ({len(hrv)} nights)")
+        lines = [f"## HRV ({len(hrv)} nights)"]
         for h in hrv:
             lines.append(
                 f"- **{h['hrv_date']}** — avg: {h.get('last_night_avg')}, status: {h.get('status')}"
             )
         lines.append("")
+        return lines
 
+    def _render_vo2max(self, data: dict[str, Any]) -> list[str]:
         vo2 = data.get("vo2max", [])
-        if vo2:
-            lines.append(f"## VO2max ({len(vo2)} days)")
-            for v in vo2:
-                cyc = f", cycling {v['vo2max_cycling']}" if v.get("vo2max_cycling") else ""
-                lines.append(f"- **{v['vo2max_date']}** — running {v.get('vo2max_running')}{cyc}")
-            lines.append("")
+        if not vo2:
+            return []
+        lines = [f"## VO2max ({len(vo2)} days)"]
+        for v in vo2:
+            cyc = f", cycling {v['vo2max_cycling']}" if v.get("vo2max_cycling") else ""
+            lines.append(f"- **{v['vo2max_date']}** — running {v.get('vo2max_running')}{cyc}")
+        lines.append("")
+        return lines
 
+    def _render_training_readiness(self, data: dict[str, Any]) -> list[str]:
         readiness = data.get("training_readiness", [])
-        if readiness:
-            lines.append(f"## Training readiness ({len(readiness)} days)")
-            for r in readiness:
-                lines.append(
-                    f"- **{r['readiness_date']}** — score {r.get('score')}/100 ({r.get('level')}), "
-                    f"sleep {r.get('sleep_score')}, recovery {r.get('recovery_time_minutes')} min, "
-                    f"HRV 7d avg {r.get('hrv_weekly_avg')}"
-                )
-            lines.append("")
+        if not readiness:
+            return []
+        lines = [f"## Training readiness ({len(readiness)} days)"]
+        for r in readiness:
+            lines.append(
+                f"- **{r['readiness_date']}** — score {r.get('score')}/100 ({r.get('level')}), "
+                f"sleep {r.get('sleep_score')}, recovery {r.get('recovery_time_minutes')} min, "
+                f"HRV 7d avg {r.get('hrv_weekly_avg')}"
+            )
+        lines.append("")
+        return lines
 
+    def _render_training_status(self, data: dict[str, Any]) -> list[str]:
         status = data.get("training_status", [])
-        if status:
-            lines.append(f"## Training status ({len(status)} days)")
-            _STATUS = {2: "Overstretching", 3: "Recovery", 4: "Maintaining",
-                       5: "Improving", 6: "Peaking", 7: "Tapering"}
-            for s in status:
-                code = s.get("training_status")
-                label = _STATUS.get(code, str(code)) if code is not None else "—"
-                lines.append(f"- **{s['status_date']}** — {label}")
-            lines.append("")
+        if not status:
+            return []
+        _STATUS = {2: "Overstretching", 3: "Recovery", 4: "Maintaining",
+                   5: "Improving", 6: "Peaking", 7: "Tapering"}
+        lines = [f"## Training status ({len(status)} days)"]
+        for s in status:
+            code = s.get("training_status")
+            label = _STATUS.get(code, str(code)) if code is not None else "—"
+            lines.append(f"- **{s['status_date']}** — {label}")
+        lines.append("")
+        return lines
 
+    def _render_body_battery(self, data: dict[str, Any]) -> list[str]:
         bb = data.get("body_battery", [])
-        if bb:
-            lines.append(f"## Body battery ({len(bb)} days)")
-            for b in bb:
-                lines.append(
-                    f"- **{b['bb_date']}** — charged {b.get('charged')}, drained {b.get('drained')}"
-                )
-            lines.append("")
+        if not bb:
+            return []
+        lines = [f"## Body battery ({len(bb)} days)"]
+        for b in bb:
+            lines.append(
+                f"- **{b['bb_date']}** — charged {b.get('charged')}, drained {b.get('drained')}"
+            )
+        lines.append("")
+        return lines
 
+    def _render_spo2(self, data: dict[str, Any]) -> list[str]:
         spo2 = data.get("spo2", [])
-        if spo2:
-            lines.append(f"## SpO2 ({len(spo2)} days)")
-            for s in spo2:
-                lines.append(
-                    f"- **{s['spo2_date']}** — avg {s.get('avg_spo2')}, "
-                    f"sleep avg {s.get('avg_sleep_spo2')}, lowest {s.get('lowest_spo2')}"
-                )
-            lines.append("")
+        if not spo2:
+            return []
+        lines = [f"## SpO2 ({len(spo2)} days)"]
+        for s in spo2:
+            lines.append(
+                f"- **{s['spo2_date']}** — avg {s.get('avg_spo2')}, "
+                f"sleep avg {s.get('avg_sleep_spo2')}, lowest {s.get('lowest_spo2')}"
+            )
+        lines.append("")
+        return lines
 
+    def _render_respiration(self, data: dict[str, Any]) -> list[str]:
         resp = data.get("respiration", [])
-        if resp:
-            lines.append(f"## Respiration ({len(resp)} days)")
-            for r in resp:
-                lines.append(
-                    f"- **{r['respiration_date']}** — sleep avg {r.get('avg_sleep')} brpm, "
-                    f"waking avg {r.get('avg_waking')} brpm, range {r.get('lowest_value')}–{r.get('highest_value')}"
-                )
-            lines.append("")
+        if not resp:
+            return []
+        lines = [f"## Respiration ({len(resp)} days)"]
+        for r in resp:
+            lines.append(
+                f"- **{r['respiration_date']}** — sleep avg {r.get('avg_sleep')} brpm, "
+                f"waking avg {r.get('avg_waking')} brpm, range {r.get('lowest_value')}–{r.get('highest_value')}"
+            )
+        lines.append("")
+        return lines
 
+    def _render_floors(self, data: dict[str, Any]) -> list[str]:
         floors = data.get("floors", [])
-        if floors:
-            lines.append(f"## Floors ({len(floors)} days)")
-            for f in floors:
-                lines.append(
-                    f"- **{f['floors_date']}** — ascended {f.get('floors_ascended')}, "
-                    f"descended {f.get('floors_descended')}"
-                )
-            lines.append("")
+        if not floors:
+            return []
+        lines = [f"## Floors ({len(floors)} days)"]
+        for f in floors:
+            lines.append(
+                f"- **{f['floors_date']}** — ascended {f.get('floors_ascended')}, "
+                f"descended {f.get('floors_descended')}"
+            )
+        lines.append("")
+        return lines
 
+    def _render_intensity_minutes(self, data: dict[str, Any]) -> list[str]:
         intensity = data.get("intensity_minutes", [])
-        if intensity:
-            lines.append(f"## Intensity minutes ({len(intensity)} days)")
-            for i in intensity:
-                lines.append(
-                    f"- **{i['intensity_date']}** — moderate {i.get('weekly_moderate')} min, "
-                    f"vigorous {i.get('weekly_vigorous')} min (weekly total {i.get('weekly_total')}, "
-                    f"goal {i.get('week_goal')})"
-                )
-            lines.append("")
+        if not intensity:
+            return []
+        lines = [f"## Intensity minutes ({len(intensity)} days)"]
+        for i in intensity:
+            lines.append(
+                f"- **{i['intensity_date']}** — moderate {i.get('weekly_moderate')} min, "
+                f"vigorous {i.get('weekly_vigorous')} min (weekly total {i.get('weekly_total')}, "
+                f"goal {i.get('week_goal')})"
+            )
+        lines.append("")
+        return lines
 
+    def _render_hydration(self, data: dict[str, Any]) -> list[str]:
         hydration = data.get("hydration", [])
-        if hydration:
-            lines.append(f"## Hydration ({len(hydration)} days)")
-            for h in hydration:
-                lines.append(
-                    f"- **{h['hydration_date']}** — intake {h.get('value_ml'):.0f} ml, "
-                    f"goal {h.get('goal_ml'):.0f} ml, sweat loss {h.get('sweat_loss_ml'):.0f} ml"
-                    if h.get("value_ml") is not None and h.get("goal_ml") is not None and h.get("sweat_loss_ml") is not None else
-                    f"- **{h['hydration_date']}** — no data"
-                )
-            lines.append("")
+        if not hydration:
+            return []
+        lines = [f"## Hydration ({len(hydration)} days)"]
+        for h in hydration:
+            lines.append(
+                f"- **{h['hydration_date']}** — intake {h.get('value_ml'):.0f} ml, "
+                f"goal {h.get('goal_ml'):.0f} ml, sweat loss {h.get('sweat_loss_ml'):.0f} ml"
+                if h.get("value_ml") is not None and h.get("goal_ml") is not None and h.get("sweat_loss_ml") is not None else
+                f"- **{h['hydration_date']}** — no data"
+            )
+        lines.append("")
+        return lines
 
+    def _render_personal_records(self, data: dict[str, Any]) -> list[str]:
         prs = data.get("personal_records", [])
-        if prs:
-            lines.append(f"## Personal records ({len(prs)})")
-            for p in prs:
-                lines.append(
-                    f"- **{p.get('activity_type', '?')}** — {p.get('value'):.1f} "
-                    f"(set {p.get('pr_date', '?')})"
-                    if p.get("value") is not None else
-                    f"- **{p.get('activity_type', '?')}** — set {p.get('pr_date', '?')}"
-                )
-            lines.append("")
+        if not prs:
+            return []
+        lines = [f"## Personal records ({len(prs)})"]
+        for p in prs:
+            lines.append(
+                f"- **{p.get('activity_type', '?')}** — {p.get('value'):.1f} "
+                f"(set {p.get('pr_date', '?')})"
+                if p.get("value") is not None else
+                f"- **{p.get('activity_type', '?')}** — set {p.get('pr_date', '?')}"
+            )
+        lines.append("")
+        return lines
 
+    def _render_race_predictions(self, data: dict[str, Any]) -> list[str]:
         preds = data.get("race_predictions", [])
-        if preds:
-            lines.append(f"## Race predictions ({len(preds)} snapshots)")
-            for p in preds:
-                lines.append(
-                    f"- **{p['prediction_date']}** — "
-                    f"5K {self._fmt_time(p.get('time_5k_seconds'))}, "
-                    f"10K {self._fmt_time(p.get('time_10k_seconds'))}, "
-                    f"HM {self._fmt_time(p.get('time_half_marathon_seconds'))}, "
-                    f"M {self._fmt_time(p.get('time_marathon_seconds'))}"
-                )
+        if not preds:
+            return []
+        lines = [f"## Race predictions ({len(preds)} snapshots)"]
+        for p in preds:
+            lines.append(
+                f"- **{p['prediction_date']}** — "
+                f"5K {self._fmt_time(p.get('time_5k_seconds'))}, "
+                f"10K {self._fmt_time(p.get('time_10k_seconds'))}, "
+                f"HM {self._fmt_time(p.get('time_half_marathon_seconds'))}, "
+                f"M {self._fmt_time(p.get('time_marathon_seconds'))}"
+            )
+        lines.append("")
+        return lines
 
-        return "\n".join(lines)
+    # ------------------------------------------------------------------
+    # Formatters
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _fmt_pace(seconds_per_km: float | None) -> str:
@@ -224,3 +289,27 @@ class MarkdownExporter(Exporter):
         minutes = int(seconds // 60)
         hours, minutes = divmod(minutes, 60)
         return f"{hours}h{minutes:02d}m" if hours else f"{minutes}m"
+
+
+class MetricsMarkdownExporter(MarkdownExporter):
+    """Daily metrics export — all sections except individual activities."""
+
+    file_extension = "md"
+
+    def render(self, data: dict[str, Any]) -> str:
+        lines: list[str] = ["# Garmin Connect metrics export", ""]
+        lines += self._render_daily_stats(data)
+        lines += self._render_sleep(data)
+        lines += self._render_hrv(data)
+        lines += self._render_vo2max(data)
+        lines += self._render_training_readiness(data)
+        lines += self._render_training_status(data)
+        lines += self._render_body_battery(data)
+        lines += self._render_spo2(data)
+        lines += self._render_respiration(data)
+        lines += self._render_floors(data)
+        lines += self._render_intensity_minutes(data)
+        lines += self._render_hydration(data)
+        lines += self._render_personal_records(data)
+        lines += self._render_race_predictions(data)
+        return "\n".join(lines)

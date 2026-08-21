@@ -16,6 +16,9 @@ Examples:
 
     # Write out a Claude-ready Markdown file with your full history
     tridata export --format markdown --out export.md
+
+    # Export only daily metrics (no per-activity lines)
+    tridata export-metrics --out metrics.md
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .exporters import JSONExporter, MarkdownExporter
+from .exporters import JSONExporter, MarkdownExporter, MetricsMarkdownExporter
 from .garmin_client import GarminAuthError, GarminClient
 from .storage import DataStore
 from .sync import SyncService
@@ -65,6 +68,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     show_laps_cmd = sub.add_parser("show-laps", help="Print per-lap splits for one activity")
     show_laps_cmd.add_argument("activity_id", help="Garmin activity ID")
+
+    metrics_cmd = sub.add_parser(
+        "export-metrics",
+        help="Export daily metrics (sleep, HRV, training status, etc.) without per-activity lines",
+    )
+    metrics_cmd.add_argument("--out", type=Path, default=Path("metrics.md"))
 
     return parser
 
@@ -112,6 +121,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "show-laps":
         return _cmd_show_laps(store, args.activity_id)
+
+    if args.command == "export-metrics":
+        out_path = MetricsMarkdownExporter().export(store.export_all(), args.out)
+        print(f"Wrote {out_path}")
+        return 0
 
     parser.print_help()
     return 1

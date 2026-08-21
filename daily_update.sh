@@ -3,7 +3,7 @@ set -euo pipefail
 
 TRIDATA=/home/ankalagon/anaconda3/envs/tridata/bin/tridata
 LOG=/home/ankalagon/projects/tridata/sync.log
-EXPORT=/home/ankalagon/projects/tridata/garmin_export.md
+EXPORT=/home/ankalagon/projects/tridata/exports/garmin_export.md
 
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
 

@@ -20,6 +20,10 @@ CYCLING_TYPES = (
     "cycling", "road_biking", "mountain_biking", "indoor_cycling",
     "virtual_ride", "gravel_cycling",
 )
+SWIMMING_TYPES = (
+    "lap_swimming",
+    "open_water_swimming",
+)
 
 
 class SyncService:
@@ -94,7 +98,7 @@ class SyncService:
 
         logger.info("Sync complete: %s to %s", since, until)
 
-    _LAP_TYPES = RUNNING_TYPES + CYCLING_TYPES
+    _LAP_TYPES = RUNNING_TYPES + CYCLING_TYPES + SWIMMING_TYPES
 
     def sync_laps(self, limit: int = 20) -> int:
         """Fetch per-lap splits for up to `limit` activities that have none yet.

@@ -49,4 +49,11 @@ else
     exit 1
 fi
 
+if "$TRIDATA" export-swimming >> "$LOG" 2>&1; then
+    echo "export-swimming OK" >> "$LOG"
+else
+    echo "export-swimming FAILED (exit $?)" >> "$LOG"
+    exit 1
+fi
+
 echo "Done." >> "$LOG"

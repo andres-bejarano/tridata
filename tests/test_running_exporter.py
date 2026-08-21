@@ -220,5 +220,5 @@ def test_running_and_cycling_types_are_disjoint():
 
 
 def test_lap_types_is_union():
-    from tridata.sync import SyncService
-    assert set(SyncService._LAP_TYPES) == set(RUNNING_TYPES) | set(CYCLING_TYPES)
+    from tridata.sync import SWIMMING_TYPES, SyncService
+    assert set(SyncService._LAP_TYPES) == set(RUNNING_TYPES) | set(CYCLING_TYPES) | set(SWIMMING_TYPES)

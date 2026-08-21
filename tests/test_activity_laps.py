@@ -285,9 +285,10 @@ class TestSyncLapsIdempotency:
 
         assert mock_client.get_activity_laps.call_count == 3
 
-    def test_non_running_types_excluded(self, store):
+    def test_non_lap_types_excluded(self, store):
+        # Strength training is not in _LAP_TYPES and must never be fetched.
         store.save_activities([
-            Activity("swim1", date(2026, 1, 10), "lap_swimming", "Swim", 2700.0),
+            Activity("gym1", date(2026, 1, 10), "strength_training", "Gym", 3600.0),
         ])
 
         mock_client = MagicMock()

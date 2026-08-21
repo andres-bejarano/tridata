@@ -351,6 +351,86 @@ class RunningMarkdownExporter(MarkdownExporter):
         return "\n".join(lines)
 
 
+class SwimmingMarkdownExporter(MarkdownExporter):
+    """Per-activity swimming export covering pool and open-water sessions.
+
+    render() expects a list[dict] from
+    DataStore.get_activities_with_laps(SWIMMING_TYPES).
+    """
+
+    file_extension = "md"
+
+    @staticmethod
+    def _fmt_pace_per_100m(seconds_per_km: float | None) -> str:
+        if not seconds_per_km:
+            return "—"
+        total = int(round(seconds_per_km / 10))
+        m, s = divmod(total, 60)
+        return f"{m}:{s:02d}/100m"
+
+    @staticmethod
+    def _fmt_swim_activity_line(a: dict) -> str:
+        line = (
+            f"- **{a['activity_date']}** — {a['name']} ({a['activity_type']}), "
+            f"{MarkdownExporter._fmt_duration(a['duration_seconds'])}"
+        )
+        if a.get("distance_meters"):
+            line += f", {a['distance_meters']:.0f} m"
+        if a.get("avg_hr"):
+            line += f", avg HR {a['avg_hr']:.0f}"
+        if a.get("avg_pace_seconds_per_km"):
+            line += f", {SwimmingMarkdownExporter._fmt_pace_per_100m(a['avg_pace_seconds_per_km'])}"
+        if a.get("avg_swolf") is not None:
+            line += f", SWOLF {a['avg_swolf']:.0f}"
+        if a.get("avg_swim_cadence") is not None:
+            line += f", {a['avg_swim_cadence']:.0f} spm"
+        if a.get("pool_length_m") is not None:
+            line += f", {a['pool_length_m']:.0f}m pool"
+        if a.get("avg_water_temp_c") is not None:
+            line += f", {a['avg_water_temp_c']:.0f}°C"
+        return line
+
+    @staticmethod
+    def _fmt_swim_lap_line(lap: dict) -> str:
+        dist_m = lap.get("distance_meters")
+        pace = SwimmingMarkdownExporter._fmt_pace_per_100m(lap.get("avg_pace_seconds_per_km"))
+        hr = lap.get("avg_hr")
+        max_hr = lap.get("max_hr")
+        swolf = lap.get("avg_swolf")
+        cadence = lap.get("avg_swim_cadence")
+        strokes = lap.get("total_strokes")
+        stroke = lap.get("swim_stroke")
+
+        parts = [f"Lap {lap.get('lap_index', '?'):>2}"]
+        parts.append(f"{dist_m:.0f} m" if dist_m is not None else "—")
+        parts.append(pace)
+        if hr is not None:
+            hr_str = f"HR {hr:.0f}"
+            if max_hr is not None:
+                hr_str += f" (max {max_hr:.0f})"
+            parts.append(hr_str)
+        if swolf is not None:
+            parts.append(f"SWOLF {swolf:.0f}")
+        if cadence is not None:
+            parts.append(f"{cadence:.0f} spm")
+        if strokes is not None:
+            parts.append(f"{strokes} strokes")
+        if stroke:
+            parts.append(f"[{stroke}]")
+        elif lap.get("intensity_type"):
+            parts.append(f"[{lap['intensity_type']}]")
+        return "   ".join(parts)
+
+    def render(self, data: list[dict]) -> str:  # type: ignore[override]
+        lines: list[str] = ["# Swimming activities export", ""]
+        for a in data:
+            lines.append(self._fmt_swim_activity_line(a))
+            for lap in a.get("laps", []):
+                lines.append(f"  - {self._fmt_swim_lap_line(lap)}")
+            lines.append("")
+        return "\n".join(lines)
+
+
 class CyclingMarkdownExporter(MarkdownExporter):
     """Per-activity cycling export with optional per-lap breakdown.
 

@@ -42,6 +42,12 @@ class Activity:
     avg_power: float | None = None
     elevation_gain_m: float | None = None
     elevation_loss_m: float | None = None
+    avg_swim_cadence: float | None = None
+    avg_swolf: float | None = None
+    avg_strokes: float | None = None
+    total_strokes: float | None = None
+    pool_length_m: float | None = None
+    avg_water_temp_c: float | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -315,6 +321,10 @@ class ActivityLap:
     elevation_gain_m: float | None = None
     elevation_loss_m: float | None = None
     intensity_type: str | None = None
+    avg_swolf: float | None = None
+    avg_swim_cadence: float | None = None
+    total_strokes: int | None = None
+    swim_stroke: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

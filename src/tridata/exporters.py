@@ -66,21 +66,24 @@ class MarkdownExporter(Exporter):
     # the parent lines list. Subclasses pick which ones to include.
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _fmt_activity_line(a: dict) -> str:
+        return (
+            f"- **{a['activity_date']}** — {a['name']} ({a['activity_type']}), "
+            f"{MarkdownExporter._fmt_duration(a['duration_seconds'])}"
+            + (f", {a['distance_meters'] / 1000:.2f} km" if a.get("distance_meters") else "")
+            + (f", avg HR {a['avg_hr']:.0f}" if a.get("avg_hr") else "")
+            + (f", {MarkdownExporter._fmt_pace(a['avg_pace_seconds_per_km'])}/km" if a.get("avg_pace_seconds_per_km") else "")
+            + (f", {a['avg_cadence']:.0f} spm" if a.get("avg_cadence") else "")
+            + (f", stride {a['avg_stride_length_cm']:.0f} cm" if a.get("avg_stride_length_cm") else "")
+            + (f", +{a['elevation_gain_m']:.0f}m" if a.get("elevation_gain_m") else "")
+        )
+
     def _render_activities(self, data: dict[str, Any]) -> list[str]:
         activities = data.get("activities", [])
         lines = [f"## Activities ({len(activities)})"]
         for a in activities:
-            line = (
-                f"- **{a['activity_date']}** — {a['name']} ({a['activity_type']}), "
-                f"{self._fmt_duration(a['duration_seconds'])}"
-                + (f", {a['distance_meters'] / 1000:.2f} km" if a.get("distance_meters") else "")
-                + (f", avg HR {a['avg_hr']:.0f}" if a.get("avg_hr") else "")
-                + (f", {self._fmt_pace(a['avg_pace_seconds_per_km'])}/km" if a.get("avg_pace_seconds_per_km") else "")
-                + (f", {a['avg_cadence']:.0f} spm" if a.get("avg_cadence") else "")
-                + (f", stride {a['avg_stride_length_cm']:.0f} cm" if a.get("avg_stride_length_cm") else "")
-                + (f", +{a['elevation_gain_m']:.0f}m" if a.get("elevation_gain_m") else "")
-            )
-            lines.append(line)
+            lines.append(self._fmt_activity_line(a))
         lines.append("")
         return lines
 
@@ -341,17 +344,7 @@ class RunningMarkdownExporter(MarkdownExporter):
     def render(self, data: list[dict]) -> str:  # type: ignore[override]
         lines: list[str] = ["# Running activities export", ""]
         for a in data:
-            line = (
-                f"- **{a['activity_date']}** — {a['name']} ({a['activity_type']}), "
-                f"{self._fmt_duration(a['duration_seconds'])}"
-                + (f", {a['distance_meters'] / 1000:.2f} km" if a.get("distance_meters") else "")
-                + (f", avg HR {a['avg_hr']:.0f}" if a.get("avg_hr") else "")
-                + (f", {self._fmt_pace(a['avg_pace_seconds_per_km'])}/km" if a.get("avg_pace_seconds_per_km") else "")
-                + (f", {a['avg_cadence']:.0f} spm" if a.get("avg_cadence") else "")
-                + (f", stride {a['avg_stride_length_cm']:.0f} cm" if a.get("avg_stride_length_cm") else "")
-                + (f", +{a['elevation_gain_m']:.0f}m" if a.get("elevation_gain_m") else "")
-            )
-            lines.append(line)
+            lines.append(self._fmt_activity_line(a))
             for lap in a.get("laps", []):
                 lines.append(f"  - {self._fmt_lap_line(lap)}")
             lines.append("")

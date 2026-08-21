@@ -22,6 +22,17 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+
+def _pool_length_m(raw: dict) -> float | None:
+    """Convert Garmin's poolLength + unitOfPoolLength['factor'] to metres."""
+    length = raw.get("poolLength")
+    unit = raw.get("unitOfPoolLength") or {}
+    factor = unit.get("factor")
+    if length is None or not factor:
+        return None
+    return length / factor
+
+
 DEFAULT_TOKEN_DIR = Path.home() / ".tridata" / "tokens"
 
 
@@ -101,6 +112,12 @@ class GarminClient:
                     avg_power=raw.get("avgPower"),
                     elevation_gain_m=raw.get("elevationGain"),
                     elevation_loss_m=raw.get("elevationLoss"),
+                    avg_swim_cadence=raw.get("averageSwimCadenceInStrokesPerMinute"),
+                    avg_swolf=raw.get("averageSwolf"),
+                    avg_strokes=raw.get("avgStrokes"),
+                    total_strokes=raw.get("strokes"),
+                    pool_length_m=_pool_length_m(raw),
+                    avg_water_temp_c=raw.get("averageTemperature"),
                     raw=raw,
                 )
             )
@@ -124,6 +141,10 @@ class GarminClient:
                 elevation_gain_m=dto.get("elevationGain"),
                 elevation_loss_m=dto.get("elevationLoss"),
                 intensity_type=dto.get("intensityType"),
+                avg_swolf=dto.get("averageSWOLF"),
+                avg_swim_cadence=dto.get("averageSwimCadence"),
+                total_strokes=dto.get("totalNumberOfStrokes"),
+                swim_stroke=dto.get("swimStroke"),
             )
             for idx, dto in enumerate(lap_dtos, start=1)
         ]

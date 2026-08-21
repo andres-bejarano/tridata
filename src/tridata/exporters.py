@@ -351,6 +351,54 @@ class RunningMarkdownExporter(MarkdownExporter):
         return "\n".join(lines)
 
 
+class CyclingMarkdownExporter(MarkdownExporter):
+    """Per-activity cycling export with optional per-lap breakdown.
+
+    render() expects a list[dict] — the output of
+    DataStore.get_activities_with_laps(CYCLING_TYPES).
+    Shows speed in km/h instead of pace; omits cadence and stride (no
+    pedalling sensor on this profile).
+    """
+
+    file_extension = "md"
+
+    @staticmethod
+    def _fmt_speed_kmh(seconds_per_km: float | None) -> str:
+        if not seconds_per_km:
+            return "—"
+        return f"{3600 / seconds_per_km:.1f} km/h"
+
+    @staticmethod
+    def _fmt_cycling_activity_line(a: dict) -> str:
+        line = (
+            f"- **{a['activity_date']}** — {a['name']} ({a['activity_type']}), "
+            f"{MarkdownExporter._fmt_duration(a['duration_seconds'])}"
+        )
+        if a.get("distance_meters"):
+            line += f", {a['distance_meters'] / 1000:.2f} km"
+        if a.get("avg_hr"):
+            line += f", avg HR {a['avg_hr']:.0f}"
+        if a.get("avg_pace_seconds_per_km"):
+            line += f", {CyclingMarkdownExporter._fmt_speed_kmh(a['avg_pace_seconds_per_km'])}"
+        elev_parts = []
+        if a.get("elevation_gain_m"):
+            elev_parts.append(f"+{a['elevation_gain_m']:.0f}m")
+        if a.get("elevation_loss_m"):
+            elev_parts.append(f"-{a['elevation_loss_m']:.0f}m")
+        if elev_parts:
+            line += ", " + " / ".join(elev_parts)
+        return line
+
+    def render(self, data: list[dict]) -> str:  # type: ignore[override]
+        lines: list[str] = ["# Cycling activities export", ""]
+        for a in data:
+            lines.append(self._fmt_cycling_activity_line(a))
+            for lap in a.get("laps", []):
+                lines.append(f"  - {self._fmt_lap_line(lap)}")
+            lines.append("")
+        return "\n".join(lines)
+
+
 class MetricsMarkdownExporter(MarkdownExporter):
     """Daily metrics export — all sections except individual activities."""
 

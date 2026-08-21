@@ -42,4 +42,11 @@ else
     exit 1
 fi
 
+if "$TRIDATA" export-cycling >> "$LOG" 2>&1; then
+    echo "export-cycling OK" >> "$LOG"
+else
+    echo "export-cycling FAILED (exit $?)" >> "$LOG"
+    exit 1
+fi
+
 echo "Done." >> "$LOG"

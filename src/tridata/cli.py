@@ -31,10 +31,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .exporters import JSONExporter, MarkdownExporter, MetricsMarkdownExporter, RunningMarkdownExporter
+from .exporters import (
+    CyclingMarkdownExporter, JSONExporter, MarkdownExporter,
+    MetricsMarkdownExporter, RunningMarkdownExporter,
+)
 from .garmin_client import GarminAuthError, GarminClient
 from .storage import DataStore
-from .sync import RUNNING_TYPES, SyncService
+from .sync import CYCLING_TYPES, RUNNING_TYPES, SyncService
 
 
 EXPORTERS = {
@@ -79,6 +82,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Export running activities with per-lap breakdown",
     )
     running_cmd.add_argument("--out", type=Path, default=Path("exports/running.md"))
+
+    cycling_cmd = sub.add_parser(
+        "export-cycling",
+        help="Export cycling activities with per-lap breakdown",
+    )
+    cycling_cmd.add_argument("--out", type=Path, default=Path("exports/cycling.md"))
 
     return parser
 
@@ -135,6 +144,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export-running":
         data = store.get_activities_with_laps(RUNNING_TYPES)
         out_path = RunningMarkdownExporter().export(data, args.out)
+        print(f"Wrote {out_path}")
+        return 0
+
+    if args.command == "export-cycling":
+        data = store.get_activities_with_laps(CYCLING_TYPES)
+        out_path = CyclingMarkdownExporter().export(data, args.out)
         print(f"Wrote {out_path}")
         return 0
 

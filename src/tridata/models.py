@@ -12,6 +12,13 @@ from datetime import date
 from typing import Any
 
 
+def pace_seconds_per_km(speed_mps: float | None) -> float | None:
+    """Convert m/s to pace in s/km. Returns None when speed is absent or zero."""
+    if not speed_mps:
+        return None
+    return 1000.0 / speed_mps
+
+
 @dataclass
 class Activity:
     """A single logged activity (run, ride, swim, strength session...)."""
@@ -27,6 +34,14 @@ class Activity:
     calories: float | None = None
     training_effect_aerobic: float | None = None
     training_effect_anaerobic: float | None = None
+    avg_pace_seconds_per_km: float | None = None
+    avg_cadence: float | None = None
+    avg_stride_length_cm: float | None = None
+    avg_vertical_oscillation_cm: float | None = None
+    avg_ground_contact_time_ms: float | None = None
+    avg_power: float | None = None
+    elevation_gain_m: float | None = None
+    elevation_loss_m: float | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -282,3 +297,24 @@ class RacePrediction:
         data["prediction_date"] = self.prediction_date.isoformat()
         data.pop("raw", None)
         return data
+
+
+@dataclass
+class ActivityLap:
+    """One lap/km split within an activity, from get_activity_splits lapDTOs."""
+
+    activity_id: str
+    lap_index: int
+    distance_meters: float | None = None
+    duration_seconds: float | None = None
+    avg_pace_seconds_per_km: float | None = None
+    avg_hr: float | None = None
+    max_hr: float | None = None
+    avg_cadence: float | None = None
+    avg_stride_length_cm: float | None = None
+    elevation_gain_m: float | None = None
+    elevation_loss_m: float | None = None
+    intensity_type: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

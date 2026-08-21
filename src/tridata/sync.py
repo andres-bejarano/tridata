@@ -85,3 +85,34 @@ class SyncService:
                     self._store.save_race_predictions(prediction)
 
         logger.info("Sync complete: %s to %s", since, until)
+
+    # Activity types that typically have meaningful per-lap splits.
+    _LAP_TYPES = (
+        "running", "trail_running", "treadmill_running", "indoor_running",
+        "cycling", "road_biking", "mountain_biking", "indoor_cycling",
+        "virtual_ride", "gravel_cycling",
+    )
+
+    def sync_laps(self, limit: int = 20) -> int:
+        """Fetch per-lap splits for up to `limit` activities that have none yet.
+
+        Processes the most recent eligible activities first. Returns the number
+        of activities attempted.
+        """
+        self._client.login()
+
+        candidate_ids = self._store.get_activity_ids_by_type(self._LAP_TYPES)
+        already_done = self._store.activity_ids_lap_synced()
+        pending = [aid for aid in candidate_ids if aid not in already_done][:limit]
+
+        total = len(pending)
+        for i, activity_id in enumerate(pending, start=1):
+            print(f"parciales: {i}/{total} actividades procesadas", flush=True)
+            laps = self._client.get_activity_laps(activity_id)
+            if laps:
+                self._store.save_activity_laps(laps)
+            self._store.mark_laps_synced(activity_id, len(laps))
+            logger.info("Laps synced for activity %s (%d laps)", activity_id, len(laps))
+
+        logger.info("Lap sync complete: %d/%d activities processed", total, len(candidate_ids))
+        return total

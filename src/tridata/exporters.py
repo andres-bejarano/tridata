@@ -48,12 +48,17 @@ class MarkdownExporter(Exporter):
         activities = data.get("activities", [])
         lines.append(f"## Activities ({len(activities)})")
         for a in activities:
-            lines.append(
+            line = (
                 f"- **{a['activity_date']}** — {a['name']} ({a['activity_type']}), "
                 f"{self._fmt_duration(a['duration_seconds'])}"
                 + (f", {a['distance_meters'] / 1000:.2f} km" if a.get("distance_meters") else "")
-                + (f", avg HR {a['avg_hr']}" if a.get("avg_hr") else "")
+                + (f", avg HR {a['avg_hr']:.0f}" if a.get("avg_hr") else "")
+                + (f", {self._fmt_pace(a['avg_pace_seconds_per_km'])}/km" if a.get("avg_pace_seconds_per_km") else "")
+                + (f", {a['avg_cadence']:.0f} spm" if a.get("avg_cadence") else "")
+                + (f", stride {a['avg_stride_length_cm']:.0f} cm" if a.get("avg_stride_length_cm") else "")
+                + (f", +{a['elevation_gain_m']:.0f}m" if a.get("elevation_gain_m") else "")
             )
+            lines.append(line)
         lines.append("")
 
         stats = data.get("daily_stats", [])
@@ -197,6 +202,14 @@ class MarkdownExporter(Exporter):
                 )
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _fmt_pace(seconds_per_km: float | None) -> str:
+        if seconds_per_km is None:
+            return "—"
+        total = int(round(seconds_per_km))
+        m, s = divmod(total, 60)
+        return f"{m}:{s:02d}"
 
     @staticmethod
     def _fmt_time(seconds: int | None) -> str:

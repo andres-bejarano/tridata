@@ -14,10 +14,10 @@ from pathlib import Path
 from garminconnect import Garmin
 
 from .models import (
-    Activity, BodyBatteryDay, DailyStats, FloorsRecord, HRVRecord,
+    Activity, ActivityLap, BodyBatteryDay, DailyStats, FloorsRecord, HRVRecord,
     HydrationRecord, IntensityMinutes, PersonalRecord, RacePrediction,
     RespirationRecord, SleepRecord, SpO2Record, TrainingReadiness,
-    TrainingStatus, VO2MaxRecord,
+    TrainingStatus, VO2MaxRecord, pace_seconds_per_km,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,10 +93,40 @@ class GarminClient:
                     calories=raw.get("calories"),
                     training_effect_aerobic=raw.get("aerobicTrainingEffect"),
                     training_effect_anaerobic=raw.get("anaerobicTrainingEffect"),
+                    avg_pace_seconds_per_km=pace_seconds_per_km(raw.get("averageSpeed")),
+                    avg_cadence=raw.get("averageRunningCadenceInStepsPerMinute"),
+                    avg_stride_length_cm=raw.get("avgStrideLength"),
+                    avg_vertical_oscillation_cm=raw.get("avgVerticalOscillation"),
+                    avg_ground_contact_time_ms=raw.get("avgGroundContactTime"),
+                    avg_power=raw.get("avgPower"),
+                    elevation_gain_m=raw.get("elevationGain"),
+                    elevation_loss_m=raw.get("elevationLoss"),
                     raw=raw,
                 )
             )
         return activities
+
+    def get_activity_laps(self, activity_id: str) -> list[ActivityLap]:
+        """Return per-lap splits for one activity. Empty list if none available."""
+        raw = self.api.get_activity_splits(activity_id)
+        lap_dtos = raw.get("lapDTOs") or []
+        return [
+            ActivityLap(
+                activity_id=activity_id,
+                lap_index=dto.get("lapIndex", idx),
+                distance_meters=dto.get("distance"),
+                duration_seconds=dto.get("duration"),
+                avg_pace_seconds_per_km=pace_seconds_per_km(dto.get("averageSpeed")),
+                avg_hr=dto.get("averageHR"),
+                max_hr=dto.get("maxHR"),
+                avg_cadence=dto.get("averageRunCadence"),
+                avg_stride_length_cm=dto.get("strideLength"),
+                elevation_gain_m=dto.get("elevationGain"),
+                elevation_loss_m=dto.get("elevationLoss"),
+                intensity_type=dto.get("intensityType"),
+            )
+            for idx, dto in enumerate(lap_dtos, start=1)
+        ]
 
     def get_daily_stats(self, day: date) -> DailyStats | None:
         raw = self.api.get_stats(day.isoformat())

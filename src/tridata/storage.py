@@ -15,12 +15,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
 from .models import (
-    Activity, BodyBatteryDay, DailyStats, FloorsRecord, HRVRecord,
+    Activity, ActivityLap, BodyBatteryDay, DailyStats, FloorsRecord, HRVRecord,
     HydrationRecord, IntensityMinutes, PersonalRecord, RacePrediction,
     RespirationRecord, SleepRecord, SpO2Record, TrainingReadiness,
     TrainingStatus, VO2MaxRecord,
@@ -91,6 +91,25 @@ CREATE TABLE IF NOT EXISTS race_predictions (
     prediction_date TEXT PRIMARY KEY,
     payload TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS activity_laps (
+    activity_id TEXT NOT NULL,
+    lap_index INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (activity_id, lap_index)
+);
+CREATE TABLE IF NOT EXISTS activity_lap_sync_state (
+    activity_id TEXT PRIMARY KEY,
+    lap_count INTEGER NOT NULL,
+    synced_at TEXT NOT NULL
+);
+"""
+
+# Populate sync-state from any laps that pre-date this table (one-time migration).
+_MIGRATE_LAP_SYNC_STATE = """
+INSERT OR IGNORE INTO activity_lap_sync_state (activity_id, lap_count, synced_at)
+SELECT activity_id, COUNT(*), '2000-01-01T00:00:00'
+FROM activity_laps
+GROUP BY activity_id;
 """
 
 
@@ -102,6 +121,7 @@ class DataStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            conn.executescript(_MIGRATE_LAP_SYNC_STATE)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -223,6 +243,14 @@ class DataStore:
                 (record.prediction_date.isoformat(), json.dumps(record.to_dict())),
             )
 
+    def save_activity_laps(self, laps: list[ActivityLap]) -> None:
+        with self._connect() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO activity_laps (activity_id, lap_index, payload) "
+                "VALUES (?, ?, ?)",
+                [(lap.activity_id, lap.lap_index, json.dumps(lap.to_dict())) for lap in laps],
+            )
+
     # -- Reads -----------------------------------------------------------
 
     def last_synced_date(self, table: str, date_column: str) -> date | None:
@@ -249,6 +277,54 @@ class DataStore:
                 missing.append(current)
             current += timedelta(days=1)
         return missing
+
+    def mark_laps_synced(self, activity_id: str, lap_count: int) -> None:
+        """Record that lap-sync was attempted for this activity (even if 0 laps)."""
+        synced_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO activity_lap_sync_state "
+                "(activity_id, lap_count, synced_at) VALUES (?, ?, ?)",
+                (activity_id, lap_count, synced_at),
+            )
+
+    def activity_ids_lap_synced(self) -> set[str]:
+        """Return IDs of activities whose lap-sync has already been attempted."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT activity_id FROM activity_lap_sync_state"
+            ).fetchall()
+        return {r[0] for r in rows}
+
+    def activity_ids_with_laps(self) -> set[str]:
+        """Return the set of activity_ids that already have laps stored."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT activity_id FROM activity_laps"
+            ).fetchall()
+        return {r[0] for r in rows}
+
+    def get_activity_ids_by_type(self, types: tuple[str, ...]) -> list[str]:
+        """Return activity IDs (newest first) whose type is one of `types`."""
+        placeholders = ",".join("?" * len(types))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT activity_id FROM activities "  # noqa: S608
+                f"WHERE json_extract(payload,'$.activity_type') IN ({placeholders}) "
+                f"ORDER BY activity_date DESC",
+                types,
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_laps(self, activity_id: str) -> list[dict]:
+        """Return stored laps for an activity, ordered by lap_index."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM activity_laps "
+                "WHERE activity_id = ? ORDER BY lap_index",
+                (activity_id,),
+            ).fetchall()
+        return [json.loads(r[0]) for r in rows]
 
     def export_all(self) -> dict:
         """Dump everything in the store, keyed by category, oldest-first."""

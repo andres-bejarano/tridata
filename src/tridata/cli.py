@@ -33,11 +33,13 @@ from dotenv import load_dotenv
 
 from .exporters import (
     CyclingMarkdownExporter, GymMarkdownExporter, JSONExporter, MarkdownExporter,
-    MetricsMarkdownExporter, RunningMarkdownExporter, SwimmingMarkdownExporter,
+    MetricsMarkdownExporter, PMCMarkdownExporter, RunningMarkdownExporter,
+    SwimmingMarkdownExporter,
 )
 from .garmin_client import GarminAuthError, GarminClient
+from .metrics import compute_pmc, daily_tss
 from .storage import DataStore
-from .sync import CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncService
+from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncService
 
 
 EXPORTERS = {
@@ -100,6 +102,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Export gym/strength activities",
     )
     gym_cmd.add_argument("--out", type=Path, default=Path("exports/gym.md"))
+
+    pmc_cmd = sub.add_parser(
+        "export-pmc",
+        help="Export Performance Management Chart (CTL/ATL/TSB) as Markdown",
+    )
+    pmc_cmd.add_argument("--out", type=Path, default=Path("exports/pmc.md"))
+    pmc_cmd.add_argument(
+        "--chart", action="store_true", default=False,
+        help="Also regenerate docs/assets/pmc_last14d.png",
+    )
 
     return parser
 
@@ -177,6 +189,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Wrote {out_path}")
         return 0
 
+    if args.command == "export-pmc":
+        activities = store.get_activities_with_laps(ALL_SPORT_TYPES)
+        tss_series = daily_tss(activities)
+        pmc_series = compute_pmc(tss_series)
+        out_path = PMCMarkdownExporter().export(pmc_series, args.out)
+        print(f"Wrote {out_path}")
+        if args.chart:
+            _generate_pmc_chart(pmc_series)
+        return 0
+
     parser.print_help()
     return 1
 
@@ -192,6 +214,51 @@ def _cmd_show_laps(store: DataStore, activity_id: str) -> int:
         print(MarkdownExporter._fmt_lap_line(lap))
 
     return 0
+
+
+def _generate_pmc_chart(pmc_series: list) -> None:
+    """Regenerate docs/assets/pmc_last14d.png from the last 14 days of the series."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+    except ImportError:
+        print("matplotlib not available — skipping chart generation", file=sys.stderr)
+        return
+
+    tail = pmc_series[-14:]
+    dates = [row["date"] for row in tail]
+    tss_vals = [row["tss"] for row in tail]
+    ctl_vals = [row["ctl"] for row in tail]
+    atl_vals = [row["atl"] for row in tail]
+    tsb_vals = [row["tsb"] for row in tail]
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    fig.suptitle("Performance Management Chart — last 14 days", fontsize=13)
+
+    ax1.bar(dates, tss_vals, color="#aac4e0", label="TSS (TRIMP)")
+    ax1.plot(dates, ctl_vals, "b-o", markersize=4, label="CTL (fitness)")
+    ax1.plot(dates, atl_vals, "r-o", markersize=4, label="ATL (fatigue)")
+    ax1.set_ylabel("Load")
+    ax1.legend(loc="upper left", fontsize=8)
+    ax1.grid(axis="y", alpha=0.3)
+
+    colors = ["green" if v >= 0 else "red" for v in tsb_vals]
+    ax2.bar(dates, tsb_vals, color=colors, alpha=0.7, label="TSB (form)")
+    ax2.axhline(0, color="black", linewidth=0.8)
+    ax2.set_ylabel("Form (TSB)")
+    ax2.legend(loc="upper left", fontsize=8)
+    ax2.grid(axis="y", alpha=0.3)
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+    plt.xticks(rotation=30, ha="right")
+
+    out = Path(__file__).parent.parent.parent / "docs" / "assets" / "pmc_last14d.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(out, dpi=150)
+    plt.close()
+    print(f"Wrote {out}")
 
 
 if __name__ == "__main__":

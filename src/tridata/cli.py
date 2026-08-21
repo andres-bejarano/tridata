@@ -32,12 +32,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .exporters import (
-    CyclingMarkdownExporter, JSONExporter, MarkdownExporter,
+    CyclingMarkdownExporter, GymMarkdownExporter, JSONExporter, MarkdownExporter,
     MetricsMarkdownExporter, RunningMarkdownExporter, SwimmingMarkdownExporter,
 )
 from .garmin_client import GarminAuthError, GarminClient
 from .storage import DataStore
-from .sync import CYCLING_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncService
+from .sync import CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncService
 
 
 EXPORTERS = {
@@ -94,6 +94,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Export pool and open-water swimming activities",
     )
     swimming_cmd.add_argument("--out", type=Path, default=Path("exports/swimming.md"))
+
+    gym_cmd = sub.add_parser(
+        "export-gym",
+        help="Export gym/strength activities",
+    )
+    gym_cmd.add_argument("--out", type=Path, default=Path("exports/gym.md"))
 
     return parser
 
@@ -162,6 +168,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export-swimming":
         data = store.get_activities_with_laps(SWIMMING_TYPES)
         out_path = SwimmingMarkdownExporter().export(data, args.out)
+        print(f"Wrote {out_path}")
+        return 0
+
+    if args.command == "export-gym":
+        data = store.get_activities_with_laps(GYM_TYPES)
+        out_path = GymMarkdownExporter().export(data, args.out)
         print(f"Wrote {out_path}")
         return 0
 

@@ -56,4 +56,11 @@ else
     exit 1
 fi
 
+if "$TRIDATA" export-gym >> "$LOG" 2>&1; then
+    echo "export-gym OK" >> "$LOG"
+else
+    echo "export-gym FAILED (exit $?)" >> "$LOG"
+    exit 1
+fi
+
 echo "Done." >> "$LOG"

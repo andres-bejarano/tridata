@@ -24,6 +24,7 @@ SWIMMING_TYPES = (
     "lap_swimming",
     "open_water_swimming",
 )
+GYM_TYPES = ("strength_training",)
 
 
 class SyncService:

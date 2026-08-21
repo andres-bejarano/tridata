@@ -351,6 +351,38 @@ class RunningMarkdownExporter(MarkdownExporter):
         return "\n".join(lines)
 
 
+class GymMarkdownExporter(MarkdownExporter):
+    """Per-activity gym/strength export.
+
+    render() expects a list[dict] from
+    DataStore.get_activities_with_laps(GYM_TYPES).
+    Laps are intentionally omitted — gym sessions have no meaningful splits.
+    """
+
+    file_extension = "md"
+
+    @staticmethod
+    def _fmt_gym_activity_line(a: dict) -> str:
+        line = (
+            f"- **{a['activity_date']}** — {a['name']} ({a['activity_type']}), "
+            f"{MarkdownExporter._fmt_duration(a['duration_seconds'])}"
+        )
+        if a.get("avg_hr"):
+            line += f", avg HR {a['avg_hr']:.0f}"
+        if a.get("max_hr"):
+            line += f" (max {a['max_hr']:.0f})"
+        if a.get("calories"):
+            line += f", {a['calories']:.0f} kcal"
+        return line
+
+    def render(self, data: list[dict]) -> str:  # type: ignore[override]
+        lines: list[str] = ["# Gym activities export", ""]
+        for a in data:
+            lines.append(self._fmt_gym_activity_line(a))
+            lines.append("")
+        return "\n".join(lines)
+
+
 class SwimmingMarkdownExporter(MarkdownExporter):
     """Per-activity swimming export covering pool and open-water sessions.
 

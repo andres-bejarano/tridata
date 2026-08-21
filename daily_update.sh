@@ -3,7 +3,7 @@ set -euo pipefail
 
 TRIDATA=/home/ankalagon/anaconda3/envs/tridata/bin/tridata
 LOG=/home/ankalagon/projects/tridata/sync.log
-EXPORT=/home/ankalagon/projects/tridata/garmin_export.md
+EXPORT=/home/ankalagon/projects/tridata/exports/garmin_export.md
 
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
 
@@ -18,6 +18,27 @@ if "$TRIDATA" export --format markdown --out "$EXPORT" >> "$LOG" 2>&1; then
     echo "export OK" >> "$LOG"
 else
     echo "export FAILED (exit $?)" >> "$LOG"
+    exit 1
+fi
+
+if "$TRIDATA" sync --laps >> "$LOG" 2>&1; then
+    echo "sync --laps OK" >> "$LOG"
+else
+    echo "sync --laps FAILED (exit $?)" >> "$LOG"
+    exit 1
+fi
+
+if "$TRIDATA" export-metrics >> "$LOG" 2>&1; then
+    echo "export-metrics OK" >> "$LOG"
+else
+    echo "export-metrics FAILED (exit $?)" >> "$LOG"
+    exit 1
+fi
+
+if "$TRIDATA" export-running >> "$LOG" 2>&1; then
+    echo "export-running OK" >> "$LOG"
+else
+    echo "export-running FAILED (exit $?)" >> "$LOG"
     exit 1
 fi
 

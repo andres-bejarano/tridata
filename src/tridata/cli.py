@@ -15,10 +15,10 @@ Examples:
     tridata show-laps 24026027227
 
     # Write out a Claude-ready Markdown file with your full history
-    tridata export --format markdown --out export.md
+    tridata export --format markdown --out exports/garmin_export.md
 
     # Export only daily metrics (no per-activity lines)
-    tridata export-metrics --out metrics.md
+    tridata export-metrics --out exports/metrics.md
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     export_cmd = sub.add_parser("export", help="Write everything in the local store to a file")
     export_cmd.add_argument("--format", choices=EXPORTERS.keys(), default="markdown")
-    export_cmd.add_argument("--out", type=Path, default=Path("garmin_export.md"))
+    export_cmd.add_argument("--out", type=Path, default=Path("exports/garmin_export.md"))
 
     show_laps_cmd = sub.add_parser("show-laps", help="Print per-lap splits for one activity")
     show_laps_cmd.add_argument("activity_id", help="Garmin activity ID")
@@ -72,13 +72,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "export-metrics",
         help="Export daily metrics (sleep, HRV, training status, etc.) without per-activity lines",
     )
-    metrics_cmd.add_argument("--out", type=Path, default=Path("metrics.md"))
+    metrics_cmd.add_argument("--out", type=Path, default=Path("exports/metrics.md"))
 
     running_cmd = sub.add_parser(
         "export-running",
         help="Export running activities with per-lap breakdown",
     )
-    running_cmd.add_argument("--out", type=Path, default=Path("running.md"))
+    running_cmd.add_argument("--out", type=Path, default=Path("exports/running.md"))
 
     return parser
 

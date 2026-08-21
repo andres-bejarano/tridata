@@ -14,7 +14,7 @@ dist/
 venv/
 
 # Exports and logs (user-generated, not part of the repo)
-garmin_export.*
+exports/
 sync.log
 
 # Editors / OS

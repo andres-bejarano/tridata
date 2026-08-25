@@ -331,6 +331,26 @@ class MarkdownExporter(Exporter):
         return f"{hours}h{minutes:02d}m" if hours else f"{minutes}m"
 
 
+    @staticmethod
+    def _fmt_weather(weather: dict | None) -> str:
+        """Return a compact weather string, or '-' if weather is unavailable."""
+        if not weather:
+            return "-"
+        parts = []
+        if weather.get("temp_c") is not None:
+            temp = f"{weather['temp_c']:.1f}°C"
+            if weather.get("apparent_temp_c") is not None:
+                temp += f" (sens. {weather['apparent_temp_c']:.1f}°C)"
+            parts.append(temp)
+        if weather.get("humidity_pct") is not None:
+            parts.append(f"{weather['humidity_pct']:.0f}% hum")
+        if weather.get("wind_speed_kmh") is not None:
+            parts.append(f"{weather['wind_speed_kmh']:.1f} km/h viento")
+        if weather.get("condition"):
+            parts.append(weather["condition"])
+        return ", ".join(parts) if parts else "-"
+
+
 class RunningMarkdownExporter(MarkdownExporter):
     """Per-activity running export with optional per-lap breakdown.
 
@@ -344,7 +364,8 @@ class RunningMarkdownExporter(MarkdownExporter):
     def render(self, data: list[dict]) -> str:  # type: ignore[override]
         lines: list[str] = ["# Running activities export", ""]
         for a in data:
-            lines.append(self._fmt_activity_line(a))
+            weather_str = self._fmt_weather(a.get("weather"))
+            lines.append(f"{self._fmt_activity_line(a)} | {weather_str}")
             for lap in a.get("laps", []):
                 lines.append(f"  - {self._fmt_lap_line(lap)}")
             lines.append("")
@@ -555,7 +576,8 @@ class CyclingMarkdownExporter(MarkdownExporter):
     def render(self, data: list[dict]) -> str:  # type: ignore[override]
         lines: list[str] = ["# Cycling activities export", ""]
         for a in data:
-            lines.append(self._fmt_cycling_activity_line(a))
+            weather_str = self._fmt_weather(a.get("weather"))
+            lines.append(f"{self._fmt_cycling_activity_line(a)} | {weather_str}")
             for lap in a.get("laps", []):
                 lines.append(f"  - {self._fmt_lap_line(lap)}")
             lines.append("")

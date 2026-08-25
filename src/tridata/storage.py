@@ -102,6 +102,17 @@ CREATE TABLE IF NOT EXISTS activity_lap_sync_state (
     lap_count INTEGER NOT NULL,
     synced_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS activity_weather (
+    activity_id TEXT PRIMARY KEY,
+    temp_c REAL,
+    apparent_temp_c REAL,
+    humidity_pct REAL,
+    wind_speed_kmh REAL,
+    wind_direction_deg REAL,
+    condition TEXT,
+    station_name TEXT,
+    synced_at TEXT NOT NULL
+);
 """
 
 # Populate sync-state from any laps that pre-date this table (one-time migration).
@@ -243,6 +254,28 @@ class DataStore:
                 (record.prediction_date.isoformat(), json.dumps(record.to_dict())),
             )
 
+    def save_activity_weather(self, activity_id: str, weather: dict | None) -> None:
+        """Persist weather snapshot for one activity (even if weather is None/unavailable)."""
+        synced_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO activity_weather "
+                "(activity_id, temp_c, apparent_temp_c, humidity_pct, wind_speed_kmh, "
+                "wind_direction_deg, condition, station_name, synced_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    activity_id,
+                    weather.get("temp_c") if weather else None,
+                    weather.get("apparent_temp_c") if weather else None,
+                    weather.get("humidity_pct") if weather else None,
+                    weather.get("wind_speed_kmh") if weather else None,
+                    weather.get("wind_direction_deg") if weather else None,
+                    weather.get("condition") if weather else None,
+                    weather.get("station_name") if weather else None,
+                    synced_at,
+                ),
+            )
+
     def save_activity_laps(self, laps: list[ActivityLap]) -> None:
         with self._connect() as conn:
             conn.executemany(
@@ -304,6 +337,39 @@ class DataStore:
             ).fetchall()
         return {r[0] for r in rows}
 
+    def activity_ids_weather_synced(self) -> set[str]:
+        """Return IDs of activities whose weather-sync has already been attempted."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT activity_id FROM activity_weather"
+            ).fetchall()
+        return {r[0] for r in rows}
+
+    def get_weather(self, activity_id: str) -> dict | None:
+        """Return stored weather for one activity, or None if unavailable or not synced."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT temp_c, apparent_temp_c, humidity_pct, wind_speed_kmh, "
+                "wind_direction_deg, condition, station_name "
+                "FROM activity_weather WHERE activity_id = ?",
+                (activity_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        temp_c, apparent_temp_c, humidity_pct, wind_speed_kmh, wind_direction_deg, condition, station_name = row
+        # All-null means the API had no weather for this activity.
+        if all(v is None for v in (temp_c, humidity_pct, condition)):
+            return None
+        return {
+            "temp_c": temp_c,
+            "apparent_temp_c": apparent_temp_c,
+            "humidity_pct": humidity_pct,
+            "wind_speed_kmh": wind_speed_kmh,
+            "wind_direction_deg": wind_direction_deg,
+            "condition": condition,
+            "station_name": station_name,
+        }
+
     def get_activity_ids_by_type(self, types: tuple[str, ...]) -> list[str]:
         """Return activity IDs (newest first) whose type is one of `types`."""
         placeholders = ",".join("?" * len(types))
@@ -337,13 +403,14 @@ class DataStore:
 
     def get_activities_with_laps(self, types: tuple[str, ...]) -> list[dict]:
         """Return activities of the given types (newest first), each enriched
-        with a 'laps' key containing its stored lap list (empty list if none)."""
+        with a 'laps' key (empty list if none) and a 'weather' key (None if not synced)."""
         result = []
         for activity_id in self.get_activity_ids_by_type(types):
             activity = self.get_activity(activity_id)
             if activity is None:
                 continue
             activity["laps"] = self.get_laps(activity_id)
+            activity["weather"] = self.get_weather(activity_id)
             result.append(activity)
         return result
 

@@ -354,6 +354,40 @@ class GarminClient:
             raw=raw,
         )
 
+    def get_activity_weather(self, activity_id: str) -> dict | None:
+        """Return a cleaned weather snapshot for one activity, or None if unavailable.
+
+        Temperature is converted from Fahrenheit (Garmin's API default) to Celsius.
+        Wind speed is converted from mph (US customary, consistent with the Fahrenheit unit
+        system) to km/h.
+        """
+        try:
+            raw = self.api.get_activity_weather(activity_id)
+        except Exception:
+            return None
+        if not raw:
+            return None
+
+        def _f_to_c(f: float | None) -> float | None:
+            if f is None:
+                return None
+            return round((f - 32) * 5 / 9, 1)
+
+        def _mph_to_kmh(mph: float | None) -> float | None:
+            if mph is None:
+                return None
+            return round(mph * 1.60934, 1)
+
+        return {
+            "temp_c": _f_to_c(raw.get("temp")),
+            "apparent_temp_c": _f_to_c(raw.get("apparentTemp")),
+            "humidity_pct": raw.get("relativeHumidity"),
+            "wind_speed_kmh": _mph_to_kmh(raw.get("windSpeed")),
+            "wind_direction_deg": raw.get("windDirection"),
+            "condition": (raw.get("weatherTypeDTO") or {}).get("desc"),
+            "station_name": (raw.get("weatherStationDTO") or {}).get("name"),
+        }
+
     def iter_days(self, start: date, end: date):
         """Yield each date from start to end inclusive."""
         current = start

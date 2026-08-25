@@ -101,6 +101,7 @@ class SyncService:
         logger.info("Sync complete: %s to %s", since, until)
 
     _LAP_TYPES = RUNNING_TYPES + CYCLING_TYPES + SWIMMING_TYPES
+    _WEATHER_TYPES = RUNNING_TYPES + CYCLING_TYPES
 
     def sync_laps(self, limit: int = 20) -> int:
         """Fetch per-lap splits for up to `limit` activities that have none yet.
@@ -124,4 +125,26 @@ class SyncService:
             logger.info("Laps synced for activity %s (%d laps)", activity_id, len(laps))
 
         logger.info("Lap sync complete: %d/%d activities processed", total, len(candidate_ids))
+        return total
+
+    def sync_weather(self, limit: int = 20) -> int:
+        """Fetch weather snapshots for up to `limit` running/cycling activities that have none yet.
+
+        Processes the most recent eligible activities first. Returns the number
+        of activities attempted.
+        """
+        self._client.login()
+
+        candidate_ids = self._store.get_activity_ids_by_type(self._WEATHER_TYPES)
+        already_done = self._store.activity_ids_weather_synced()
+        pending = [aid for aid in candidate_ids if aid not in already_done][:limit]
+
+        total = len(pending)
+        for i, activity_id in enumerate(pending, start=1):
+            print(f"clima: {i}/{total} actividades procesadas", flush=True)
+            weather = self._client.get_activity_weather(activity_id)
+            self._store.save_activity_weather(activity_id, weather)
+            logger.info("Weather synced for activity %s", activity_id)
+
+        logger.info("Weather sync complete: %d/%d activities processed", total, len(candidate_ids))
         return total

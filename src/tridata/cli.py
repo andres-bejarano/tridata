@@ -65,6 +65,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--laps-backfill-limit", type=int, default=20, metavar="N",
         help="Max number of activities to fetch laps for in one run (default: 20).",
     )
+    sync_cmd.add_argument(
+        "--weather", action="store_true", default=False,
+        help="Sync weather snapshots instead of daily data (does not run the regular sync).",
+    )
+    sync_cmd.add_argument(
+        "--weather-backfill-limit", type=int, default=20, metavar="N",
+        help="Max number of activities to fetch weather for in one run (default: 20).",
+    )
 
     export_cmd = sub.add_parser("export", help="Write everything in the local store to a file")
     export_cmd.add_argument("--format", choices=EXPORTERS.keys(), default="markdown")
@@ -141,6 +149,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.laps:
                 n = svc.sync_laps(limit=args.laps_backfill_limit)
                 print(f"Lap sync complete: {n} activities processed.")
+            elif args.weather:
+                n = svc.sync_weather(limit=args.weather_backfill_limit)
+                print(f"Weather sync complete: {n} activities processed.")
             else:
                 since = args.since or date.today().replace(day=1)
                 svc.sync(since=since)

@@ -36,6 +36,13 @@ else
     exit 1
 fi
 
+if "$TRIDATA" sync --weather >> "$LOG" 2>&1; then
+    echo "sync --weather OK" >> "$LOG"
+else
+    echo "sync --weather FAILED (exit $?)" >> "$LOG"
+    exit 1
+fi
+
 if "$TRIDATA" export-metrics --out "$METRICS" >> "$LOG" 2>&1; then
     echo "export-metrics OK" >> "$LOG"
 else

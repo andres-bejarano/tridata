@@ -351,6 +351,57 @@ class RunningMarkdownExporter(MarkdownExporter):
         return "\n".join(lines)
 
 
+class PMCMarkdownExporter(Exporter):
+    """Exports a PMC series as a Markdown table plus a 7-day summary.
+
+    render() expects the list[dict] returned by metrics.compute_pmc()
+    (keys: date, tss, ctl, atl, tsb — all floats except date).
+    """
+
+    file_extension = "md"
+
+    def render(self, data: list[dict]) -> str:  # type: ignore[override]
+        if not data:
+            return "# Performance Management Chart\n\n_No data._\n"
+
+        lines = ["# Performance Management Chart", ""]
+
+        # --- 7-day summary block ---
+        recent = data[-7:]
+        today = data[-1]
+        lines.append("## Current form (last 7 days)")
+        lines.append("")
+        lines.append(
+            f"- **CTL** (fitness):  {today['ctl']:.1f}"
+        )
+        lines.append(
+            f"- **ATL** (fatigue):  {today['atl']:.1f}"
+        )
+        lines.append(
+            f"- **TSB** (form):     {today['tsb']:+.1f}"
+            + ("  ← fresh" if today["tsb"] > 5 else
+               "  ← fatigued" if today["tsb"] < -10 else
+               "  ← neutral")
+        )
+        lines.append("")
+
+        # --- Full table ---
+        lines.append("## Full history")
+        lines.append("")
+        lines.append("| Date | TSS | CTL | ATL | TSB |")
+        lines.append("|---|---:|---:|---:|---:|")
+        for row in data:
+            lines.append(
+                f"| {row['date']} "
+                f"| {row['tss']:.1f} "
+                f"| {row['ctl']:.1f} "
+                f"| {row['atl']:.1f} "
+                f"| {row['tsb']:+.1f} |"
+            )
+
+        return "\n".join(lines)
+
+
 class GymMarkdownExporter(MarkdownExporter):
     """Per-activity gym/strength export.
 

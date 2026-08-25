@@ -1,8 +1,8 @@
 [Unit]
-Description=Run tridata sync every day at 06:00
+Description=Tridata daily sync at 08:00 (runs on next boot if missed)
 
 [Timer]
-OnCalendar=*-*-* 06:00:00
+OnCalendar=*-*-* 08:00:00
 Persistent=true
 
 [Install]

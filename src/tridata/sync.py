@@ -25,6 +25,7 @@ SWIMMING_TYPES = (
     "open_water_swimming",
 )
 GYM_TYPES = ("strength_training",)
+ALL_SPORT_TYPES = RUNNING_TYPES + CYCLING_TYPES + SWIMMING_TYPES + GYM_TYPES
 
 
 class SyncService:

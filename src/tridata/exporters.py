@@ -77,6 +77,7 @@ class MarkdownExporter(Exporter):
             + (f", {a['avg_cadence']:.0f} spm" if a.get("avg_cadence") else "")
             + (f", stride {a['avg_stride_length_cm']:.0f} cm" if a.get("avg_stride_length_cm") else "")
             + (f", +{a['elevation_gain_m']:.0f}m" if a.get("elevation_gain_m") else "")
+            + (f", {a['calories']:.0f} kcal" if a.get("calories") else "")
         )
 
     def _render_activities(self, data: dict[str, Any]) -> list[str]:
@@ -87,14 +88,79 @@ class MarkdownExporter(Exporter):
         lines.append("")
         return lines
 
+    # Kept in sync with sync.RUNNING_TYPES by hand — duplicated (rather than imported)
+    # so this module stays free of a hard dependency on garmin_client/garminconnect.
+    _RUNNING_ACTIVITY_TYPES = (
+        "running", "trail_running", "treadmill_running", "indoor_running",
+    )
+
+    @classmethod
+    def _daily_activity_aggregates(cls, activities: list[dict]) -> dict[str, dict[str, float]]:
+        """Sum, per calendar day, exercise calories and an *estimated* running-step count.
+
+        Exercise calories come straight from Garmin's per-activity `calories` — a real
+        number, not a guess. Running steps are NOT reported by Garmin per activity, so
+        they're approximated as duration_minutes * avg_cadence (spm); treat that figure
+        as an estimate, not a measurement.
+        """
+        by_date: dict[str, dict[str, float]] = {}
+        for a in activities:
+            day = a.get("activity_date")
+            if not day:
+                continue
+            bucket = by_date.setdefault(day, {"exercise_calories": 0.0, "running_steps_est": 0.0})
+            if a.get("calories"):
+                bucket["exercise_calories"] += a["calories"]
+            if (
+                a.get("activity_type") in cls._RUNNING_ACTIVITY_TYPES
+                and a.get("avg_cadence")
+                and a.get("duration_seconds")
+            ):
+                bucket["running_steps_est"] += (a["duration_seconds"] / 60.0) * a["avg_cadence"]
+        return by_date
+
     def _render_daily_stats(self, data: dict[str, Any]) -> list[str]:
         stats = data.get("daily_stats", [])
+        agg_by_date = self._daily_activity_aggregates(data.get("activities", []))
         lines = [f"## Daily stats ({len(stats)} days)"]
         for s in stats:
-            lines.append(
-                f"- **{s['stat_date']}** — steps: {s.get('steps')}, "
+            day = s["stat_date"]
+            agg = agg_by_date.get(day, {})
+
+            steps = s.get("steps")
+            running_steps = round(agg["running_steps_est"]) if agg.get("running_steps_est") else 0
+            if steps is not None and running_steps:
+                if running_steps > steps:
+                    # The day's step counter is lower than what this run alone should have
+                    # produced — that total is stale/incomplete, not a real measurement.
+                    steps_str = f"steps: {steps} (⚠ incompleto: la carrera sola estima ~{running_steps})"
+                else:
+                    rest_steps = steps - running_steps
+                    steps_str = f"steps: {steps} (~{running_steps} corriendo, {rest_steps} resto)"
+            else:
+                steps_str = f"steps: {steps}"
+
+            line = (
+                f"- **{day}** — {steps_str}, "
                 f"resting HR: {s.get('resting_hr')}, stress avg: {s.get('stress_avg')}"
             )
+
+            total_cal = s.get("total_calories")
+            if total_cal is not None:
+                exercise_cal = agg.get("exercise_calories", 0.0)
+                if exercise_cal:
+                    if exercise_cal > total_cal:
+                        # Same story: the day's calorie total is lower than the exercise
+                        # calories alone — that total was cached before Garmin finished
+                        # accounting for this activity, not a real day total yet.
+                        line += f", calorías: {total_cal:.0f} (⚠ incompleto: el ejercicio solo suma {exercise_cal:.0f})"
+                    else:
+                        rest_cal = total_cal - exercise_cal
+                        line += f", calorías: {total_cal:.0f} ({exercise_cal:.0f} ejercicio + {rest_cal:.0f} basal/NEAT)"
+                else:
+                    line += f", calorías: {total_cal:.0f}"
+
+            lines.append(line)
         lines.append("")
         return lines
 
@@ -492,6 +558,8 @@ class SwimmingMarkdownExporter(MarkdownExporter):
             line += f", {a['pool_length_m']:.0f}m pool"
         if a.get("avg_water_temp_c") is not None:
             line += f", {a['avg_water_temp_c']:.0f}°C"
+        if a.get("calories"):
+            line += f", {a['calories']:.0f} kcal"
         return line
 
     @staticmethod

@@ -25,6 +25,16 @@ def test_export_running_default_out_is_in_exports_folder():
     assert args.out == Path("exports/running.md")
 
 
+def test_sync_revalidate_days_defaults_to_none():
+    args = _build_parser().parse_args(["sync"])
+    assert args.revalidate_days is None
+
+
+def test_sync_revalidate_days_parses_override():
+    args = _build_parser().parse_args(["sync", "--revalidate-days", "45"])
+    assert args.revalidate_days == 45
+
+
 def test_exporter_creates_exports_subfolder(tmp_path):
     from tridata.exporters import MarkdownExporter
     out = tmp_path / "exports" / "garmin_export.md"

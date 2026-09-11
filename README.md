@@ -1,8 +1,7 @@
 # tridata
 
-Pull your Garmin Connect data and hand it to Claude for analysis — free, local, and yours.
-
-**Synced metrics:** activities · sleep · HRV · daily stats · VO2max · Training Readiness · Training Status · Body Battery (with intraday curve) · respiration rate · floors · intensity minutes · hydration · personal records · race predictions No TrainingPeaks
+Pull your own Garmin Connect data (activities, sleep, HRV, daily stats) and
+hand it to Claude for analysis — free, local, and yours. No TrainingPeaks
 subscription, no Strava premium, no third-party connector required.
 
 ## Why
@@ -63,20 +62,22 @@ The repo includes `daily_update.sh`, a script that runs `tridata sync` and
 
 ### Linux (systemd — recommended)
 
-The repo ships the unit files in `.config/systemd/user/`. Systemd is
-preferred over cron because `Persistent=true` makes the timer catch up
-automatically if the machine was off at the scheduled time.
+Ideal for laptops: if the machine is off at the scheduled time, the job runs
+automatically on next boot.
 
 ```bash
+# Copy the unit files
+cp daily_update.sh ~/projects/tridata/
 chmod +x ~/projects/tridata/daily_update.sh
 mkdir -p ~/.config/systemd/user
 cp .config/systemd/user/tridata-sync.* ~/.config/systemd/user/
 
+# Enable and start
 systemctl --user daemon-reload
 systemctl --user enable --now tridata-sync.timer
 ```
 
-The timer fires every day at **06:00**. If the computer was off at that time,
+The timer fires every day at **08:00**. If the computer was off at that time,
 it runs as soon as you log in.
 
 Check status and logs:
@@ -87,13 +88,56 @@ journalctl --user -u tridata-sync.service    # execution log
 tail -20 ~/projects/tridata/sync.log         # script output log
 ```
 
-### macOS / Linux (cron)
+### macOS / Linux (cron fallback)
 
 ```bash
-(crontab -l 2>/dev/null; echo "0 6 * * * /path/to/tridata/daily_update.sh") | crontab -
+crontab -e
+# Run every day at 08:00
+0 8 * * * /path/to/tridata/daily_update.sh
 ```
 
-Note: cron does not recover missed runs if the machine was off at 06:00.
+Note: cron does not recover missed runs if the machine was off.
+
+## Weekly wide revalidation sweep
+
+Garmin sometimes finalizes a day's totals (steps, calories) *after* its own
+calendar date, so a value cached before that happens can be wrong. The daily
+sync above only re-checks the last few days for this (see
+`SyncService.RECENT_REVALIDATE_DAYS`) — cheap, but it can miss a day that
+stays stale for weeks (this happened for real: 2026-08-20 and 2026-08-24 sat
+wrong for over two weeks before anyone noticed).
+
+`weekly_wide_sync.sh` covers that gap: it runs `tridata sync
+--revalidate-days 45` (re-checking the last 45 days even where a row already
+exists) and then regenerates every export, once a week.
+
+### Linux (systemd)
+
+```bash
+chmod +x ~/projects/tridata/weekly_wide_sync.sh
+mkdir -p ~/.config/systemd/user
+cp .config/systemd/user/tridata-wide-sync.* ~/.config/systemd/user/
+
+systemctl --user daemon-reload
+systemctl --user enable --now tridata-wide-sync.timer
+```
+
+The timer fires every **Sunday at 03:00** (deliberately off-peak, away from
+the daily 08:00 run), and recovers on next boot if the machine was off.
+
+```bash
+systemctl --user status tridata-wide-sync.timer   # next trigger time
+journalctl --user -u tridata-wide-sync.service    # execution log
+tail -30 ~/projects/tridata/sync.log              # script output log
+```
+
+### macOS / Linux (cron fallback)
+
+```bash
+crontab -e
+# Run every Sunday at 03:00
+0 3 * * 0 /path/to/tridata/weekly_wide_sync.sh
+```
 
 ## Project structure
 

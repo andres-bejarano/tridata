@@ -26,7 +26,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -55,7 +55,17 @@ def _build_parser() -> argparse.ArgumentParser:
     sync_cmd = sub.add_parser("sync", help="Pull new data from Garmin Connect into the local store")
     sync_cmd.add_argument(
         "--since", type=date.fromisoformat, default=None,
-        help="Backfill from this date (YYYY-MM-DD). Defaults to start of current month.",
+        help="Backfill from this date (YYYY-MM-DD). Defaults to a rolling 45-day lookback.",
+    )
+    sync_cmd.add_argument(
+        "--revalidate-days", type=int, default=None, metavar="N",
+        help=(
+            "Re-fetch this many most-recent real-world days even if already present, "
+            "overriding SyncService.RECENT_REVALIDATE_DAYS for this run. The daily cron "
+            "run leaves this unset (short, cheap window). Used by the weekly wide-sweep "
+            "job to revalidate a much larger window (e.g. 45) and catch days that went "
+            "stale outside the short window before anything re-checked them."
+        ),
     )
     sync_cmd.add_argument(
         "--laps", action="store_true", default=False,
@@ -153,8 +163,13 @@ def main(argv: list[str] | None = None) -> int:
                 n = svc.sync_weather(limit=args.weather_backfill_limit)
                 print(f"Weather sync complete: {n} activities processed.")
             else:
-                since = args.since or date.today().replace(day=1)
-                svc.sync(since=since)
+                # A rolling lookback rather than "start of this month": SyncService only
+                # re-fetches genuinely missing days (plus a short recent-day revalidation
+                # window — see SyncService.RECENT_REVALIDATE_DAYS), so a wider default here
+                # costs nothing on a normal run but means a failure near a month boundary
+                # can no longer strand data the moment the month rolls over.
+                since = args.since or (date.today() - timedelta(days=45))
+                svc.sync(since=since, revalidate_days=args.revalidate_days)
                 print("Sync complete.")
         except GarminAuthError as exc:
             print(f"Login failed: {exc}", file=sys.stderr)

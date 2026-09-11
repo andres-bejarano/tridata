@@ -29,38 +29,95 @@ ALL_SPORT_TYPES = RUNNING_TYPES + CYCLING_TYPES + SWIMMING_TYPES + GYM_TYPES
 
 
 class SyncService:
+    #: Re-fetch this many most-recent days on every run even when they already have
+    #: a row. Garmin sometimes finalizes a day's totals (steps, calories) *after* its
+    #: own calendar date — e.g. an activity uploaded late from a separate device/bike
+    #: computer — and `missing_dates()` only catches dates with NO row at all, so a
+    #: value cached before that upload lands would otherwise stay wrong forever.
+    #: (2026-08-18 through 2026-08-27 is a real example of exactly that happening.)
+    #:
+    #: This short window is cheap enough to run on every daily sync, but it only
+    #: catches staleness discovered within RECENT_REVALIDATE_DAYS of it happening.
+    #: A day that slips past this window unnoticed (e.g. 2026-08-20 / 2026-08-24,
+    #: which stayed wrong for weeks) needs the separate, infrequent wide sweep —
+    #: see `sync()`'s `revalidate_days` parameter and weekly_wide_sync.sh.
+    RECENT_REVALIDATE_DAYS = 3
+
     def __init__(self, client: GarminClient, store: DataStore) -> None:
         self._client = client
         self._store = store
 
-    def sync(self, since: date, until: date | None = None) -> None:
-        """Fetch and persist everything missing between `since` and `until`.
+    def _days_to_check(
+        self, table: str, col: str, since: date, until: date, revalidate_days: int | None = None,
+    ) -> list[date]:
+        """Missing dates in [since, until], plus the most recent
+        `revalidate_days` real-world days even if already present.
 
-        On a fully-synced store this is a no-op; on first run with
-        `since` set to e.g. 2026-02-01, it backfills your whole history.
+        `revalidate_days` defaults to `RECENT_REVALIDATE_DAYS` (the short window
+        used by the normal daily run). Pass a larger value — e.g. from a weekly
+        wide-sweep job — to also catch days that fell stale outside that short
+        window before anything ever re-checked them (see `sync()`'s
+        `revalidate_days` parameter). Pass 0 to disable revalidation entirely
+        and only fetch genuinely missing days.
+
+        Anchored to *today*, not to `until`: a backfill/resync of old history
+        (e.g. `until` deep in the past) shouldn't force-refresh the tail end of
+        that old range every time — only calendar days close to right now are
+        at risk of having been cached before Garmin finished processing them.
+        """
+        if revalidate_days is None:
+            revalidate_days = self.RECENT_REVALIDATE_DAYS
+
+        missing = set(self._store.missing_dates(table, col, since, until))
+
+        recent: set[date] = set()
+        if revalidate_days > 0:
+            revalidate_start = date.today() - timedelta(days=revalidate_days - 1)
+            recent_start = max(since, revalidate_start)
+            recent_end = min(until, date.today())
+            day = recent_start
+            while day <= recent_end:
+                recent.add(day)
+                day += timedelta(days=1)
+
+        return sorted(missing | recent)
+
+    def sync(self, since: date, until: date | None = None, revalidate_days: int | None = None) -> None:
+        """Fetch and persist everything missing between `since` and `until`
+        (plus a recent-day revalidation window — see `_days_to_check`).
+
+        On a fully-synced store this is a no-op aside from that revalidation;
+        on first run with `since` set to e.g. 2026-02-01, it backfills your
+        whole history.
+
+        `revalidate_days` overrides `RECENT_REVALIDATE_DAYS` for this call only —
+        the normal daily cron run leaves it as `None` (short window, cheap), while
+        a weekly wide-sweep job can pass e.g. 45 to revalidate a much larger
+        window and catch days that went stale outside the short window (see
+        weekly_wide_sync.sh and .config/systemd/user/tridata-wide-sync.*).
         """
         until = until or date.today()
 
         self._client.login()
 
-        missing_activity_days = self._store.missing_dates("activities", "activity_date", since, until)
-        if missing_activity_days:
-            start, end = min(missing_activity_days), max(missing_activity_days)
+        activity_days = self._days_to_check("activities", "activity_date", since, until, revalidate_days)
+        if activity_days:
+            start, end = min(activity_days), max(activity_days)
             activities = self._client.get_activities(start, end)
             self._store.save_activities(activities)
             logger.info("Synced %d activities (%s to %s)", len(activities), start, end)
 
-        for day in self._store.missing_dates("daily_stats", "stat_date", since, until):
+        for day in self._days_to_check("daily_stats", "stat_date", since, until, revalidate_days):
             stats = self._client.get_daily_stats(day)
             if stats:
                 self._store.save_daily_stats(stats)
 
-        for day in self._store.missing_dates("sleep", "sleep_date", since, until):
+        for day in self._days_to_check("sleep", "sleep_date", since, until, revalidate_days):
             sleep = self._client.get_sleep(day)
             if sleep:
                 self._store.save_sleep(sleep)
 
-        for day in self._store.missing_dates("hrv", "hrv_date", since, until):
+        for day in self._days_to_check("hrv", "hrv_date", since, until, revalidate_days):
             hrv = self._client.get_hrv(day)
             if hrv:
                 self._store.save_hrv(hrv)
@@ -82,7 +139,7 @@ class SyncService:
             if not callable(getter):
                 continue
             saver = getattr(self._store, saver_name)
-            for day in self._store.missing_dates(table, col, since, until):
+            for day in self._days_to_check(table, col, since, until, revalidate_days):
                 record = getter(day)
                 if record:
                     saver(record)
@@ -93,7 +150,7 @@ class SyncService:
                 self._store.save_personal_records(records)
 
         if callable(getattr(self._client, "get_race_predictions", None)):
-            if self._store.missing_dates("race_predictions", "prediction_date", since, until):
+            if self._days_to_check("race_predictions", "prediction_date", since, until, revalidate_days):
                 prediction = self._client.get_race_predictions()
                 if prediction:
                     self._store.save_race_predictions(prediction)

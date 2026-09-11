@@ -1,0 +1,9 @@
+[Unit]
+Description=Tridata weekly wide revalidation sweep, Sundays at 03:00 (runs on next boot if missed)
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

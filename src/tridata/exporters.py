@@ -621,6 +621,44 @@ class CyclingMarkdownExporter(MarkdownExporter):
         return f"{3600 / seconds_per_km:.1f} km/h"
 
     @staticmethod
+    def _fmt_cycling_lap_line(lap: dict) -> str:
+        """Same as MarkdownExporter._fmt_lap_line but with speed in km/h
+        instead of pace, matching the activity summary line."""
+        idx = lap.get("lap_index", "?")
+        dist_km = (lap["distance_meters"] / 1000) if lap.get("distance_meters") else None
+        speed = CyclingMarkdownExporter._fmt_speed_kmh(lap.get("avg_pace_seconds_per_km"))
+        hr = lap.get("avg_hr")
+        max_hr = lap.get("max_hr")
+        cadence = lap.get("avg_cadence")
+        stride = lap.get("avg_stride_length_cm")
+        gain = lap.get("elevation_gain_m")
+        loss = lap.get("elevation_loss_m")
+        itype = lap.get("intensity_type", "")
+
+        parts = [f"Lap {idx:>2}"]
+        parts.append(f"{dist_km:.2f} km" if dist_km is not None else "  —  ")
+        parts.append(speed)
+        if hr is not None:
+            hr_str = f"HR {hr:.0f}"
+            if max_hr is not None:
+                hr_str += f" (max {max_hr:.0f})"
+            parts.append(hr_str)
+        if cadence is not None:
+            parts.append(f"{cadence:.0f} spm")
+        if stride is not None:
+            parts.append(f"stride {stride:.0f} cm")
+        elev_parts = []
+        if gain is not None:
+            elev_parts.append(f"+{gain:.0f}m")
+        if loss is not None:
+            elev_parts.append(f"-{loss:.0f}m")
+        if elev_parts:
+            parts.append(" / ".join(elev_parts))
+        if itype:
+            parts.append(f"[{itype}]")
+        return "   ".join(parts)
+
+    @staticmethod
     def _fmt_cycling_activity_line(a: dict) -> str:
         line = (
             f"- **{a['activity_date']}** — {a['name']} ({a['activity_type']}), "
@@ -647,7 +685,7 @@ class CyclingMarkdownExporter(MarkdownExporter):
             weather_str = self._fmt_weather(a.get("weather"))
             lines.append(f"{self._fmt_cycling_activity_line(a)} | {weather_str}")
             for lap in a.get("laps", []):
-                lines.append(f"  - {self._fmt_lap_line(lap)}")
+                lines.append(f"  - {self._fmt_cycling_lap_line(lap)}")
             lines.append("")
         return "\n".join(lines)
 

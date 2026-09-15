@@ -111,11 +111,18 @@ class TestCyclingNoSensors:
 
     def test_speed_in_kmh_not_pace_in_activity_line(self):
         # The activity summary line must use km/h, not m:ss/km.
-        # (/km CAN appear in lap lines via the shared _fmt_lap_line formatter.)
         lines = self._render().splitlines()
         activity_lines = [l for l in lines if l.startswith("- **")]
         assert any("km/h" in l for l in activity_lines)
         assert all("/km" not in l for l in activity_lines)
+
+    def test_speed_in_kmh_not_pace_in_lap_line(self):
+        # Lap lines must also use km/h, not m:ss/km (consistent with the
+        # activity summary line).
+        lines = self._render().splitlines()
+        lap_lines = [l for l in lines if "Lap" in l]
+        assert any("km/h" in l for l in lap_lines)
+        assert all("/km" not in l for l in lap_lines)
 
     def test_no_cadence_or_stride_in_activity_line(self):
         content = self._render()

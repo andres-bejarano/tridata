@@ -57,8 +57,26 @@ ask away.
 
 ## Automating the daily sync
 
-The repo includes `daily_update.sh`, a script that runs `tridata sync` and
-`tridata export`, and logs everything with a timestamp to `sync.log`.
+The repo includes `daily_update.sh`, a single script that runs the full
+pipeline (`tridata sync`, laps, weather, and every `export-*`) and logs
+everything with a timestamp to `sync.log`. Run it daily (see below) and it
+takes care of two things by itself:
+
+- **Short daily revalidation** (cheap): re-checks the last few days even
+  where a row already exists, in case Garmin finalized a day's totals
+  (steps, calories) *after* its own calendar date — see
+  `SyncService.RECENT_REVALIDATE_DAYS`.
+- **Wide revalidation sweep** (occasional): every ~7 days, the same script
+  automatically runs `tridata sync --revalidate-days 45` instead of the
+  short version, catching a day that slipped past the short window before
+  anyone noticed (this happened for real: 2026-08-20 and 2026-08-24 sat
+  wrong for over two weeks). It tracks the last successful wide sweep in
+  `~/.tridata/last_wide_sync` — no separate script or second timer needed.
+  If Garmin's login flakes transiently (it does, occasionally, with
+  "Failed to retrieve social profile" — unrelated to your password), each
+  step retries automatically before giving up; if a wide sweep still fails
+  after retries, it simply tries again on the next daily run instead of
+  waiting a whole week.
 
 ### Linux (systemd — recommended)
 
@@ -97,47 +115,6 @@ crontab -e
 ```
 
 Note: cron does not recover missed runs if the machine was off.
-
-## Weekly wide revalidation sweep
-
-Garmin sometimes finalizes a day's totals (steps, calories) *after* its own
-calendar date, so a value cached before that happens can be wrong. The daily
-sync above only re-checks the last few days for this (see
-`SyncService.RECENT_REVALIDATE_DAYS`) — cheap, but it can miss a day that
-stays stale for weeks (this happened for real: 2026-08-20 and 2026-08-24 sat
-wrong for over two weeks before anyone noticed).
-
-`weekly_wide_sync.sh` covers that gap: it runs `tridata sync
---revalidate-days 45` (re-checking the last 45 days even where a row already
-exists) and then regenerates every export, once a week.
-
-### Linux (systemd)
-
-```bash
-chmod +x ~/projects/tridata/weekly_wide_sync.sh
-mkdir -p ~/.config/systemd/user
-cp .config/systemd/user/tridata-wide-sync.* ~/.config/systemd/user/
-
-systemctl --user daemon-reload
-systemctl --user enable --now tridata-wide-sync.timer
-```
-
-The timer fires every **Sunday at 03:00** (deliberately off-peak, away from
-the daily 08:00 run), and recovers on next boot if the machine was off.
-
-```bash
-systemctl --user status tridata-wide-sync.timer   # next trigger time
-journalctl --user -u tridata-wide-sync.service    # execution log
-tail -30 ~/projects/tridata/sync.log              # script output log
-```
-
-### macOS / Linux (cron fallback)
-
-```bash
-crontab -e
-# Run every Sunday at 03:00
-0 3 * * 0 /path/to/tridata/weekly_wide_sync.sh
-```
 
 ## Project structure
 

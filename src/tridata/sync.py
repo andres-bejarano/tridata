@@ -40,7 +40,9 @@ class SyncService:
     #: catches staleness discovered within RECENT_REVALIDATE_DAYS of it happening.
     #: A day that slips past this window unnoticed (e.g. 2026-08-20 / 2026-08-24,
     #: which stayed wrong for weeks) needs the separate, infrequent wide sweep —
-    #: see `sync()`'s `revalidate_days` parameter and weekly_wide_sync.sh.
+    #: see `sync()`'s `revalidate_days` parameter — daily_update.sh triggers it
+    #: automatically every ~7 days (see WIDE_INTERVAL_DAYS there), no separate
+    #: script/timer needed.
     RECENT_REVALIDATE_DAYS = 3
 
     def __init__(self, client: GarminClient, store: DataStore) -> None:
@@ -92,9 +94,9 @@ class SyncService:
 
         `revalidate_days` overrides `RECENT_REVALIDATE_DAYS` for this call only —
         the normal daily cron run leaves it as `None` (short window, cheap), while
-        a weekly wide-sweep job can pass e.g. 45 to revalidate a much larger
-        window and catch days that went stale outside the short window (see
-        weekly_wide_sync.sh and .config/systemd/user/tridata-wide-sync.*).
+        an occasional wide sweep can pass e.g. 45 to revalidate a much larger
+        window and catch days that went stale outside the short window. See
+        daily_update.sh, which triggers this automatically every ~7 days.
         """
         until = until or date.today()
 

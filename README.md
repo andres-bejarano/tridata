@@ -125,8 +125,27 @@ src/tridata/
 ├── storage.py           # DataStore — local SQLite repository
 ├── exporters.py         # Exporter (abstract) -> JSONExporter, MarkdownExporter
 ├── sync.py               # SyncService — orchestrates incremental sync
+├── mcp_server.py         # MCP server — read-only query tools over the store
 └── cli.py                 # command-line entry point
 ```
+
+## Querying from Claude (MCP)
+
+Attaching the full exports to every conversation costs ~250K+ tokens.
+The MCP server lets Claude fetch only the slice it needs instead (a date
+range, one activity, a weekly summary — typically a few hundred to ~2K
+tokens per call), which stretches a Claude subscription's usage limits a
+lot further.
+
+```bash
+pip install -e ".[mcp]"
+claude mcp add --scope user tridata -- "$(which tridata-mcp)"
+```
+
+Tools (all read-only): `list_activities`, `get_activity`,
+`get_daily_metrics`, `get_training_load`, `get_weekly_summary`,
+`get_records`. The server reads the same SQLite store the daily sync
+writes, so it's always as fresh as the last `daily_update.sh` run.
 
 ## Roadmap
 

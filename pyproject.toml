@@ -17,10 +17,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0"]
+mcp = ["mcp>=2.3"]
+dev = ["pytest>=8.0.0", "mcp>=2.3"]
 
 [project.scripts]
 tridata = "tridata.cli:main"
+tridata-mcp = "tridata.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

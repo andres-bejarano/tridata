@@ -19,10 +19,11 @@ dependencies = [
 [project.optional-dependencies]
 mcp = ["mcp>=2.3"]
 # Food log web app (`tridata web`): Claude API client, ASGI app and server.
-app = ["anthropic>=1.15,<2", "starlette>=1.8", "uvicorn>=0.54"]
+# starlette 1.8 needs Python 3.11; 1.7 is the newest that still runs on 3.10.
+app = ["anthropic>=1.15,<2", "starlette>=1.7", "uvicorn>=0.54"]
 dev = [
     "pytest>=8.0.0", "mcp>=2.3", "ruff>=0.17", "mypy>=1.10", "pip-audit>=2.7",
-    "anthropic>=1.15,<2", "starlette>=1.8", "uvicorn>=0.54",
+    "anthropic>=1.15,<2", "starlette>=1.7", "uvicorn>=0.54",
 ]
 
 [project.scripts]

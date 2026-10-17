@@ -44,6 +44,16 @@ class TestLogin:
             c.login()
         mock.login.assert_called_once_with(str(tmp_path))
 
+    def test_login_restricts_token_store_permissions(self, tmp_path):
+        token_dir = tmp_path / "tokens"
+        mock = MagicMock()
+        # Simulate garminconnect writing the token file world-readable.
+        mock.login.side_effect = lambda d: (Path(d) / "garmin_tokens.json").write_text("{}")
+        with patch("tridata.garmin_client.Garmin", return_value=mock):
+            GarminClient("user@example.com", "secret", token_dir=token_dir).login()
+        assert token_dir.stat().st_mode & 0o777 == 0o700
+        assert (token_dir / "garmin_tokens.json").stat().st_mode & 0o777 == 0o600
+
     def test_login_failure_raises_auth_error(self, tmp_path):
         mock = MagicMock()
         mock.login.side_effect = RuntimeError("401 Unauthorized")

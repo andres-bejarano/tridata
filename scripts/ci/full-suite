@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Full test suite. Same command locally and in GitHub Actions (tests.yml).
+# Uses the active `python` (locally: ~/.venvs/tridata-dev, see AGENTS.md) and
+# puts this checkout's src/ first, so each worktree tests itself.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+if ! python -c "import pytest" 2>/dev/null; then
+  echo "full-suite: pytest is not installed in $(command -v python)." >&2
+  echo "  Install the dev tools: python -m pip install -e \".[dev]\"" >&2
+  exit 1
+fi
+
+# Throwaway HOME: a test can never touch the real ~/.tridata (data, tokens, backups).
+tmp_home="$(mktemp -d)"
+trap 'rm -rf "$tmp_home"' EXIT
+
+echo "== pytest"
+HOME="$tmp_home" python -m pytest -q -p no:cacheprovider

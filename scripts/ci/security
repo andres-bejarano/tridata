@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Leaked secrets (gitleaks, whole git history plus uncommitted changes) and
+# known-vulnerable dependencies (pip-audit). Same command locally and in
+# GitHub Actions (quality-security.yml, job `security`). The repo is public.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "security: gitleaks is not on PATH, so secrets would go unchecked." >&2
+  echo "  Install gitleaks 8.30.1 (pinned, SHA-256 checked) as shown in AGENTS.md." >&2
+  exit 1
+fi
+if ! python -c "import pip_audit" 2>/dev/null; then
+  echo "security: pip-audit is not installed in $(command -v python)." >&2
+  echo "  Install the dev tools: python -m pip install -e \".[dev]\"" >&2
+  exit 1
+fi
+
+echo "== gitleaks (history)"
+gitleaks git --redact --verbose --no-banner .
+echo "== gitleaks (staged changes)"
+gitleaks git --redact --verbose --no-banner --staged .
+echo "== gitleaks (unstaged changes)"
+gitleaks git --redact --verbose --no-banner --pre-commit .
+
+# PYSEC-2026-3467: garminconnect <= 0.3.4 writes its token store world-readable;
+#   no fixed release on PyPI yet, mitigated by GarminClient._restrict_token_store.
+#   Drop the ignore once garminconnect >= 0.3.5 ships.
+# PYSEC-2026-3447: setuptools sdist exclusion bypass, macOS-only and we don't build sdists.
+echo "== pip-audit"
+python -m pip_audit --skip-editable --ignore-vuln PYSEC-2026-3467 --ignore-vuln PYSEC-2026-3447

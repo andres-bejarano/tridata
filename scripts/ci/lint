@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Lint (ruff, incl. bandit security rules) and type checks (mypy).
+# Same command locally and in GitHub Actions (quality-security.yml, job `lint`).
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+for module in ruff mypy; do
+  if ! python -c "import $module" 2>/dev/null; then
+    echo "lint: $module is not installed in $(command -v python)." >&2
+    echo "  Install the dev tools: python -m pip install -e \".[dev]\"" >&2
+    exit 1
+  fi
+done
+
+echo "== ruff"
+python -m ruff check --no-cache src tests
+echo "== mypy"
+python -m mypy --cache-dir=/dev/null src

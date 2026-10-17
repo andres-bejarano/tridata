@@ -56,6 +56,21 @@ run_step() {
 
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
 
+# --- Copia de seguridad, antes de tocar nada -----------------------------
+# Copia verificada de la base de datos (y del diario de déficit, que no se
+# puede volver a bajar de Garmin) en ~/.tridata/backups/, guardando 14.
+# Va antes del sync para que un sync que estropee algo no arrastre también
+# la copia. Si falla, se avisa pero no se bloquea el resto.
+BACKUP_EXTRAS=()
+for f in deficit/deficit.md deficit/grafica_peso_deficit.html; do
+    [ -f "$f" ] && BACKUP_EXTRAS+=(--extra "$f")
+done
+if "$TRIDATA" backup "${BACKUP_EXTRAS[@]}" >> "$LOG" 2>&1; then
+    echo "backup OK" >> "$LOG"
+else
+    echo "backup FAILED (exit $?) — se sigue con el sync" >> "$LOG"
+fi
+
 # ¿Toca barrido amplio hoy?
 do_wide=false
 days_since=""

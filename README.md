@@ -129,6 +129,22 @@ src/tridata/
 └── cli.py                 # command-line entry point
 ```
 
+## Backups
+
+`daily_update.sh` starts every run with `tridata backup`: a consistent,
+integrity-checked copy of the SQLite store (plus any `--extra` files, e.g.
+a food diary that can't be re-downloaded from Garmin) in
+`~/.tridata/backups/<timestamp>/`, keeping the last 14. They're on the
+same disk, so they protect against a bad sync or a mistake, not against
+losing the machine.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+./scripts/check.sh   # ruff (incl. security rules), mypy, pytest, pip-audit — same as CI
+```
+
 ## Querying from Claude (MCP)
 
 Attaching the full exports to every conversation costs ~250K+ tokens.

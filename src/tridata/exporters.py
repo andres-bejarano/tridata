@@ -6,10 +6,10 @@ small subclass, not touching the sync logic.
 """
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
-import json
 
 
 class Exporter(ABC):
@@ -18,10 +18,14 @@ class Exporter(ABC):
     file_extension: str = ""
 
     @abstractmethod
-    def render(self, data: dict[str, Any]) -> str:
-        """Return the file contents as a string."""
+    def render(self, data: Any) -> str:
+        """Return the file contents as a string.
 
-    def export(self, data: dict[str, Any], out_path: Path | str) -> Path:
+        Most exporters take the export_all() dict; per-sport and PMC ones
+        take a list of rows, so the base contract is deliberately loose.
+        """
+
+    def export(self, data: Any, out_path: Path | str) -> Path:
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(self.render(data), encoding="utf-8")
@@ -454,7 +458,6 @@ class PMCMarkdownExporter(Exporter):
         lines = ["# Performance Management Chart", ""]
 
         # --- 7-day summary block ---
-        recent = data[-7:]
         today = data[-1]
         lines.append("## Current form (last 7 days)")
         lines.append("")

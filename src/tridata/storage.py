@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator
 
 from .models import (
     Activity, ActivityLap, BodyBatteryDay, DailyStats, FloorsRecord, HRVRecord,
@@ -283,6 +283,40 @@ class DataStore:
                 "VALUES (?, ?, ?)",
                 [(lap.activity_id, lap.lap_index, json.dumps(lap.to_dict())) for lap in laps],
             )
+
+    def backup(self, dest: Path | str) -> dict[str, int]:
+        """Write a consistent copy of the store to `dest` and verify it.
+
+        Uses SQLite's online backup API, so it's safe while a sync is
+        writing. The copy is reopened and integrity-checked — a backup
+        that can't be restored is worse than none, because it looks fine.
+        Returns row counts per table in the copy.
+        """
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        src = sqlite3.connect(self._db_path)
+        dst = sqlite3.connect(dest)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+        dest.chmod(0o600)
+
+        check = sqlite3.connect(f"file:{dest}?mode=ro", uri=True)
+        try:
+            result = check.execute("PRAGMA integrity_check").fetchone()[0]
+            if result != "ok":
+                raise RuntimeError(f"Backup {dest} failed integrity check: {result}")
+            tables = [r[0] for r in check.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            )]
+            return {
+                t: check.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]  # noqa: S608 - names from sqlite_master
+                for t in tables
+            }
+        finally:
+            check.close()
 
     # -- Reads -----------------------------------------------------------
 

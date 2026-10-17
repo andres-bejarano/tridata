@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=2.3"]
-dev = ["pytest>=8.0.0", "mcp>=2.3"]
+dev = ["pytest>=8.0.0", "mcp>=2.3", "ruff>=0.17", "mypy>=1.10", "pip-audit>=2.7"]
 
 [project.scripts]
 tridata = "tridata.cli:main"
@@ -29,3 +29,19 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+# E/F: errors, B: likely bugs, S: security (bandit), UP: modern syntax
+select = ["E", "F", "B", "S", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # assert is how pytest tests
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true

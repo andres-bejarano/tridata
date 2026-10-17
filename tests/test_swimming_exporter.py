@@ -6,10 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from tridata.exporters import SwimmingMarkdownExporter
-
 
 # ---------------------------------------------------------------------------
 # Fixtures (invented data)
@@ -129,8 +126,8 @@ class TestPoolSwimming:
         assert "2.00 km" not in content
 
     def test_pace_per_100m_in_activity_line(self):
-        lines = [l for l in self._render().splitlines() if l.startswith("- **")]
-        assert any("1:20/100m" in l for l in lines)
+        lines = [line for line in self._render().splitlines() if line.startswith("- **")]
+        assert any("1:20/100m" in line for line in lines)
 
     def test_swolf_in_activity_line(self):
         assert "SWOLF 38" in self._render()

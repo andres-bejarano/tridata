@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from tridata.exporters import CyclingMarkdownExporter
 
-
 # ---------------------------------------------------------------------------
 # Fixtures (invented data)
 # ---------------------------------------------------------------------------
@@ -112,17 +111,17 @@ class TestCyclingNoSensors:
     def test_speed_in_kmh_not_pace_in_activity_line(self):
         # The activity summary line must use km/h, not m:ss/km.
         lines = self._render().splitlines()
-        activity_lines = [l for l in lines if l.startswith("- **")]
-        assert any("km/h" in l for l in activity_lines)
-        assert all("/km" not in l for l in activity_lines)
+        activity_lines = [line for line in lines if line.startswith("- **")]
+        assert any("km/h" in line for line in activity_lines)
+        assert all("/km" not in line for line in activity_lines)
 
     def test_speed_in_kmh_not_pace_in_lap_line(self):
         # Lap lines must also use km/h, not m:ss/km (consistent with the
         # activity summary line).
         lines = self._render().splitlines()
-        lap_lines = [l for l in lines if "Lap" in l]
-        assert any("km/h" in l for l in lap_lines)
-        assert all("/km" not in l for l in lap_lines)
+        lap_lines = [line for line in lines if "Lap" in line]
+        assert any("km/h" in line for line in lap_lines)
+        assert all("/km" not in line for line in lap_lines)
 
     def test_no_cadence_or_stride_in_activity_line(self):
         content = self._render()
@@ -168,8 +167,8 @@ class TestCyclingWithSensors:
         # The activity-level summary line should never show "spm"
         # (cadence is only in the lap breakdown)
         lines = self._render().splitlines()
-        activity_lines = [l for l in lines if l.startswith("- **")]
-        assert all("spm" not in l for l in activity_lines)
+        activity_lines = [line for line in lines if line.startswith("- **")]
+        assert all("spm" not in line for line in activity_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +195,7 @@ def test_export_writes_file(tmp_path):
 
 def test_cli_default_out_cycling():
     from pathlib import Path
+
     from tridata.cli import _build_parser
     args = _build_parser().parse_args(["export-cycling"])
     assert args.out == Path("exports/cycling.md")

@@ -21,3 +21,10 @@ sync.log
 .vscode/
 .idea/
 .DS_Store
+
+# Requirements-engineering tool and its workspace (separate git repos)
+ingenieria-requisitos/
+tridata-agents/
+
+# Generated from real training data by `tridata export-pmc --chart` — keep it local
+docs/assets/pmc_last14d.png

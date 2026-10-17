@@ -6,10 +6,17 @@ from datetime import date
 
 import pytest
 
-from tridata.metrics import (
-    HR_MAX, HR_REST, _HR_RESERVE, _trimp_segment,
-    compute_pmc, daily_tss, trimp_for_activity,
-)
+from tridata.metrics import _trimp_segment, compute_pmc, daily_tss, trimp_for_activity
+
+HR_MAX = 190
+HR_REST = 60
+_HR_RESERVE = HR_MAX - HR_REST
+
+
+@pytest.fixture(autouse=True)
+def _fictional_hr(monkeypatch):
+    monkeypatch.setenv("TRIDATA_HR_MAX", str(HR_MAX))
+    monkeypatch.setenv("TRIDATA_HR_REST", str(HR_REST))
 
 
 # ---------------------------------------------------------------------------
@@ -17,8 +24,7 @@ from tridata.metrics import (
 # ---------------------------------------------------------------------------
 
 def test_trimp_segment_positive():
-    # 60 min at HR=140: hr_ratio=(140-52)/126=0.6984
-    # trimp = 60 * 0.6984 * 0.64 * exp(1.92*0.6984)
+    # 60 min at HR=140: hr_ratio=(140-HR_REST)/_HR_RESERVE
     hr_ratio = (140 - HR_REST) / _HR_RESERVE
     expected = 60 * hr_ratio * 0.64 * math.exp(1.92 * hr_ratio)
     assert _trimp_segment(3600, 140) == pytest.approx(expected, rel=1e-6)

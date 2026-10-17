@@ -22,6 +22,9 @@ Examples:
 
     # Verified copy of the store (plus extra files, e.g. a food diary), keep 14
     tridata backup --extra deficit/deficit.md
+
+    # Food log web app on this PC only (needs the `app` extra and .env values)
+    tridata web
 """
 from __future__ import annotations
 
@@ -153,6 +156,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    web_cmd = sub.add_parser(
+        "web",
+        help="Run the food log web app (listens on this PC only by default)",
+    )
+    web_cmd.add_argument(
+        "--host", default="127.0.0.1",
+        help="Address to listen on (default: 127.0.0.1, this PC only; Tailscale serves it outside).",
+    )
+    web_cmd.add_argument("--port", type=int, default=8765, help="Port (default: 8765).")
+
     return parser
 
 
@@ -249,6 +262,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "backup":
         return _cmd_backup(store, args.dest, args.keep, args.extra)
 
+    if args.command == "web":
+        return _cmd_web(args.host, args.port)
+
     parser.print_help()
     return 1
 
@@ -279,6 +295,30 @@ def _cmd_backup(store: DataStore, dest_root: Path, keep: int, extras: list[Path]
         + (f", +{len(extras)} extra file(s)" if extras else "")
         + f"); removed {len(old)} old backup(s)."
     )
+    return 0
+
+
+def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
+    try:
+        import uvicorn
+
+        from .ia import InterpreteClaude
+        from .nutricion import ConfigGasto, RegistroComidas
+        from .web import crear_app
+    except ImportError as exc:
+        print(f"Missing the `app` extra ({exc}). Install it: pip install -e '.[app]'", file=sys.stderr)
+        return 1
+    try:
+        config = ConfigGasto.desde_entorno()
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    app = crear_app(RegistroComidas(db_path), InterpreteClaude(), config)
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"Warning: listening on {host}, reachable from outside this PC.", file=sys.stderr)
+    print(f"TriData web on http://{host}:{port} (Ctrl+C to stop)")
+    uvicorn.run(app, host=host, port=port)
     return 0
 
 

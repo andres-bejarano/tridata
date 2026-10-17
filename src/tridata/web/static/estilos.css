@@ -1,0 +1,104 @@
+/* Phone first: big touch targets, input fixed at the bottom, readable numbers. */
+:root {
+  --fondo: #f6f7f9;
+  --tarjeta: #ffffff;
+  --texto: #1b1f24;
+  --suave: #5b6570;
+  --borde: #d5dbe1;
+  --acento: #1f6feb;
+  --acento-texto: #ffffff;
+  --alerta: #b54708;
+  --alerta-fondo: #fff4e5;
+  --bien: #1a7f37;
+  --error: #c62828;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #111418;
+    --tarjeta: #1b2027;
+    --texto: #e8ecf0;
+    --suave: #9aa5b1;
+    --borde: #313a44;
+    --acento: #4c8dff;
+    --acento-texto: #0b0e12;
+    --alerta: #ffb366;
+    --alerta-fondo: #3a2a14;
+    --bien: #4cc26b;
+    --error: #ff6b6b;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 17px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--fondo);
+  color: var(--texto);
+}
+main { max-width: 640px; margin: 0 auto; padding: 16px 16px 140px; }
+h1 { font-size: 1.6rem; margin: 0; }
+h2 { font-size: 1.1rem; margin: 24px 0 8px; display: flex; justify-content: space-between; align-items: baseline; }
+.suave { color: var(--suave); margin: 4px 0; font-size: 0.92rem; }
+.oculto { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+.margenes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.margen {
+  background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 12px;
+  padding: 10px 8px; text-align: center;
+}
+.margen .etiqueta { display: block; font-size: 0.8rem; color: var(--suave); }
+.margen strong { display: block; font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.margen.n0 { border-color: var(--acento); }
+.total { font-variant-numeric: tabular-nums; }
+
+table { width: 100%; border-collapse: collapse; background: var(--tarjeta); border-radius: 12px; overflow: hidden; }
+th, td { padding: 10px 8px; border-bottom: 1px solid var(--borde); text-align: left; vertical-align: top; }
+th { font-size: 0.8rem; color: var(--suave); font-weight: 600; }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.fuera td { color: var(--suave); }
+
+.marca {
+  display: inline-block; margin: 2px 0 0 6px; padding: 1px 8px; border-radius: 999px;
+  font-size: 0.75rem; border: 1px solid var(--borde); color: var(--suave);
+}
+.marca.alerta { color: var(--alerta); border-color: var(--alerta); background: var(--alerta-fondo); }
+.marcas .marca:first-child { margin-left: 0; }
+.aviso { color: var(--alerta); background: var(--alerta-fondo); padding: 10px 12px; border-radius: 10px; }
+
+.tarjeta {
+  background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 12px;
+  padding: 12px; margin-bottom: 10px; display: grid; gap: 8px;
+}
+.tarjeta.dudosa { border-color: var(--alerta); }
+.fila { display: grid; grid-template-columns: 1fr 0.8fr 1fr; gap: 8px; }
+.campo { display: grid; gap: 2px; font-size: 0.8rem; color: var(--suave); }
+input, textarea {
+  font: inherit; color: var(--texto); background: var(--fondo);
+  border: 1px solid var(--borde); border-radius: 10px; padding: 10px; width: 100%; min-height: 44px;
+}
+.supuestos { margin: 0; font-size: 0.85rem; color: var(--suave); }
+
+button {
+  font: inherit; min-height: 48px; padding: 0 18px; border-radius: 12px;
+  border: 1px solid var(--borde); background: var(--tarjeta); color: var(--texto); cursor: pointer;
+}
+button.principal { background: var(--acento); color: var(--acento-texto); border-color: var(--acento); font-weight: 600; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.quitar { justify-self: end; min-height: 40px; font-size: 0.9rem; }
+.acciones { display: flex; gap: 8px; }
+.acciones .principal { flex: 1; }
+
+#mensaje { min-height: 1.4em; }
+#mensaje.error { color: var(--error); }
+#mensaje.bien { color: var(--bien); }
+
+#entrada {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  background: var(--tarjeta); border-top: 1px solid var(--borde);
+}
+#entrada textarea { flex: 1; resize: none; }
+@media (min-width: 680px) {
+  #entrada { max-width: 640px; margin: 0 auto; border: 1px solid var(--borde); border-radius: 14px 14px 0 0; }
+}

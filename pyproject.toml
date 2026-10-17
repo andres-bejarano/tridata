@@ -18,7 +18,12 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=2.3"]
-dev = ["pytest>=8.0.0", "mcp>=2.3", "ruff>=0.17", "mypy>=1.10", "pip-audit>=2.7"]
+# Food log web app (`tridata web`): Claude API client, ASGI app and server.
+app = ["anthropic>=1.15,<2", "starlette>=1.8", "uvicorn>=0.54"]
+dev = [
+    "pytest>=8.0.0", "mcp>=2.3", "ruff>=0.17", "mypy>=1.10", "pip-audit>=2.7",
+    "anthropic>=1.15,<2", "starlette>=1.8", "uvicorn>=0.54",
+]
 
 [project.scripts]
 tridata = "tridata.cli:main"
@@ -26,6 +31,9 @@ tridata-mcp = "tridata.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"tridata.web" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

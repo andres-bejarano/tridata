@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>TriData · Hoy</title>
+  <link rel="stylesheet" href="/static/estilos.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <h1 id="titulo">Hoy</h1>
+      <p id="fecha" class="suave"></p>
+    </header>
+
+    <section aria-labelledby="t-margen">
+      <h2 id="t-margen">Lo que te queda</h2>
+      <div id="margenes" class="margenes"></div>
+      <p id="gasto" class="suave"></p>
+    </section>
+
+    <section aria-labelledby="t-comido">
+      <h2 id="t-comido">Comido hoy <span id="total" class="total"></span></h2>
+      <div id="avisos"></div>
+      <table id="tabla">
+        <thead><tr><th>Alimento</th><th>Cantidad</th><th class="num">kcal</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="vacio" class="suave">Aún no has apuntado nada hoy.</p>
+    </section>
+
+    <section id="revision" aria-labelledby="t-revision" hidden>
+      <h2 id="t-revision">Esto he entendido</h2>
+      <p class="suave">Revísalo: corrige lo que haga falta y confirma. Hasta entonces no se guarda nada.</p>
+      <div id="lista"></div>
+      <p id="bloqueo" class="aviso" hidden></p>
+      <div class="acciones">
+        <button id="confirmar" type="button" class="principal">Confirmar y guardar</button>
+        <button id="descartar" type="button">Descartar</button>
+      </div>
+    </section>
+
+    <p id="mensaje" role="status" aria-live="polite"></p>
+  </main>
+
+  <form id="entrada">
+    <label for="texto" class="oculto">¿Qué has comido o vas a comer?</label>
+    <textarea id="texto" rows="2" placeholder="¿Qué has comido o vas a comer?" required></textarea>
+    <button id="enviar" type="submit" class="principal">Interpretar</button>
+  </form>
+</body>
+</html>

@@ -1,0 +1,422 @@
+{
+ "_nota": "Dictados INVENTADOS para la prueba manual de interpretación (scripts/probar_interpretacion.py). `nombre`: palabras aceptadas (sin tildes, basta con que una aparezca en el nombre interpretado). `cantidad_libre`: medida vaga, vale cualquier cantidad estimada. Los dudosos solo se juzgan por nombre y marca. Las kcal no se juzgan.",
+ "hoy": "2026-03-04",
+ "casos": [
+  {
+   "texto": "300 gramos de lentejas y un plátano",
+   "esperado": [
+    {
+     "nombre": [
+      "lenteja"
+     ],
+     "cantidad": 300,
+     "unidad": "g",
+     "dia": "2026-03-04"
+    },
+    {
+     "nombre": [
+      "platano"
+     ],
+     "cantidad": 1,
+     "unidad": "unidad",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "37 gramos de avena... no, 33 de avena",
+   "esperado": [
+    {
+     "nombre": [
+      "avena"
+     ],
+     "cantidad": 33,
+     "unidad": "g",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "leche en el café",
+   "esperado": [
+    {
+     "nombre": [
+      "leche"
+     ],
+     "cantidad": null,
+     "unidad": null,
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "200 gramos de jamón de york y un poco de kfjd",
+   "esperado": [
+    {
+     "nombre": [
+      "jamon"
+     ],
+     "cantidad": 200,
+     "unidad": "g",
+     "dia": "2026-03-04"
+    },
+    {
+     "nombre": [
+      "kfjd"
+     ],
+     "cantidad": null,
+     "unidad": null,
+     "dia": "2026-03-04",
+     "dudoso": true
+    }
+   ]
+  },
+  {
+   "texto": "mañana 100 g de pasta",
+   "esperado": [
+    {
+     "nombre": [
+      "pasta"
+     ],
+     "cantidad": 100,
+     "unidad": "g",
+     "dia": "2026-03-05"
+    }
+   ]
+  },
+  {
+   "texto": "un trozo de tortilla de patata",
+   "esperado": [
+    {
+     "nombre": [
+      "tortilla"
+     ],
+     "cantidad": 150,
+     "unidad": "g",
+     "dia": "2026-03-04",
+     "cantidad_libre": true
+    }
+   ]
+  },
+  {
+   "texto": "dos huevos revueltos y una tostada",
+   "esperado": [
+    {
+     "nombre": [
+      "huevo"
+     ],
+     "cantidad": 2,
+     "unidad": "unidad",
+     "dia": "2026-03-04"
+    },
+    {
+     "nombre": [
+      "tostada"
+     ],
+     "cantidad": 1,
+     "unidad": "unidad",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "el sábado 150 g de arroz con pollo",
+   "esperado": [
+    {
+     "nombre": [
+      "arroz"
+     ],
+     "cantidad": 150,
+     "unidad": "g",
+     "dia": "2026-03-07"
+    }
+   ]
+  },
+  {
+   "texto": "medio litro de leche semidesnatada",
+   "esperado": [
+    {
+     "nombre": [
+      "leche"
+     ],
+     "cantidad": 500,
+     "unidad": "ml",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "un yogur natural y 30 gramos de nueces",
+   "esperado": [
+    {
+     "nombre": [
+      "yogur",
+      "yogurt"
+     ],
+     "cantidad": 1,
+     "unidad": "unidad",
+     "dia": "2026-03-04"
+    },
+    {
+     "nombre": [
+      "nuez"
+     ],
+     "cantidad": 30,
+     "unidad": "g",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "250 ml de zumo de naranja, perdón, 200",
+   "esperado": [
+    {
+     "nombre": [
+      "zumo"
+     ],
+     "cantidad": 200,
+     "unidad": "ml",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "ayer cené 120 g de salmón",
+   "esperado": [
+    {
+     "nombre": [
+      "salmon"
+     ],
+     "cantidad": 120,
+     "unidad": "g",
+     "dia": "2026-03-03"
+    }
+   ]
+  },
+  {
+   "texto": "1,2 kilos de sandía",
+   "esperado": [
+    {
+     "nombre": [
+      "sandia"
+     ],
+     "cantidad": 1200,
+     "unidad": "g",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "una manzana, bueno no, una pera",
+   "esperado": [
+    {
+     "nombre": [
+      "pera"
+     ],
+     "cantidad": 1,
+     "unidad": "unidad",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "pasado mañana 80 g de quinoa",
+   "esperado": [
+    {
+     "nombre": [
+      "quinoa"
+     ],
+     "cantidad": 80,
+     "unidad": "g",
+     "dia": "2026-03-06"
+    }
+   ]
+  },
+  {
+   "texto": "3 galletas maría",
+   "esperado": [
+    {
+     "nombre": [
+      "galleta"
+     ],
+     "cantidad": 3,
+     "unidad": "unidad",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "un kiwi y un melocotón",
+   "esperado": [
+    {
+     "nombre": [
+      "kiwi"
+     ],
+     "cantidad": 1,
+     "unidad": "unidad",
+     "dia": "2026-03-04"
+    },
+    {
+     "nombre": [
+      "melocoton"
+     ],
+     "cantidad": 1,
+     "unidad": "unidad",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "45 g de queso curado y blablafoo",
+   "esperado": [
+    {
+     "nombre": [
+      "queso"
+     ],
+     "cantidad": 45,
+     "unidad": "g",
+     "dia": "2026-03-04"
+    },
+    {
+     "nombre": [
+      "blablafoo"
+     ],
+     "cantidad": null,
+     "unidad": null,
+     "dia": "2026-03-04",
+     "dudoso": true
+    }
+   ]
+  },
+  {
+   "texto": "para mañana dos tostadas",
+   "esperado": [
+    {
+     "nombre": [
+      "tostada"
+     ],
+     "cantidad": 2,
+     "unidad": "unidad",
+     "dia": "2026-03-05"
+    }
+   ]
+  },
+  {
+   "texto": "un puñado de almendras",
+   "esperado": [
+    {
+     "nombre": [
+      "almendra"
+     ],
+     "cantidad": 25,
+     "unidad": "g",
+     "dia": "2026-03-04",
+     "cantidad_libre": true
+    }
+   ]
+  },
+  {
+   "texto": "100 gramos de pollo, no, 150, y 200 de brócoli",
+   "esperado": [
+    {
+     "nombre": [
+      "pollo"
+     ],
+     "cantidad": 150,
+     "unidad": "g",
+     "dia": "2026-03-04"
+    },
+    {
+     "nombre": [
+      "brocoli"
+     ],
+     "cantidad": 200,
+     "unidad": "g",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "el domingo 60 g de avena con 250 ml de leche",
+   "esperado": [
+    {
+     "nombre": [
+      "avena"
+     ],
+     "cantidad": 60,
+     "unidad": "g",
+     "dia": "2026-03-08"
+    },
+    {
+     "nombre": [
+      "leche"
+     ],
+     "cantidad": 250,
+     "unidad": "ml",
+     "dia": "2026-03-08"
+    }
+   ]
+  },
+  {
+   "texto": "aceite en la ensalada y 80 g de lechuga",
+   "esperado": [
+    {
+     "nombre": [
+      "aceite"
+     ],
+     "cantidad": null,
+     "unidad": null,
+     "dia": "2026-03-04"
+    },
+    {
+     "nombre": [
+      "lechuga"
+     ],
+     "cantidad": 80,
+     "unidad": "g",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "zxqv",
+   "esperado": [
+    {
+     "nombre": [
+      "zxqv"
+     ],
+     "cantidad": null,
+     "unidad": null,
+     "dia": "2026-03-04",
+     "dudoso": true
+    }
+   ]
+  },
+  {
+   "texto": "un plátano mañana, no, hoy",
+   "esperado": [
+    {
+     "nombre": [
+      "platano"
+     ],
+     "cantidad": 1,
+     "unidad": "unidad",
+     "dia": "2026-03-04"
+    }
+   ]
+  },
+  {
+   "texto": "40 gramos de chocolate negro 85 %",
+   "esperado": [
+    {
+     "nombre": [
+      "chocolate"
+     ],
+     "cantidad": 40,
+     "unidad": "g",
+     "dia": "2026-03-04"
+    }
+   ]
+  }
+ ]
+}

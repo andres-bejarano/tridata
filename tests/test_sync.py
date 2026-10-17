@@ -1,7 +1,7 @@
 """Regression tests for SyncService — no real network, no real Garmin credentials."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -216,3 +216,51 @@ class TestDataIntegrity:
         assert exported["daily_stats"] == []
         assert exported["sleep"] == []
         assert exported["hrv"] == []
+
+
+# ---------------------------------------------------------------------------
+# (d) `revalidate_days` override — the mechanism behind the weekly wide sweep
+# ---------------------------------------------------------------------------
+
+class TestRevalidateDaysOverride:
+    def test_default_window_refetches_recent_present_day(self, store):
+        """A day inside the default RECENT_REVALIDATE_DAYS window keeps getting
+        re-fetched even once it's already stored — this is the existing
+        short-window behavior the weekly sweep builds on."""
+        today = date.today()
+        client = _StubClient(daily_stats={today: _stats(today)})
+        svc = SyncService(client, store)
+        svc.sync(since=today, until=today)
+        client.get_daily_stats_calls.clear()
+
+        svc.sync(since=today, until=today)
+        assert client.get_daily_stats_calls == [today]
+
+    def test_revalidate_days_zero_skips_already_present_recent_day(self, store):
+        """Passing revalidate_days=0 disables revalidation entirely, even for
+        a day that the default window would normally re-fetch."""
+        today = date.today()
+        client = _StubClient(daily_stats={today: _stats(today)})
+        svc = SyncService(client, store)
+        svc.sync(since=today, until=today)
+        client.get_daily_stats_calls.clear()
+
+        svc.sync(since=today, until=today, revalidate_days=0)
+        assert client.get_daily_stats_calls == []
+
+    def test_wide_revalidate_days_catches_day_outside_default_window(self, store):
+        """A day that went stale 10 days ago sits outside the default 3-day
+        window forever — but a weekly sweep with a wide revalidate_days
+        override (e.g. 45) reaches back far enough to catch it, exactly like
+        the Aug 20 / Aug 24 case that motivated this."""
+        stale_day = date.today() - timedelta(days=10)
+        client = _StubClient(daily_stats={stale_day: _stats(stale_day)})
+        svc = SyncService(client, store)
+        svc.sync(since=stale_day, until=date.today(), revalidate_days=15)
+        client.get_daily_stats_calls.clear()
+
+        svc.sync(since=stale_day, until=date.today())
+        assert stale_day not in client.get_daily_stats_calls
+
+        svc.sync(since=stale_day, until=date.today(), revalidate_days=15)
+        assert stale_day in client.get_daily_stats_calls

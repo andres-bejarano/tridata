@@ -10,35 +10,54 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from datetime import date, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Physiological constants — from sports-medicine lab results (2025-11-14,
-# Bruce protocol treadmill test):
-#   HR_MAX: peak HR reached during the test (do NOT substitute the
-#           age-predicted 220-age formula — that one is 188 bpm and would
-#           skew every zone calculation).
-#   HR_REST: resting ECG value from the same appointment.
-# The five training zones (121-127, 134-140, 146-153, 159-165, 171-178 bpm)
-# derived from these two values via Karvonen match the zones recommended
-# by the examining physician.
+# Physiological constants — personal health data, so they live in .env
+# (TRIDATA_HR_MAX / TRIDATA_HR_REST), never in this public repo. Use
+# measured values (e.g. peak HR from a lab stress test, resting HR from an
+# ECG) rather than the age-predicted 220-age formula, which skews every
+# zone. The defaults are generic placeholders, not anyone's real values.
 # ---------------------------------------------------------------------------
-HR_MAX = 178
-HR_REST = 52
-_HR_RESERVE = HR_MAX - HR_REST  # 126 bpm
+_DEFAULT_HR_MAX = 190
+_DEFAULT_HR_REST = 60
+_warned_default_hr = False
 
 # Banister male coefficients
 _TRIMP_K = 0.64
 _TRIMP_Y = 1.92
 
 
+def hr_bounds() -> tuple[float, float]:
+    """Return (HR max, HR rest) from the environment, falling back to placeholders.
+
+    Read on every call rather than at import: the CLI loads .env only after
+    this module has been imported.
+    """
+    global _warned_default_hr
+    hr_max = os.environ.get("TRIDATA_HR_MAX")
+    hr_rest = os.environ.get("TRIDATA_HR_REST")
+    if (hr_max is None or hr_rest is None) and not _warned_default_hr:
+        logger.warning(
+            "TRIDATA_HR_MAX / TRIDATA_HR_REST not set — TRIMP uses generic placeholders. "
+            "Set your measured values in .env."
+        )
+        _warned_default_hr = True
+    return (
+        float(hr_max) if hr_max is not None else _DEFAULT_HR_MAX,
+        float(hr_rest) if hr_rest is not None else _DEFAULT_HR_REST,
+    )
+
+
 def _trimp_segment(duration_seconds: float, avg_hr: float) -> float:
     """TRIMP for a single segment (lap or whole activity)."""
+    hr_max, hr_rest = hr_bounds()
     duration_min = duration_seconds / 60.0
-    hr_ratio = (avg_hr - HR_REST) / _HR_RESERVE
+    hr_ratio = (avg_hr - hr_rest) / (hr_max - hr_rest)
     hr_ratio = max(0.0, min(1.0, hr_ratio))  # clamp — avoid nonsense for HR < rest
     return duration_min * hr_ratio * _TRIMP_K * math.exp(_TRIMP_Y * hr_ratio)
 

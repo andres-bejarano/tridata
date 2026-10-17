@@ -20,6 +20,7 @@ import logging
 from datetime import date, timedelta
 from typing import Any
 
+from dotenv import load_dotenv
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
@@ -27,7 +28,7 @@ from .exporters import (
     CyclingMarkdownExporter, GymMarkdownExporter, MarkdownExporter,
     MetricsMarkdownExporter, SwimmingMarkdownExporter,
 )
-from .metrics import HR_MAX, HR_REST, compute_pmc, daily_tss, trimp_for_activity
+from .metrics import compute_pmc, daily_tss, trimp_for_activity
 from .storage import DataStore
 from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES
 
@@ -56,15 +57,15 @@ _DATE_KEYS = {
     "race_predictions": "prediction_date",
 }
 
-INSTRUCTIONS = f"""\
+INSTRUCTIONS = """\
 Local Garmin Connect history (activities with laps and weather, daily
 metrics, sleep, HRV, training load) of one triathlete.
 
 - Ask for the smallest slice that answers the question; prefer
   get_weekly_summary / get_training_load for trends before pulling
   individual activities.
-- "TSS" in this data is Banister TRIMP from heart rate (HRmax {HR_MAX},
-  HRrest {HR_REST} from a lab test), not power-based TSS. CTL/ATL/TSB
+- "TSS" in this data is Banister TRIMP from heart rate (measured HRmax
+  and HRrest), not power-based TSS. CTL/ATL/TSB
   follow the standard 42/7-day EMAs and underestimate during the first
   weeks of history.
 - Day totals marked "⚠ incompleto" were cached by Garmin before the day
@@ -338,6 +339,7 @@ def build_server(store: DataStore) -> MCPServer:
 def main() -> None:
     # stdout is the MCP channel on stdio; logs must go to stderr.
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
+    load_dotenv()  # TRIDATA_HR_MAX / TRIDATA_HR_REST for TRIMP
     build_server(DataStore()).run("stdio")
 
 

@@ -5,7 +5,6 @@ All fixtures use invented data — no real health values.
 from __future__ import annotations
 
 from datetime import date
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -220,5 +219,5 @@ def test_running_and_cycling_types_are_disjoint():
 
 
 def test_lap_types_is_union():
-    from tridata.sync import SWIMMING_TYPES, SyncService
+    from tridata.sync import SWIMMING_TYPES
     assert set(SyncService._LAP_TYPES) == set(RUNNING_TYPES) | set(CYCLING_TYPES) | set(SWIMMING_TYPES)

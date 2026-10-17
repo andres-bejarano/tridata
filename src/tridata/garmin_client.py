@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 from garminconnect import Garmin
 
@@ -234,7 +235,7 @@ class GarminClient:
         if not raw:
             return None
         status_map = (raw.get("mostRecentTrainingStatus") or {}).get("latestTrainingStatusData") or {}
-        first_device = next(iter(status_map.values()), {}) if status_map else {}
+        first_device: dict[str, Any] = next(iter(status_map.values()), {}) if status_map else {}
         return TrainingStatus(
             status_date=day,
             training_status=first_device.get("trainingStatus"),

@@ -19,14 +19,18 @@ Examples:
 
     # Export only daily metrics (no per-activity lines)
     tridata export-metrics --out exports/metrics.md
+
+    # Verified copy of the store (plus extra files, e.g. a food diary), keep 14
+    tridata backup --extra deficit/deficit.md
 """
 from __future__ import annotations
 
 import argparse
 import logging
 import os
+import shutil
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -38,9 +42,10 @@ from .exporters import (
 )
 from .garmin_client import GarminAuthError, GarminClient
 from .metrics import compute_pmc, daily_tss
-from .storage import DataStore
+from .storage import DEFAULT_DB_PATH, DataStore
 from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncService
 
+DEFAULT_BACKUP_DIR = DEFAULT_DB_PATH.parent / "backups"
 
 EXPORTERS = {
     "json": JSONExporter,
@@ -131,6 +136,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Also regenerate docs/assets/pmc_last14d.png",
     )
 
+    backup_cmd = sub.add_parser(
+        "backup",
+        help="Write a verified copy of the local store to ~/.tridata/backups/",
+    )
+    backup_cmd.add_argument("--dest", type=Path, default=DEFAULT_BACKUP_DIR)
+    backup_cmd.add_argument(
+        "--keep", type=int, default=14, metavar="N",
+        help="Number of most recent backups to keep (default: 14).",
+    )
+    backup_cmd.add_argument(
+        "--extra", type=Path, action="append", default=[], metavar="PATH",
+        help=(
+            "Also copy this file into the backup. Repeatable. For data that "
+            "isn't in the store and can't be re-downloaded from Garmin."
+        ),
+    )
+
     return parser
 
 
@@ -141,18 +163,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    email = os.environ.get("GARMIN_EMAIL")
-    password = os.environ.get("GARMIN_PASSWORD")
-    if not email or not password:
-        print(
-            "Missing GARMIN_EMAIL / GARMIN_PASSWORD. Copy .env.example to .env and fill it in.",
-            file=sys.stderr,
-        )
-        return 1
-
     store = DataStore()
 
     if args.command == "sync":
+        # Only sync talks to Garmin; exports and backups work offline.
+        email = os.environ.get("GARMIN_EMAIL")
+        password = os.environ.get("GARMIN_PASSWORD")
+        if not email or not password:
+            print(
+                "Missing GARMIN_EMAIL / GARMIN_PASSWORD. Copy .env.example to .env and fill it in.",
+                file=sys.stderr,
+            )
+            return 1
         client = GarminClient(email, password)
         svc = SyncService(client, store)
         try:
@@ -178,8 +200,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "export":
         exporter = EXPORTERS[args.format]()
-        data = store.export_all()
-        out_path = exporter.export(data, args.out)
+        out_path = exporter.export(store.export_all(), args.out)
         print(f"Wrote {out_path}")
         return 0
 
@@ -225,8 +246,40 @@ def main(argv: list[str] | None = None) -> int:
             _generate_pmc_chart(pmc_series)
         return 0
 
+    if args.command == "backup":
+        return _cmd_backup(store, args.dest, args.keep, args.extra)
+
     parser.print_help()
     return 1
+
+
+def _cmd_backup(store: DataStore, dest_root: Path, keep: int, extras: list[Path]) -> int:
+    missing = [p for p in extras if not p.is_file()]
+    if missing:
+        print(f"--extra file(s) not found: {', '.join(map(str, missing))}", file=sys.stderr)
+        return 1
+
+    # Timestamped folders sort chronologically, which rotation relies on.
+    dest = dest_root / datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    dest.mkdir(parents=True)
+    dest_root.chmod(0o700)
+    dest.chmod(0o700)
+    counts = store.backup(dest / "data.sqlite3")
+    for extra in extras:
+        copied = dest / extra.name
+        shutil.copy2(extra, copied)
+        copied.chmod(0o600)
+
+    old = sorted(p for p in dest_root.iterdir() if p.is_dir())[:-keep] if keep > 0 else []
+    for path in old:
+        shutil.rmtree(path)
+
+    print(
+        f"Backup OK: {dest} ({sum(counts.values())} rows in {len(counts)} tables"
+        + (f", +{len(extras)} extra file(s)" if extras else "")
+        + f"); removed {len(old)} old backup(s)."
+    )
+    return 0
 
 
 def _cmd_show_laps(store: DataStore, activity_id: str) -> int:
@@ -247,8 +300,8 @@ def _generate_pmc_chart(pmc_series: list) -> None:
     try:
         import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
+        import matplotlib.pyplot as plt
     except ImportError:
         print("matplotlib not available — skipping chart generation", file=sys.stderr)
         return

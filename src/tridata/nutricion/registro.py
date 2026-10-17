@@ -144,9 +144,8 @@ class RegistroComidas:
                 (ahora, texto, int(sin_cambios)),
             )
             interpretacion_id = cur.lastrowid
-            ids = []
             for a in alimentos:
-                cur = conn.execute(
+                conn.execute(
                     "INSERT INTO alimento_apuntado (dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, "
                     "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -157,7 +156,6 @@ class RegistroComidas:
                         interpretacion_id, ahora,
                     ),
                 )
-                ids.append(cur.lastrowid)
             filas = conn.execute(
                 f"SELECT {_COLUMNAS} FROM alimento_apuntado WHERE interpretacion_id = ? ORDER BY id",  # noqa: S608
                 (interpretacion_id,),

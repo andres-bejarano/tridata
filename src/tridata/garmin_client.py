@@ -75,7 +75,7 @@ class GarminClient:
             raise GarminAuthError(f"Could not authenticate with Garmin Connect: {exc}") from exc
         self._restrict_token_store()
         self._api = api
-        logger.info("Logged in to Garmin Connect as %s", self._email)
+        logger.info("Logged in to Garmin Connect")  # no email: sync.log is a plain file
 
     def _restrict_token_store(self) -> None:
         """Make the cached tokens readable by this user only.

@@ -1,8 +1,9 @@
-"""Starlette app: the day page and three JSON routes.
+"""Starlette app: the day page and four JSON routes.
 
     GET  /                 the page (static HTML + JS modules + CSS)
     POST /api/interpretar  text -> interpreted list; saves NOTHING (R-1)
     POST /api/confirmar    reviewed list -> saved food by food; returns the day (R-4, R-5)
+    POST /api/alimento/N   change a saved food (name, quantity, unit, kcal); returns its day
     GET  /api/dia          the day table, total, expenditure and margins (?fecha=AAAA-MM-DD)
 """
 from __future__ import annotations
@@ -85,10 +86,25 @@ def crear_app(
             return _error(str(exc), 422)
         return JSONResponse({"guardados": guardados, "dia": _dia(hoy())})
 
+    async def cambiar(request: Request) -> Response:
+        cuerpo = await _cuerpo(request) or {}
+        try:
+            Alimento.desde_dict({**cuerpo, "dia": hoy().isoformat()})
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        try:
+            cambiado = registro.cambiar(request.path_params["id"], cuerpo)
+        except KeyError:
+            return _error("Ese alimento ya no está apuntado.", 404)
+        except ValueError as exc:
+            return _error(str(exc), 422)
+        return JSONResponse({"alimento": cambiado, "dia": _dia(date.fromisoformat(cambiado["dia"]))})
+
     return Starlette(routes=[
         Route("/", pagina),
         Route("/api/dia", dia),
         Route("/api/interpretar", interpretar, methods=["POST"]),
         Route("/api/confirmar", confirmar, methods=["POST"]),
+        Route("/api/alimento/{id:int}", cambiar, methods=["POST"]),
         Mount("/static", StaticFiles(directory=ESTATICOS), name="static"),
     ])

@@ -37,7 +37,8 @@ body {
   background: var(--fondo);
   color: var(--texto);
 }
-main { max-width: 640px; margin: 0 auto; padding: 16px 16px 140px; }
+/* The bottom padding is the height of the fixed box (measured by app.js), so nothing stays under it. */
+main { max-width: 640px; margin: 0 auto; padding: 16px 16px calc(var(--alto-entrada, 140px) + 24px); }
 h1 { font-size: 1.6rem; margin: 0; }
 h2 { font-size: 1.1rem; margin: 24px 0 8px; display: flex; justify-content: space-between; align-items: baseline; }
 .suave { color: var(--suave); margin: 4px 0; font-size: 0.92rem; }
@@ -177,3 +178,20 @@ select {
 .simulacion { border-color: var(--acento); }
 .simulacion p { margin: 0; }
 .cabe { margin: 0; font-weight: 600; color: var(--acento); }
+
+/* Dictation and the recordings queue (unit 006). */
+.cola { display: grid; gap: 8px; margin-top: 8px; }
+.cola:empty { display: none; }
+.cola > p { margin: 0; }
+.aviso-cola { color: var(--acento); background: var(--tarjeta); border: 1px solid var(--acento); padding: 10px 12px; border-radius: 10px; margin: 0; }
+.pendientes { grid-template-columns: 1fr auto; align-items: center; border-color: var(--acento); margin: 0; }
+.pendientes p { margin: 0; }
+.cola .tarjeta.dudosa { margin: 0; }
+.cola .tarjeta.dudosa p { margin: 0; }
+.dicho { margin: 4px 0 8px; font-style: italic; }
+#dia-grabacion { display: inline-block; margin: 0 0 8px; font-size: 0.85rem; }
+#entrada button.grabar {
+  min-width: 84px; min-height: 56px; font-weight: 700; color: var(--acento);
+  border: 2px solid var(--acento); border-radius: 14px; padding: 0 12px;
+}
+#entrada button.grabar.grabando { background: var(--peligro); border-color: var(--peligro); color: var(--acento-texto); }

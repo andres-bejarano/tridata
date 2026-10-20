@@ -7,6 +7,12 @@
 // Unit 008: the bar at the top, the full expenditure with Garmin and its breakdown, the
 // «Actualizar Garmin» button, today's objective, levels and planned training, and, in the
 // review, «si te lo comes» and «¿cuánto me cabe?» (a simulation: nothing is saved).
+// Unit 006: «Grabar» dictates instead of writing. The recording is kept on the phone (cola.js)
+// until the PC sends back its text and list, which wait as «pendientes de revisar» until they
+// are confirmed or discarded. The service worker (sw.js) lets the page open with the PC off.
+
+import * as cola from "./cola.js";
+import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
 
 const $ = (id) => document.getElementById(id);
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 });
@@ -18,7 +24,7 @@ const etiquetaNivel = (n) => (n === 0 ? "Mantenimiento" : `${signo(n)} %`);
 const PESO_MIN = 30;
 const PESO_MAX = 250;
 
-let revision = null; // { texto, hoy, original, alimentos, peso, objetivo, dudosas }
+let revision = null; // { texto, hoy, original, alimentos, peso, objetivo, dudosas, origen?, dicho? }
 let hoyISO = null; // today, as the server says on the first load
 let diaVisto = null; // the day on screen (ISO)
 let ultimoDia = null;
@@ -26,6 +32,10 @@ let editando = null; // id of the saved food whose row is open for change
 let anadiendo = false; // the "add by hand" card under the table is open
 let lectores = []; // one per review card: copies what is typed into the model
 let peticionDia = 0; // drops a late answer when ◀ ▶ are tapped fast
+let conectado = null; // whether the PC answered the last request (null: not known yet)
+let grabacion = null; // { parar } while recording
+let esperada = null; // id of the recording just made: its list opens by itself when it comes back
+let textoDeLista = null; // a list whose interpretation failed (502), its text put in the box
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -51,10 +61,19 @@ async function api(ruta, cuerpo) {
   try {
     const r = await fetch(ruta, opciones);
     const datos = await r.json().catch(() => ({}));
+    ponerConexion(r.ok || Boolean(datos.error)); // a proxy page (PC off behind tailscale) is no PC
     return { ok: r.ok, datos };
   } catch {
+    ponerConexion(false);
     return { ok: false, datos: { error: "No hay conexión con el PC. Inténtalo de nuevo." } };
   }
+}
+
+function ponerConexion(hay) {
+  const volvio = hay && conectado === false;
+  conectado = hay;
+  $("sin-conexion").hidden = hay;
+  if (volvio) { cargarDia(diaVisto); cola.enviarPendientes(); }
 }
 
 function mensaje(texto, tipo = "") {
@@ -470,6 +489,7 @@ async function cargarDia(fecha) {
   const { ok, datos } = await api(fecha ? `/api/dia?fecha=${encodeURIComponent(fecha)}` : "/api/dia");
   if (turno !== peticionDia) return;
   if (ok) pintarDia(datos);
+  else if (conectado === false) mensaje(""); // the «Sin conexión con el PC» notice says it already
   else mensaje(datos.error ?? "No he podido cargar el día.", "error");
 }
 
@@ -499,7 +519,13 @@ function pintarRevision() {
   for (const leer of lectores) leer(); // repainting must not lose what is typed and not yet applied
   lectores = [];
   $("revision").hidden = !revision;
+  preguntarDescarte(false);
   if (!revision) { $("simulacion").hidden = true; return; }
+  $("dicho").textContent = revision.dicho ? `Has dicho: «${revision.dicho}»` : "";
+  $("dicho").hidden = !revision.dicho;
+  const otroDia = revision.origen && revision.hoy !== hoyISO;
+  $("dia-grabacion").textContent = otroDia ? `Grabado el ${deFecha(revision.hoy)}: se apunta en ese día` : "";
+  $("dia-grabacion").hidden = !otroDia;
   const tarjetas = revision.alimentos.map((a, i) => {
     // Applies a typed value to the model; only a real change clears "dudoso" / "estimado".
     const aplicar = (clave, convertir = (v) => v) => (valor) => {
@@ -682,6 +708,11 @@ async function interpretar(evento) {
     texto, hoy: hoyISO, alimentos: datos.alimentos, peso: datos.peso ?? null,
     objetivo: datos.objetivo_dia ?? null, dudosas: datos.dudosas ?? [],
   };
+  if (textoDeLista) { // a dictated list Claude could not interpret: it is closed with this review
+    revision.origen = textoDeLista.id;
+    revision.dicho = textoDeLista.texto;
+    textoDeLista = null;
+  }
   revision.original = huella(revision);
   $("confirmar").disabled = false; // a new review starts usable, also after an earlier confirmation
   pintarRevision();
@@ -713,21 +744,163 @@ async function confirmar() {
   const pendientes = datos.guardados.filter((a) => a.pendiente_cantidad);
   if (pendientes.length) partes.push(`Falta la cantidad de ${pendientes.map((a) => a.nombre).join(", ")}: no suma.`);
   mensaje(partes.join(" "), "bien");
+  const origen = revision.origen;
+  if (!origen || $("texto").value === revision.dicho) $("texto").value = "";
   revision = null;
-  $("texto").value = "";
   pintarRevision();
   if (diaVisto === datos.dia.fecha) pintarDia(datos.dia);
   else cargarDia(diaVisto); // the screen stays on the day being looked at (R6)
+  if (origen) { await cola.borrarLista(origen); if (await abrirSiguienteLista()) return; }
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 $("entrada").addEventListener("submit", interpretar);
 $("confirmar").addEventListener("click", confirmar);
-$("descartar").addEventListener("click", () => { revision = null; pintarRevision(); mensaje(""); });
+$("descartar").addEventListener("click", descartar);
+$("descarte-no").addEventListener("click", () => preguntarDescarte(false));
+$("descarte-si").addEventListener("click", async () => {
+  const origen = revision && revision.origen;
+  preguntarDescarte(false);
+  revision = null;
+  pintarRevision();
+  mensaje("Lista descartada: no se ha guardado nada.");
+  if (origen) { await cola.borrarLista(origen); await abrirSiguienteLista(); }
+});
+$("revisar").addEventListener("click", () => abrirSiguienteLista());
+$("grabar").addEventListener("click", alternarGrabacion);
 $("anadir-revision").addEventListener("click", anadirTarjeta);
 $("anadir").addEventListener("click", () => { anadiendo = true; editando = null; mensaje(""); pintarDia(ultimoDia); });
 $("anterior").addEventListener("click", () => irA(sumarDias(diaVisto, -1)));
 $("siguiente").addEventListener("click", () => irA(sumarDias(diaVisto, 1)));
 $("ir-hoy").addEventListener("click", () => irA(hoyISO));
 enlazarControles();
+vigilarAltoEntrada();
+$("fecha").textContent = deFecha(cola.fechaLocal()); // before the PC answers, or if it never does
 cargarDia();
+cola.iniciar(alCambiarCola);
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+// -- unit 006: dictation and the recordings queue ---------------------------------
+
+const reloj = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`;
+const horaCorta = new Intl.DateTimeFormat("es-ES", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+
+async function alternarGrabacion() {
+  if (grabacion) { grabacion.parar(); return; }
+  if (!puedeGrabar()) { mensaje("Este navegador no puede grabar audio.", "error"); return; }
+  const boton = $("grabar");
+  try {
+    grabacion = await grabar({
+      alSegundo: (s) => { boton.textContent = `Parar ${reloj(s)}`; },
+      alTerminar: async ({ audio, tipo, segundos }) => {
+        grabacion = null;
+        boton.textContent = "Grabar";
+        boton.classList.remove("grabando");
+        if (segundos >= MAX_SEGUNDOS) mensaje("La grabación ha llegado a 2 minutos y ha parado sola.");
+        try {
+          esperada = await cola.guardarGrabacion(audio, tipo);
+          if (conectado !== false) mensaje("Grabación guardada en el móvil. Enviándola al PC…");
+        } catch {
+          mensaje("No se ha podido guardar la grabación en el móvil.", "error");
+        }
+      },
+    });
+    boton.classList.add("grabando");
+    mensaje("Grabando… toca «Parar» al acabar (como mucho 2 minutos).");
+  } catch (error) {
+    grabacion = null;
+    const sinPermiso = error && (error.name === "NotAllowedError" || error.name === "SecurityError");
+    mensaje(sinPermiso ? "Sin permiso para el micrófono: dáselo a esta web en los ajustes de Safari." : "No se ha podido usar el micrófono.", "error");
+  }
+}
+
+// The notices of the queue: recordings not sent, not transcribable ones, lists to review.
+async function alCambiarCola({ conexion }) {
+  if (conexion !== null) ponerConexion(conexion);
+  if (conexion === false) esperada = null; // it will come back later: it waits with the others
+  const e = await cola.estado();
+  $("sin-enviar").textContent = e.sinEnviar ? `${plural(e.sinEnviar, "grabación sin enviar", "grabaciones sin enviar")}: se enviarán solas cuando el PC responda.` : "";
+  $("sin-enviar").hidden = !e.sinEnviar;
+  $("no-transcritas").replaceChildren(...e.noTranscribibles.map(tarjetaNoTranscrita));
+  const abierta = revision && revision.origen;
+  const quedan = e.listas.filter((l) => l.id !== abierta && (!textoDeLista || l.id !== textoDeLista.id));
+  $("pendientes").hidden = !quedan.length;
+  $("pendientes-texto").textContent = plural(quedan.length, "lista pendiente de revisar", "listas pendientes de revisar");
+  if (esperada && !revision && !textoDeLista) {
+    if (e.listas.some((l) => l.id === esperada)) { mensaje(""); await abrirLista(esperada); }
+    else {
+      const fallida = e.noTranscribibles.find((g) => g.id === esperada);
+      if (fallida) { esperada = null; mensaje(fallida.error || "No se ha podido transcribir la grabación.", "error"); }
+    }
+  }
+}
+
+function tarjetaNoTranscrita(g) {
+  const quitar = el("button", { type: "button", className: "peligro", textContent: "Descartar" });
+  const si = el("button", { type: "button", className: "peligro principal", textContent: "Sí, descartar" });
+  const no = el("button", { type: "button", textContent: "No" });
+  const pregunta = el("div", { className: "acciones", hidden: true }, si, no);
+  quitar.addEventListener("click", () => { pregunta.hidden = false; quitar.hidden = true; });
+  no.addEventListener("click", () => { pregunta.hidden = true; quitar.hidden = false; });
+  si.addEventListener("click", () => cola.borrarGrabacion(g.id));
+  return el("article", { className: "tarjeta dudosa" },
+    el("p", { className: "fuerte", textContent: `Grabación del ${horaCorta.format(new Date(g.creada))}: no se ha podido transcribir.` }),
+    el("p", { className: "suave", textContent: g.error || "" }),
+    quitar, pregunta);
+}
+
+// Opens the oldest list waiting (or `id`) in the usual review. A list Claude could not interpret
+// puts its text in the box, to tap «Interpretar». False if there is none.
+async function abrirSiguienteLista() {
+  const { listas } = await cola.estado();
+  if (!listas.length) return false;
+  await abrirLista(listas[0].id);
+  return true;
+}
+
+async function abrirLista(id) {
+  const lista = (await cola.estado()).listas.find((l) => l.id === id);
+  if (!lista) return;
+  if (esperada === id) esperada = null;
+  if (revision && revision.origen === id) return;
+  if (!lista.interpretacion) {
+    textoDeLista = { id: lista.id, texto: lista.texto };
+    revision = null;
+    pintarRevision();
+    $("texto").value = lista.texto;
+    mensaje(`Has dicho: «${lista.texto}». El PC no pudo interpretarlo: revisa el texto y pulsa «Interpretar».`, "error");
+    $("texto").focus();
+    await alCambiarCola({ conexion: null });
+    return;
+  }
+  const i = lista.interpretacion;
+  revision = {
+    texto: lista.texto, hoy: lista.fecha, alimentos: i.alimentos, peso: i.peso ?? null,
+    objetivo: i.objetivo_dia ?? null, dudosas: i.dudosas ?? [], origen: lista.id, dicho: lista.texto,
+  };
+  revision.original = huella(revision);
+  $("confirmar").disabled = false;
+  pintarRevision();
+  await alCambiarCola({ conexion: null });
+  $("revision").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function preguntarDescarte(abierta) {
+  $("confirmar-descarte").hidden = !abierta;
+  $("confirmar").parentElement.hidden = abierta;
+}
+
+function descartar() {
+  if (revision && revision.origen) { preguntarDescarte(true); $("descarte-si").focus(); return; } // a dictated list asks first
+  revision = null;
+  pintarRevision();
+  mensaje("");
+}
+
+// The fixed box at the bottom never covers the end of the page: <main> leaves its height free.
+function vigilarAltoEntrada() {
+  const poner = () => document.documentElement.style.setProperty("--alto-entrada", `${$("entrada").offsetHeight}px`);
+  poner();
+  if (window.ResizeObserver) new ResizeObserver(poner).observe($("entrada"));
+}

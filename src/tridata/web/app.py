@@ -3,6 +3,10 @@
     GET  /                        the page (static HTML + JS modules + CSS)
     POST /api/interpretar         text -> every piece in it (foods, weight, objective of the day,
                                   doubtful phrases); saves NOTHING (R-1, R-31)
+    POST /api/dictado             raw audio (?id=<uuid>&fecha=AAAA-MM-DD) -> its text, transcribed on this PC,
+                                  and the same interpretation /api/interpretar gives, with «hoy» = the day
+                                  of the recording; saves NOTHING, keeps no audio (unit 006: R-1, R-10, R-12)
+    GET  /sw.js                   the service worker, at the root so it serves the page offline (unit 006)
     POST /api/confirmar           reviewed pieces (at least one) -> each saved in its place, all or
                                   nothing; a doubtful phrase blocks it; returns today (R-4, R-5, R-32)
     POST /api/alimento            add a food by hand (no AI, no interpretation); body with `dia`
@@ -40,8 +44,10 @@ is not valid is a 400 and nothing is saved. A day with no basal or kcal per step
 from __future__ import annotations
 
 import json
+import logging
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -54,7 +60,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from ..garmin_client import GarminAuthError
-from ..ia import ErrorInterpretacion
+from ..ia import ErrorInterpretacion, ErrorTranscripcion
 from ..nutricion import (
     Ajustes, Alimento, ConfigGasto, ObjetivosDia, RegistroComidas, RegistroPeso, basal_del_dia, config_del_dia,
     dias_de_retraso, estimar_gasto, gramos_que_caben, kcal_previstas, objetivo_valido, peso_valido,
@@ -63,12 +69,17 @@ from ..nutricion import (
 from ..nutricion.margen import PASOS_POR_DEFECTO
 from ..storage import DataStore
 
+log = logging.getLogger(__name__)
+
 ESTATICOS = Path(__file__).parent / "static"
 NO_ESTA = "Ese alimento ya no está apuntado."
 NO_ESTA_CARRERA = "Esa carrera ya no está en tus ajustes."
 DIAS_RECIENTES = 14  # the planned training is chosen among the activities of the last 14 days (R-15)
 DIAS_RETRASO_MAX = 730  # the days of delay look at most two years ahead
 FALTA_GARMIN = "Faltan GARMIN_EMAIL / GARMIN_PASSWORD en .env: no puedo traer Garmin."
+AUDIO_MAX_BYTES = 10 * 1024 * 1024  # a 2-minute recording is far below this (R4)
+TIPOS_AUDIO = frozenset({"audio/mp4", "audio/x-m4a", "audio/aac", "audio/webm", "audio/ogg", "audio/wav", "audio/mpeg"})
+DICTADO_NO_DISPONIBLE = "El dictado no está disponible en el PC ahora mismo. Se reintentará más tarde."
 
 
 class FaltanAjustes(Exception):
@@ -117,6 +128,7 @@ def crear_app(
     registro: RegistroComidas, interprete: Any, ajustes: Ajustes, hoy: Callable[[], date] = date.today, *,
     pesos: RegistroPeso | None = None, objetivos: ObjetivosDia | None = None,
     store: DataStore | None = None, actualizar_garmin: Callable[[date], None] | None = None,
+    transcriptor: Any = None,
 ) -> Starlette:
     """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double).
 
@@ -125,6 +137,9 @@ def crear_app(
     `store` is the Garmin data (`DataStore`); without it every day has no Garmin data.
     `actualizar_garmin(dia)` brings that day from Garmin (the «Actualizar Garmin» button); without
     it the button says the Garmin credentials are missing.
+    `transcriptor` is anything with `transcribir(audio) -> str` (Whisper, or a test double); with a
+    `cargar()` too, it is loaded in a background thread when the server starts, never blocking it.
+    Without it, /api/dictado says «try again later» (503) and writing works as always.
     """
     pesos = pesos or RegistroPeso(registro.db_path)
     objetivos = objetivos or ObjetivosDia(registro.db_path)
@@ -248,16 +263,66 @@ def crear_app(
             return _error(f"Fecha no válida: {texto!r}", 400)
         return JSONResponse(_dia(fecha))
 
+    async def _interpretacion(texto: str, dia: date) -> dict:
+        """What /api/interpretar answers for `texto` with «hoy» = `dia`. Raises ErrorInterpretacion."""
+        resultado = await run_in_threadpool(interprete.interpretar, texto.strip(), dia)
+        return {"texto": texto, **_piezas(resultado)}
+
     async def interpretar(request: Request) -> Response:
         texto = (await _cuerpo(request) or {}).get("texto")
         if not isinstance(texto, str) or not texto.strip():
             return _error("Escribe lo que has comido o vas a comer.", 400, texto=texto or "")
         try:
-            resultado = await run_in_threadpool(interprete.interpretar, texto.strip(), hoy())
+            return JSONResponse(await _interpretacion(texto, hoy()))
         except ErrorInterpretacion as exc:
             return _error(f"No he podido interpretar lo que has escrito ({exc}). Inténtalo de nuevo.", 502,
                           texto=texto)
-        return JSONResponse({"texto": texto, **_piezas(resultado)})
+
+    async def dictado(request: Request) -> Response:
+        """A recording -> its text and its interpretation. Nothing is saved and the audio stays in memory.
+
+        Every error says `reintentar`: the phone keeps the recording and tries again only when True.
+        """
+        id_grabacion = request.query_params.get("id")
+        texto_fecha = request.query_params.get("fecha")
+        try:
+            fecha = date.fromisoformat(texto_fecha) if texto_fecha else hoy()
+        except ValueError:
+            return _error(f"Fecha de la grabación no válida: {texto_fecha!r}", 400, reintentar=False)
+        tipo = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        if tipo not in TIPOS_AUDIO:
+            return _error("Eso no es una grabación de audio.", 415, reintentar=False)
+        largo = request.headers.get("content-length", "")
+        if largo.isdigit() and int(largo) > AUDIO_MAX_BYTES:
+            return _error("La grabación pasa de 10 MB.", 413, reintentar=False)
+        trozos = bytearray()
+        async for trozo in request.stream():
+            trozos.extend(trozo)
+            if len(trozos) > AUDIO_MAX_BYTES:
+                return _error("La grabación pasa de 10 MB.", 413, reintentar=False)
+        audio = bytes(trozos)
+        if not audio:
+            return _error("La grabación está vacía.", 422, reintentar=False)
+        if transcriptor is None:
+            return _error(DICTADO_NO_DISPONIBLE, 503, reintentar=True)
+        try:
+            texto = await run_in_threadpool(transcriptor.transcribir, audio)
+        except ErrorTranscripcion as exc:
+            if exc.motivo == "vacio":
+                return _error("No he oído nada en la grabación.", 422, reintentar=False)
+            if exc.motivo == "audio_no_valido":
+                return _error("No se ha podido transcribir la grabación.", 422, reintentar=False)
+            return _error(DICTADO_NO_DISPONIBLE, 503, reintentar=True)
+        try:
+            interpretacion = await _interpretacion(texto, fecha)
+        except ErrorInterpretacion as exc:
+            return _error(f"He entendido lo que has dicho, pero no he podido interpretarlo ({exc}). "
+                          "Revísalo y pulsa «Interpretar».", 502, reintentar=False, texto=texto)
+        return JSONResponse({"id": id_grabacion, "fecha": fecha.isoformat(), "texto": texto,
+                             "interpretacion": interpretacion})
+
+    async def service_worker(request: Request) -> Response:
+        return FileResponse(ESTATICOS / "sw.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
 
     async def confirmar(request: Request) -> Response:
         """Validate EVERY piece first; only if all are valid is anything written (R11)."""
@@ -421,8 +486,22 @@ def crear_app(
             cerrojo_garmin.release()
         return JSONResponse({"dia": _dia(hoy())})
 
-    return Starlette(exception_handlers={FaltanAjustes: faltan_ajustes}, routes=[
+    def _cargar_transcriptor() -> None:
+        try:
+            transcriptor.cargar()
+        except ErrorTranscripcion:
+            log.warning("dictation disabled until the next request: Whisper could not be loaded")
+
+    @asynccontextmanager
+    async def ciclo(app: Starlette) -> AsyncIterator[None]:
+        if transcriptor is not None and callable(getattr(transcriptor, "cargar", None)):
+            # once, in the background: the server answers (and writing works) while the model loads
+            threading.Thread(target=_cargar_transcriptor, name="carga-whisper", daemon=True).start()
+        yield
+
+    return Starlette(exception_handlers={FaltanAjustes: faltan_ajustes}, lifespan=ciclo, routes=[
         Route("/", pagina),
+        Route("/sw.js", service_worker),
         Route("/ajustes", pagina_ajustes),
         Route("/api/dia", dia),
         Route("/api/dia/objetivo", cambiar_objetivo, methods=["POST"]),
@@ -435,6 +514,7 @@ def crear_app(
         Route("/api/carrera/{id:int}", cambiar_carrera, methods=["POST"]),
         Route("/api/carrera/{id:int}/quitar", quitar_carrera, methods=["POST"]),
         Route("/api/interpretar", interpretar, methods=["POST"]),
+        Route("/api/dictado", dictado, methods=["POST"]),
         Route("/api/confirmar", confirmar, methods=["POST"]),
         Route("/api/alimento", anadir, methods=["POST"]),
         Route("/api/alimento/{id:int}", cambiar, methods=["POST"]),

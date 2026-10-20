@@ -320,7 +320,7 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
     try:
         import uvicorn
 
-        from .ia import InterpreteClaude
+        from .ia import InterpreteClaude, TranscriptorWhisper
         from .nutricion import Ajustes, ObjetivosDia, RegistroComidas, RegistroPeso
         from .web import crear_app
     except ImportError as exc:
@@ -337,9 +337,17 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
         return 1
 
     store = DataStore(db_path)
+    # Dictation (unit 006): Whisper is the optional `voz` extra. Without it the app starts the same
+    # and writing works; with it the model loads in the background once the server is up.
+    transcriptor = None
+    if TranscriptorWhisper.disponible():
+        transcriptor = TranscriptorWhisper()
+        print(f"Dictation: loading Whisper {transcriptor.modelo} on the GPU in the background.")
+    else:
+        print("Aviso: dictado desactivado: instala el extra voz (pip install -e '.[voz]').", file=sys.stderr)
     app = crear_app(RegistroComidas(db_path), InterpreteClaude(), ajustes,
                     pesos=RegistroPeso(db_path), objetivos=ObjetivosDia(db_path),
-                    store=store, actualizar_garmin=_actualizador_garmin(store))
+                    store=store, actualizar_garmin=_actualizador_garmin(store), transcriptor=transcriptor)
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(f"Warning: listening on {host}, reachable from outside this PC.", file=sys.stderr)
     print(f"TriData web on http://{host}:{port} (Ctrl+C to stop)")

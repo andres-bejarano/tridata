@@ -33,6 +33,16 @@
       <p id="barra-aviso" class="aviso" hidden></p>
     </section>
 
+    <section id="cola" class="cola" aria-label="Grabaciones" aria-live="polite">
+      <p id="sin-conexion" class="aviso" hidden>Sin conexión con el PC. Lo que grabes se guarda en el móvil y se envía cuando vuelva.</p>
+      <p id="sin-enviar" class="aviso-cola" hidden></p>
+      <div id="no-transcritas"></div>
+      <div id="pendientes" class="tarjeta pendientes" hidden>
+        <p id="pendientes-texto" class="fuerte"></p>
+        <button id="revisar" type="button" class="principal">Revisar</button>
+      </div>
+    </section>
+
     <section aria-labelledby="t-peso" class="bloque-peso">
       <h2 id="t-peso" class="oculto">Peso</h2>
       <p id="peso-dia" class="peso-dia"></p>
@@ -110,6 +120,8 @@
 
     <section id="revision" aria-labelledby="t-revision" hidden>
       <h2 id="t-revision">Esto he entendido</h2>
+      <p id="dicho" class="dicho" hidden></p>
+      <p id="dia-grabacion" class="marca alerta" hidden></p>
       <p class="suave">Revísalo: corrige lo que haga falta y confirma. Hasta entonces no se guarda nada.</p>
       <div id="piezas"></div>
       <div id="simulacion" class="tarjeta simulacion" hidden></div>
@@ -120,6 +132,13 @@
         <button id="confirmar" type="button" class="principal">Confirmar y guardar</button>
         <button id="descartar" type="button">Descartar</button>
       </div>
+      <div id="confirmar-descarte" class="confirmar-borrado" hidden>
+        <p>¿Descartar esta lista? Lo que dijiste no se guardará.</p>
+        <div class="acciones">
+          <button id="descarte-si" type="button" class="peligro principal">Sí, descartar</button>
+          <button id="descarte-no" type="button">No</button>
+        </div>
+      </div>
     </section>
 
     <p id="mensaje" role="status" aria-live="polite"></p>
@@ -127,6 +146,7 @@
 
   <form id="entrada">
     <label for="texto" class="oculto">¿Qué has comido o vas a comer? También tu peso o «nuevo día…»</label>
+    <button id="grabar" type="button" class="grabar" aria-label="Grabar lo que has comido">Grabar</button>
     <textarea id="texto" rows="2" placeholder="Comida, «peso 70,2» o «nuevo día…»" required></textarea>
     <button id="enviar" type="submit" class="principal">Interpretar</button>
   </form>

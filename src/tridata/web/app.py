@@ -12,7 +12,18 @@
     POST /api/alimento/N/comido   mark a planned food as eaten (today or a past day only)
     GET  /api/dia                 the day table, total, expenditure, margins and plan (?fecha=AAAA-MM-DD),
                                   all with the settings in force THAT day, plus the weight block (weight,
-                                  7-day mean, basal and projection) and the objective of the day
+                                  7-day mean, basal and projection) and the objective of the day.
+                                  Unit 008: the expenditure with Garmin of that day and the planned
+                                  training, with its breakdown and warnings; the objective (% of the
+                                  day or of the plan, days of delay) and the bar with the healthy limit
+    POST /api/dia/objetivo        today only: {"porcentaje"?, "niveles"?, "previsto"?: {"actividad_id",
+                                  "minutos"} | null}; changes `objetivo_dia`, never the plan (R-16, R-18)
+    GET  /api/actividades-recientes  activities of the last 14 days, to choose the planned training
+    POST /api/simular             {"alimentos": [...]} reviewed list -> margins and bar if eaten, and
+                                  how much of each food fits; saves NOTHING (R-17, REC-2)
+    POST /api/garmin/actualizar   brings today from Garmin with the `tridata sync` sync and returns
+                                  today recomputed; 409 if one is running, 502 `motivo` "sesion"/"red",
+                                  503 without Garmin credentials
     GET  /ajustes                 the settings page
     GET  /api/ajustes             settings in force (?fecha=, default today), changes to come, races
     POST /api/ajustes             {"datos": {...}, "desde": "AAAA-MM-DD"} save one or more settings
@@ -29,6 +40,7 @@ is not valid is a 400 and nothing is saved. A day with no basal or kcal per step
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
@@ -41,16 +53,22 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from ..garmin_client import GarminAuthError
 from ..ia import ErrorInterpretacion
 from ..nutricion import (
-    Ajustes, Alimento, ConfigGasto, ObjetivosDia, RegistroComidas, RegistroPeso, basal_del_dia, objetivo_valido,
-    peso_valido, resumen_del_dia, resumen_peso,
+    Ajustes, Alimento, ConfigGasto, ObjetivosDia, RegistroComidas, RegistroPeso, basal_del_dia, config_del_dia,
+    dias_de_retraso, estimar_gasto, gramos_que_caben, kcal_previstas, objetivo_valido, peso_valido,
+    resumen_del_dia, resumen_peso, simular, texto_retraso,
 )
 from ..nutricion.margen import PASOS_POR_DEFECTO
+from ..storage import DataStore
 
 ESTATICOS = Path(__file__).parent / "static"
 NO_ESTA = "Ese alimento ya no está apuntado."
 NO_ESTA_CARRERA = "Esa carrera ya no está en tus ajustes."
+DIAS_RECIENTES = 14  # the planned training is chosen among the activities of the last 14 days (R-15)
+DIAS_RETRASO_MAX = 730  # the days of delay look at most two years ahead
+FALTA_GARMIN = "Faltan GARMIN_EMAIL / GARMIN_PASSWORD en .env: no puedo traer Garmin."
 
 
 class FaltanAjustes(Exception):
@@ -89,17 +107,44 @@ def _piezas(resultado: Any) -> dict:
     }
 
 
+def _actividad_corta(a: dict) -> dict:
+    return {"actividad_id": a.get("activity_id"), "fecha": a.get("activity_date"),
+            "nombre": a.get("name") or a.get("activity_type"), "tipo": a.get("activity_type"),
+            "minutos": round(float(a.get("duration_seconds") or 0) / 60, 1), "kcal": a.get("calories")}
+
+
 def crear_app(
     registro: RegistroComidas, interprete: Any, ajustes: Ajustes, hoy: Callable[[], date] = date.today, *,
     pesos: RegistroPeso | None = None, objetivos: ObjetivosDia | None = None,
+    store: DataStore | None = None, actualizar_garmin: Callable[[date], None] | None = None,
 ) -> Starlette:
     """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double).
 
     Every day is computed with `ajustes.vigentes(that day)`: no expenditure config is fixed at start.
     Weights and objectives of the day live in the same SQLite as `registro` unless given.
+    `store` is the Garmin data (`DataStore`); without it every day has no Garmin data.
+    `actualizar_garmin(dia)` brings that day from Garmin (the «Actualizar Garmin» button); without
+    it the button says the Garmin credentials are missing.
     """
     pesos = pesos or RegistroPeso(registro.db_path)
     objetivos = objetivos or ObjetivosDia(registro.db_path)
+    cerrojo_garmin = threading.Lock()
+
+    def _recientes() -> list[dict]:
+        if store is None:
+            return []
+        dia_hoy = hoy()  # today's own activities already count as done: they are not offered
+        return store.activities_between(dia_hoy - timedelta(days=DIAS_RECIENTES), dia_hoy - timedelta(days=1))
+
+    def _retraso(fecha: date, vigentes: Any, nuevo_pct: float) -> dict | None:
+        meta = vigentes.objetivo_peso
+        if meta is None or meta.fecha < fecha:
+            return None
+        hasta = min(meta.fecha, fecha + timedelta(days=DIAS_RETRASO_MAX))
+        plan = {fecha + timedelta(days=i): ajustes.vigentes(fecha + timedelta(days=i)).objetivo_pct
+                for i in range((hasta - fecha).days + 1)}
+        dias = dias_de_retraso(plan, fecha, nuevo_pct)
+        return None if dias is None else {"dias": dias, "texto": texto_retraso(dias), "fecha_objetivo": meta.fecha.isoformat()}
 
     def _dia(fecha: date) -> dict:
         vigentes = ajustes.vigentes(fecha)
@@ -114,9 +159,19 @@ def crear_app(
             pasos = PASOS_POR_DEFECTO if vigentes.pasos_por_defecto is None else vigentes.pasos_por_defecto
             config = ConfigGasto(basal_kcal=basal.kcal, kcal_por_paso=vigentes.kcal_por_paso, pasos=pasos)
         ventana = pesos.entre(fecha - timedelta(days=6), fecha)
-        resumen = resumen_del_dia(registro.apuntes_del_dia(fecha), fecha, config, objetivo_dia=objetivos.del_dia(fecha),
-                                  basal=basal, peso=resumen_peso(ventana, fecha, vigentes, basal))
-        return {**resumen, "plan": _plan(vigentes)}
+        objetivo_dia = objetivos.del_dia(fecha)
+        stats = store.daily_stats_on(fecha) if store is not None else None
+        actividades = store.activities_between(fecha, fecha) if store is not None else []
+        cuando = "de hoy" if fecha == hoy() else "de ese día"
+        gasto = estimar_gasto(config_del_dia(config, basal, objetivo_dia), stats, actividades,
+                              objetivo_dia.get("previsto") if objetivo_dia else None, cuando=cuando)
+        plan = _plan(vigentes)
+        resumen = resumen_del_dia(registro.apuntes_del_dia(fecha), fecha, config, objetivo_dia=objetivo_dia,
+                                  basal=basal, peso=resumen_peso(ventana, fecha, vigentes, basal),
+                                  gasto_estimado=gasto, plan=plan)
+        if resumen["objetivo"]["origen"] == "dia":
+            resumen["objetivo"]["retraso"] = _retraso(fecha, vigentes, resumen["objetivo"]["porcentaje"])
+        return {**resumen, "plan": plan}
 
     def _vista_ajustes(fecha: date) -> dict:
         vigentes = ajustes.vigentes(fecha)
@@ -295,10 +350,85 @@ def crear_app(
             return _error(str(exc), 422)
         return JSONResponse({"alimento": marcado, "dia": _dia(date.fromisoformat(marcado["dia"]))})
 
+    async def cambiar_objetivo(request: Request) -> Response:
+        """Today's %, levels and planned training; checked first, so a bad value changes nothing (R6)."""
+        cuerpo = await _cuerpo(request)
+        if not cuerpo:
+            return _error("No hay nada que cambiar en el objetivo de hoy.", 400)
+        campos = dict(cuerpo)
+        if isinstance(campos.get("previsto"), dict):
+            elegido = campos["previsto"]
+            actividad = next((a for a in _recientes() if a.get("activity_id") == elegido.get("actividad_id")), None)
+            if actividad is None:
+                return _error(f"No se ha cambiado nada: solo puedes elegir un entreno de los últimos "
+                              f"{DIAS_RECIENTES} días.", 400)
+            try:
+                kcal = kcal_previstas(actividad, elegido.get("minutos"))
+            except ValueError as exc:
+                return _error(f"No se ha cambiado nada: {exc}.", 400)
+            campos["previsto"] = {**_actividad_corta(actividad), "minutos": elegido["minutos"], "kcal": kcal}
+        try:
+            guardado = objetivos.cambiar(hoy(), **campos)
+        except ValueError as exc:
+            return _error(f"No se ha cambiado nada: {exc}.", 400)
+        return JSONResponse({"objetivo_dia": guardado, "dia": _dia(hoy())})
+
+    async def actividades_recientes(request: Request) -> Response:
+        recientes = sorted(_recientes(), key=lambda a: (a.get("activity_date") or "", a.get("activity_id") or ""),
+                           reverse=True)
+        return JSONResponse({"dias": DIAS_RECIENTES, "actividades": [_actividad_corta(a) for a in recientes]})
+
+    async def simular_lista(request: Request) -> Response:
+        """The reviewed list, not yet confirmed: how the day would be if eaten. Writes nothing (REC-2)."""
+        crudos = (await _cuerpo(request) or {}).get("alimentos")
+        if not isinstance(crudos, list):
+            return _error("Los alimentos tienen que ser una lista.", 400)
+        try:
+            alimentos = [Alimento.desde_dict(a) for a in crudos]
+        except ValueError as exc:
+            return _error(f"No se puede simular: {exc}.", 400)
+        dia_hoy = hoy()
+        resumen = _dia(dia_hoy)
+        cuenta = [a for a in alimentos if a.dia == dia_hoy and a.cantidad is not None and a.kcal is not None]
+        kcal_lista = round(sum(a.kcal or 0 for a in cuenta), 1)
+        margen = resumen["barra"]["objetivo_kcal"] - resumen["total_kcal"]
+        caben = []
+        for a in alimentos:
+            if a.cantidad is None or a.kcal is None:
+                caben.append({"nombre": a.nombre, "cantidad": None, "unidad": a.unidad,
+                              "texto": "sin cantidad o kcal: no se puede calcular"})
+                continue
+            cabe = gramos_que_caben(margen, a.kcal, a.cantidad)
+            unidad = a.unidad or "g"
+            texto = cabe["texto"] if not cabe["cantidad"] else f"te caben {cabe['cantidad']} {unidad} de {a.nombre}"
+            caben.append({"nombre": a.nombre, "cantidad": cabe["cantidad"], "unidad": unidad, "texto": texto})
+        return JSONResponse({"kcal_lista": kcal_lista, **simular(resumen, kcal_lista), "caben": caben,
+                             "antes": {"margenes": resumen["margenes"], "barra": resumen["barra"]}})
+
+    async def actualizar(request: Request) -> Response:
+        """«Actualizar Garmin»: one at a time; on any failure the saved data stay as they were (R13)."""
+        if actualizar_garmin is None:
+            return _error(FALTA_GARMIN, 503, motivo="credenciales")
+        if not cerrojo_garmin.acquire(blocking=False):
+            return _error("Ya estoy actualizando Garmin: espera a que acabe.", 409, motivo="en_marcha")
+        try:
+            await run_in_threadpool(actualizar_garmin, hoy())
+        except GarminAuthError as exc:
+            return _error(f"La sesión de Garmin ha fallado: {exc}", 502, motivo="sesion")
+        except Exception:  # network, Garmin down, anything else: said, never hidden
+            return _error("No se ha podido conectar con Garmin. Inténtalo más tarde.", 502, motivo="red")
+        finally:
+            cerrojo_garmin.release()
+        return JSONResponse({"dia": _dia(hoy())})
+
     return Starlette(exception_handlers={FaltanAjustes: faltan_ajustes}, routes=[
         Route("/", pagina),
         Route("/ajustes", pagina_ajustes),
         Route("/api/dia", dia),
+        Route("/api/dia/objetivo", cambiar_objetivo, methods=["POST"]),
+        Route("/api/actividades-recientes", actividades_recientes),
+        Route("/api/simular", simular_lista, methods=["POST"]),
+        Route("/api/garmin/actualizar", actualizar, methods=["POST"]),
         Route("/api/ajustes", ver_ajustes),
         Route("/api/ajustes", guardar_ajustes, methods=["POST"]),
         Route("/api/carrera", anadir_carrera, methods=["POST"]),

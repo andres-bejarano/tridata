@@ -4,9 +4,13 @@
 // Every card reads its inputs when "Guardar" / "Confirmar" is pressed, not on `change`.
 // One message can bring several pieces (unit 007): weight, objective of the day, foods and
 // doubtful phrases. They are reviewed together and saved together, or nothing is saved.
+// Unit 008: the bar at the top, the full expenditure with Garmin and its breakdown, the
+// «Actualizar Garmin» button, today's objective, levels and planned training, and, in the
+// review, «si te lo comes» and «¿cuánto me cabe?» (a simulation: nothing is saved).
 
 const $ = (id) => document.getElementById(id);
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 });
+const porPaso = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 3 }); // 0,04 kcal/paso must not read 0
 const kilos = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 }); // 0,25 kg/semana must not read 0,3
 const fechaLarga = new Intl.DateTimeFormat("es-ES", { weekday: "long", day: "numeric", month: "long" });
 const signo = (n) => (n > 0 ? "+" : n < 0 ? "−" : "") + numero.format(Math.abs(n));
@@ -100,6 +104,9 @@ function pintarDia(dia) {
   $("objetivo-dia").hidden = !objetivo;
   $("plan").textContent = textoPlan(dia.plan);
   $("gasto").textContent = `Gasto estimado ${kcal(dia.gasto.kcal)}: ${dia.gasto.explicacion}.`;
+  pintarBarra(dia);
+  pintarDesglose(dia);
+  pintarControles(dia, esHoy);
   $("total").textContent = kcal(dia.total_kcal);
 
   const filas = dia.alimentos.map((a) => {
@@ -168,6 +175,166 @@ function textoObjetivo(o, gasto) {
   if (o.pasos !== null) partes.push(`${numero.format(o.pasos)} pasos previstos`);
   if (o.entreno) partes.push(`entreno previsto «${o.entreno}» (aún no suma kcal al gasto)`);
   return `${partes.join(" · ")}.`;
+}
+
+// -- unit 008: bar, breakdown, Garmin and today's controls -----------------------
+
+function pintarBarra(dia, b = dia.barra, titulo = null) {
+  if (!b) { $("barra").hidden = true; return; }
+  $("barra").hidden = false;
+  $("barra").classList.toggle("pasada", b.pasado_kcal > 0);
+  const lim = b.limite;
+  // the scale reaches the objective and, if further, the healthy-limit mark (R-23, C-39)
+  const escala = Math.max(b.objetivo_kcal, lim ? lim.kcal : 0, 1);
+  $("barra-relleno").style.width = `${Math.min(b.comido_kcal / escala * 100, 100)}%`;
+  $("barra-pct").textContent = `${b.pct} %`;
+  $("barra-quedan").textContent = `del objetivo · ${b.texto}`;
+  $("barra-objetivo").textContent = titulo ?? `${dia.objetivo.texto} Objetivo ${kcal(b.objetivo_kcal)} de ${kcal(dia.gasto.kcal)} de gasto.`;
+  $("barra-limite").hidden = !lim;
+  if (lim) {
+    $("barra-limite").style.left = `calc(${lim.kcal / escala * 100}% - 2px)`;
+    $("barra-limite").title = `límite saludable ${numero.format(lim.pct)} % (${kcal(lim.kcal)})`;
+  }
+  const aviso = lim && lim.aviso ? lim.aviso : "";
+  $("barra-aviso").textContent = aviso;
+  $("barra-aviso").hidden = !aviso;
+}
+
+function linea(etiqueta, valor) {
+  return el("div", { className: "linea" }, el("span", { textContent: etiqueta }), el("span", { textContent: valor }));
+}
+
+function pintarDesglose(dia) {
+  const g = dia.gasto;
+  const d = g.desglose;
+  if (!d) { $("desglose").replaceChildren(); return; }
+  const lineas = [linea("Basal", kcal(d.basal_kcal))];
+  const pasos = d.pasos_hechos === null
+    ? `${numero.format(g.pasos)} pasos supuestos`
+    : `${numero.format(d.pasos_hechos)} hechos + ${numero.format(d.pasos_supuestos)} supuestos`;
+  lineas.push(linea(`Pasos: ${pasos} × ${porPaso.format(d.kcal_por_paso)} kcal`, kcal(d.pasos_kcal)));
+  for (const h of d.entreno_hecho) lineas.push(linea(`Hecho: ${h.nombre} (${numero.format(h.minutos)} min)${h.sin_kcal ? " · sin kcal" : ""}`, kcal(h.kcal)));
+  if (d.previsto) lineas.push(linea(`Previsto: ${d.previsto.nombre ?? "entreno"} (${numero.format(d.previsto.minutos)} min)`, kcal(d.previsto_kcal)));
+  lineas.push(el("p", { className: "suave", textContent: mayuscula(g.garmin.texto) }));
+  for (const a of g.avisos) lineas.push(el("p", { className: "aviso", textContent: a }));
+  $("desglose").replaceChildren(...lineas);
+}
+
+const avisar = (id, texto) => { $(id).textContent = texto; $(id).hidden = !texto; };
+
+function pintarControles(dia, esHoy) {
+  $("controles-hoy").hidden = !esHoy;
+  $("actualizar-garmin").hidden = !esHoy;
+  if (!esHoy) { $("garmin-estado").textContent = ""; return; }
+  const o = dia.objetivo;
+  $("objetivo-actual").textContent = o.texto;
+  if (document.activeElement !== $("objetivo-pct")) $("objetivo-pct").value = numero.format(o.porcentaje);
+  $("objetivo-plan").hidden = o.origen !== "dia";
+  $("retraso").textContent = o.retraso ? `${mayuscula(o.retraso.texto)}.` : "";
+  $("retraso").hidden = !o.retraso;
+  if (document.activeElement !== $("niveles-texto")) $("niveles-texto").value = textoNiveles(dia.margenes.map((m) => m.nivel));
+  $("niveles-defecto").hidden = !dia.niveles_elegidos;
+  const p = dia.gasto.desglose && dia.gasto.desglose.previsto;
+  $("previsto-actual").textContent = p
+    ? `Previsto: ${p.nombre ?? "entreno"}, ${numero.format(p.minutos)} min (${kcal(p.kcal)}). Quítalo cuando ya esté hecho.`
+    : "Sin entreno previsto.";
+  $("previsto-quitar").hidden = !p;
+}
+
+async function cambiarObjetivo(cuerpo, idError) {
+  avisar(idError, "");
+  const { ok, datos } = await api("/api/dia/objetivo", cuerpo);
+  if (!ok) { avisar(idError, datos.error ?? "No se ha podido cambiar."); return false; }
+  pintarDia(datos.dia);
+  return true;
+}
+
+async function actualizarGarmin() {
+  const boton = $("actualizar-garmin");
+  if (boton.disabled) return; // one at a time
+  boton.disabled = true;
+  boton.textContent = "Actualizando…";
+  $("garmin-estado").textContent = "";
+  $("garmin-estado").className = "suave";
+  const { ok, datos } = await api("/api/garmin/actualizar", {});
+  boton.disabled = false;
+  boton.textContent = "Actualizar Garmin";
+  if (!ok) { // the data that were there stay as they were
+    $("garmin-estado").textContent = datos.error ?? "No se ha podido conectar con Garmin.";
+    $("garmin-estado").className = "suave error";
+    return;
+  }
+  $("garmin-estado").textContent = "Garmin actualizado.";
+  if (diaVisto === datos.dia.fecha) pintarDia(datos.dia);
+}
+
+async function cargarRecientes() {
+  const { ok, datos } = await api("/api/actividades-recientes");
+  const lista = ok ? datos.actividades : [];
+  const opciones = lista.map((a) => el("option", {
+    value: a.actividad_id, textContent: `${mayuscula(deFecha(a.fecha))} · ${a.nombre} · ${numero.format(a.minutos)} min · ${kcal(a.kcal)}`,
+  }));
+  $("previsto-actividad").replaceChildren(...(opciones.length ? opciones : [el("option", { value: "", textContent: "No hay entrenos en los últimos 14 días" })]));
+  const primero = lista[0];
+  if (primero && !$("previsto-minutos").value) $("previsto-minutos").value = Math.round(primero.minutos);
+}
+
+function enlazarControles() {
+  $("actualizar-garmin").addEventListener("click", actualizarGarmin);
+  $("objetivo-guardar").addEventListener("click", () => {
+    const n = comoNumero($("objetivo-pct").value.replace("−", "-"));
+    if (n === null || Number.isNaN(n)) { avisar("objetivo-error", "Escribe el % de hoy (por ejemplo −20, 0 o 10)."); return; }
+    cambiarObjetivo({ porcentaje: n }, "objetivo-error");
+  });
+  $("objetivo-mantenimiento").addEventListener("click", () => cambiarObjetivo({ porcentaje: 0 }, "objetivo-error"));
+  $("objetivo-plan").addEventListener("click", () => cambiarObjetivo({ porcentaje: null }, "objetivo-error"));
+  $("niveles-guardar").addEventListener("click", () => {
+    const niveles = comoNiveles($("niveles-texto").value);
+    if (!niveles || niveles.some((n) => Number.isNaN(n))) { avisar("niveles-error", "Escribe de 1 a 5 % separados por ; (por ejemplo −20; −15)."); return; }
+    cambiarObjetivo({ niveles }, "niveles-error");
+  });
+  $("niveles-defecto").addEventListener("click", () => cambiarObjetivo({ niveles: null }, "niveles-error"));
+  $("previsto").addEventListener("toggle", () => { if ($("previsto").open) cargarRecientes(); });
+  $("previsto-guardar").addEventListener("click", () => {
+    const actividad = $("previsto-actividad").value;
+    const minutos = comoNumero($("previsto-minutos").value);
+    if (!actividad) { avisar("previsto-error", "Elige un entreno de los últimos 14 días."); return; }
+    if (minutos === null || Number.isNaN(minutos) || minutos <= 0) { avisar("previsto-error", "Pon los minutos que harás."); return; }
+    cambiarObjetivo({ previsto: { actividad_id: actividad, minutos } }, "previsto-error");
+  });
+  $("previsto-quitar").addEventListener("click", () => cambiarObjetivo({ previsto: null }, "previsto-error"));
+}
+
+// -- unit 008: «si te lo comes» and «¿cuánto me cabe?» over the reviewed list (saves nothing) --
+
+let turnoSimulacion = 0;
+let esperaSimulacion = null;
+let caben = [];
+
+const paraSimular = () => (revision ? revision.alimentos.filter((a) => a.nombre && a.dia && !Number.isNaN(a.kcal)
+  && !Number.isNaN(a.cantidad) && (a.cantidad === null || a.cantidad > 0) && (a.kcal === null || a.kcal >= 0)) : []);
+
+function programarSimulacion() {
+  clearTimeout(esperaSimulacion);
+  esperaSimulacion = setTimeout(simularRevision, 250);
+}
+
+async function simularRevision() {
+  if (!revision) { $("simulacion").hidden = true; return; }
+  const turno = ++turnoSimulacion;
+  const alimentos = paraSimular().map(({ anadida, ...a }) => a);
+  const { ok, datos } = await api("/api/simular", { alimentos });
+  if (turno !== turnoSimulacion || !revision) return;
+  if (!ok) { $("simulacion").hidden = true; return; }
+  caben = alimentos.map((a, i) => ({ nombre: a.nombre, ...datos.caben[i] }));
+  const b = datos.barra;
+  const margenes = datos.margenes.map((m) => `${etiquetaNivel(m.nivel)}: ${kcal(m.kcal)}`).join(" · ");
+  $("simulacion").replaceChildren(
+    el("p", { className: "titulo-pieza", textContent: `Si te lo comes (${kcal(datos.kcal_lista)} de hoy)` }),
+    el("p", { textContent: `La barra quedaría en ${b.pct} % · ${b.texto}.` }),
+    el("p", { className: "suave", textContent: `Te quedaría ${margenes}. Es una simulación: no se guarda nada.` }),
+  );
+  $("simulacion").hidden = false;
 }
 
 // Inputs of a saved-food card; `leer()` takes what is typed at that moment (R7).
@@ -332,7 +499,7 @@ function pintarRevision() {
   for (const leer of lectores) leer(); // repainting must not lose what is typed and not yet applied
   lectores = [];
   $("revision").hidden = !revision;
-  if (!revision) return;
+  if (!revision) { $("simulacion").hidden = true; return; }
   const tarjetas = revision.alimentos.map((a, i) => {
     // Applies a typed value to the model; only a real change clears "dudoso" / "estimado".
     const aplicar = (clave, convertir = (v) => v) => (valor) => {
@@ -353,6 +520,14 @@ function pintarRevision() {
     if (a.anadida) marcas.push(el("span", { className: "marca", textContent: "añadido a mano" }));
     const quitar = el("button", { type: "button", className: "quitar", textContent: "Quitar" });
     quitar.addEventListener("click", () => { revision.alimentos.splice(i, 1); pintarRevision(); });
+    const respuesta = el("p", { className: "cabe", hidden: true });
+    const cuanto = el("button", { type: "button", className: "cuanto", textContent: "¿Cuánto me cabe?" });
+    cuanto.addEventListener("click", async () => {
+      await simularRevision();
+      const c = caben.find((x) => x.nombre === a.nombre);
+      respuesta.textContent = c ? mayuscula(c.texto) : "Pon la cantidad y las kcal para saberlo.";
+      respuesta.hidden = false;
+    });
     const conversiones = {
       nombre: (v) => v.trim(), cantidad: comoNumero, unidad: (v) => v.trim() || null, kcal: comoNumero, dia: (v) => v,
     };
@@ -366,7 +541,7 @@ function pintarRevision() {
     };
     // Typing keeps the model and the block reason current without repainting the cards.
     for (const [clave, c] of Object.entries(campos)) {
-      c.entrada.addEventListener("input", () => { aplicar(clave, conversiones[clave])(c.entrada.value); pintarBloqueo(); });
+      c.entrada.addEventListener("input", () => { aplicar(clave, conversiones[clave])(c.entrada.value); pintarBloqueo(); programarSimulacion(); });
     }
     // R9: on "Confirmar", what is in the inputs at that moment is what gets saved.
     lectores.push(() => {
@@ -378,12 +553,13 @@ function pintarRevision() {
       el("div", { className: "fila" }, campos.cantidad, campos.unidad, campos.kcal),
       campos.dia,
       a.supuestos.length ? el("p", { className: "supuestos", textContent: `Supuestos: ${a.supuestos.join("; ")}` }) : null,
-      quitar,
+      el("div", { className: "acciones" }, cuanto, quitar), respuesta,
     );
   });
   $("lista").replaceChildren(...tarjetas);
   $("piezas").replaceChildren(...tarjetasPiezas());
   pintarBloqueo();
+  programarSimulacion();
 }
 
 // Cards of the other pieces: weight (numeric keyboard), objective of the day, doubtful phrases.
@@ -553,4 +729,5 @@ $("anadir").addEventListener("click", () => { anadiendo = true; editando = null;
 $("anterior").addEventListener("click", () => irA(sumarDias(diaVisto, -1)));
 $("siguiente").addEventListener("click", () => irA(sumarDias(diaVisto, 1)));
 $("ir-hoy").addEventListener("click", () => irA(hoyISO));
+enlazarControles();
 cargarDia();

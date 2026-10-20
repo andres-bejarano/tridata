@@ -11,6 +11,7 @@
   --alerta-fondo: #fff4e5;
   --bien: #1a7f37;
   --error: #c62828;
+  --peligro: #b42318;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -25,6 +26,7 @@
     --alerta-fondo: #3a2a14;
     --bien: #4cc26b;
     --error: #ff6b6b;
+    --peligro: #ff7a6b;
   }
 }
 
@@ -83,10 +85,25 @@ button {
   border: 1px solid var(--borde); background: var(--tarjeta); color: var(--texto); cursor: pointer;
 }
 button.principal { background: var(--acento); color: var(--acento-texto); border-color: var(--acento); font-weight: 600; }
-button:disabled { opacity: 0.45; cursor: not-allowed; }
+button:disabled, button.bloqueado { opacity: 0.45; cursor: not-allowed; }
 button.quitar { justify-self: end; min-height: 40px; font-size: 0.9rem; }
 .acciones { display: flex; gap: 8px; }
 .acciones .principal { flex: 1; }
+
+button.anadir { width: 100%; margin-top: 10px; border-style: dashed; color: var(--acento); }
+button.comido { display: block; margin-top: 6px; min-height: 40px; padding: 0 14px; font-size: 0.9rem; }
+button.peligro { color: var(--peligro); border-color: var(--peligro); justify-self: start; }
+button.peligro.principal { background: var(--peligro); color: var(--acento-texto); }
+.confirmar-borrado { display: grid; gap: 8px; }
+.confirmar-borrado p { margin: 0; font-weight: 600; }
+.tarjeta.nueva { border-color: var(--acento); }
+.tarjeta .aviso { margin: 0; }
+[hidden] { display: none !important; }
+
+.dias { display: flex; align-items: center; gap: 8px; }
+.dias .dia-visto { flex: 1; min-width: 0; text-align: center; }
+.dias .dia-visto p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dias button { min-width: 48px; padding: 0 12px; }
 
 #mensaje { min-height: 1.4em; }
 #mensaje.error { color: var(--error); }

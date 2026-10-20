@@ -11,8 +11,15 @@
 <body>
   <main>
     <header>
-      <h1 id="titulo">Hoy</h1>
-      <p id="fecha" class="suave"></p>
+      <nav class="dias" aria-label="Cambiar de día">
+        <button id="anterior" type="button" aria-label="Día anterior">◀</button>
+        <div class="dia-visto">
+          <h1 id="titulo">Hoy</h1>
+          <p id="fecha" class="suave"></p>
+        </div>
+        <button id="siguiente" type="button" aria-label="Día siguiente">▶</button>
+        <button id="ir-hoy" type="button" disabled>Hoy</button>
+      </nav>
     </header>
 
     <section aria-labelledby="t-margen">
@@ -29,12 +36,15 @@
         <tbody></tbody>
       </table>
       <p id="vacio" class="suave">Aún no has apuntado nada hoy.</p>
+      <div id="anadir-ficha"></div>
+      <button id="anadir" type="button" class="anadir">Añadir</button>
     </section>
 
     <section id="revision" aria-labelledby="t-revision" hidden>
       <h2 id="t-revision">Esto he entendido</h2>
       <p class="suave">Revísalo: corrige lo que haga falta y confirma. Hasta entonces no se guarda nada.</p>
       <div id="lista"></div>
+      <button id="anadir-revision" type="button" class="anadir">Añadir alimento</button>
       <p id="bloqueo" class="aviso" hidden></p>
       <div class="acciones">
         <button id="confirmar" type="button" class="principal">Confirmar y guardar</button>

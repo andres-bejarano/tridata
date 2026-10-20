@@ -44,6 +44,11 @@ _COLUMNAS = (
 )
 
 
+def _estado(dia: date, hoy: date) -> str:
+    """A food for a later day is `planeado` there; today or a past day it is `comido`."""
+    return "planeado" if dia > hoy else "comido"
+
+
 def _numero(datos: dict, clave: str) -> float | None:
     valor = datos.get(clave)
     if valor is None or valor == "":
@@ -151,7 +156,7 @@ class RegistroComidas:
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         a.dia.isoformat(), a.nombre, a.cantidad, a.unidad, a.kcal, a.proteina_g, a.hidratos_g,
-                        a.grasa_g, "planeado" if a.dia > hoy else "comido", int(a.estimado),
+                        a.grasa_g, _estado(a.dia, hoy), int(a.estimado),
                         json.dumps(a.supuestos, ensure_ascii=False), int(a.pendiente_cantidad),
                         interpretacion_id, ahora,
                     ),
@@ -162,31 +167,74 @@ class RegistroComidas:
             ).fetchall()
         return [self._fila(f) for f in filas]
 
-    def cambiar(self, alimento_id: int, datos: dict) -> dict:
-        """Change name, quantity, unit and kcal of a saved food; day and state stay as they were.
+    def cambiar(self, alimento_id: int, datos: dict, hoy: date | None = None) -> dict:
+        """Change name, quantity, unit and kcal of a saved food, and its day if `datos` brings one.
 
-        New kcal stop being `estimado`. KeyError if the id does not exist, ValueError if invalid.
+        Moving to another day sets the state by the same rule as `guardar` (needs `hoy`); without
+        a day, or with the same one, day and state stay as they were. New kcal stop being
+        `estimado`. KeyError if the id does not exist, ValueError if invalid.
         """
         with self._connect() as conn:
-            fila = conn.execute(
-                f"SELECT {_COLUMNAS} FROM alimento_apuntado WHERE id = ?", (alimento_id,)  # noqa: S608
-            ).fetchone()
-            if fila is None:
-                raise KeyError(alimento_id)
-            nuevo = Alimento.desde_dict({**datos, "dia": fila["dia"]})
+            fila = self._leer(conn, alimento_id)
+            dia_nuevo = datos.get("dia")
+            nuevo = Alimento.desde_dict({**datos, "dia": dia_nuevo if dia_nuevo else fila["dia"]})
             if nuevo.cantidad is not None and nuevo.kcal is None:
                 raise ValueError(f"«{nuevo.nombre}» tiene cantidad pero no kcal")
+            estado = fila["estado"]
+            if nuevo.dia.isoformat() != fila["dia"]:
+                if hoy is None:
+                    raise ValueError("para pasar un alimento a otro día hace falta saber qué día es hoy")
+                estado = _estado(nuevo.dia, hoy)
             estimado = bool(fila["estimado"]) and nuevo.kcal == fila["kcal"]
             conn.execute(
                 "UPDATE alimento_apuntado SET nombre = ?, cantidad = ?, unidad = ?, kcal = ?, estimado = ?, "
-                "pendiente_cantidad = ? WHERE id = ?",
+                "pendiente_cantidad = ?, dia = ?, estado = ? WHERE id = ?",
                 (nuevo.nombre, nuevo.cantidad, nuevo.unidad, nuevo.kcal, int(estimado),
-                 int(nuevo.pendiente_cantidad), alimento_id),
+                 int(nuevo.pendiente_cantidad), nuevo.dia.isoformat(), estado, alimento_id),
             )
-            fila = conn.execute(
-                f"SELECT {_COLUMNAS} FROM alimento_apuntado WHERE id = ?", (alimento_id,)  # noqa: S608
-            ).fetchone()
-        return self._fila(fila)
+            return self._fila(self._leer(conn, alimento_id))
+
+    def alimento(self, alimento_id: int) -> dict:
+        """One saved food; KeyError if it does not exist."""
+        with self._connect() as conn:
+            return self._fila(self._leer(conn, alimento_id))
+
+    def borrar(self, alimento_id: int) -> dict:
+        """Delete one saved food and return it as it was; KeyError if it does not exist.
+
+        Asking Andrés first (R-11) is the caller's job: the web route demands `confirmado`.
+        """
+        with self._connect() as conn:
+            fila = self._fila(self._leer(conn, alimento_id))
+            conn.execute("DELETE FROM alimento_apuntado WHERE id = ?", (alimento_id,))
+        return fila
+
+    def marcar_comido(self, alimento_id: int, hoy: date) -> dict:
+        """Mark a planned food as eaten on its own day. ValueError if that day is after `hoy`."""
+        with self._connect() as conn:
+            fila = self._leer(conn, alimento_id)
+            if date.fromisoformat(fila["dia"]) > hoy:
+                raise ValueError(f"«{fila['nombre']}» es de un día que aún no ha llegado: no se puede marcar comido")
+            conn.execute("UPDATE alimento_apuntado SET estado = 'comido' WHERE id = ?", (alimento_id,))
+            return self._fila(self._leer(conn, alimento_id))
+
+    def anadir(self, alimento: Alimento, hoy: date) -> dict:
+        """Add a food by hand, without the AI: no interpretation, not estimated, no assumptions."""
+        if alimento.cantidad is not None and alimento.kcal is None:
+            raise ValueError(f"«{alimento.nombre}» tiene cantidad pero no kcal")
+        ahora = datetime.now().isoformat(timespec="seconds")
+        a = alimento
+        with self._connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO alimento_apuntado (dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, "
+                "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', ?, NULL, ?)",
+                (a.dia.isoformat(), a.nombre, a.cantidad, a.unidad, a.kcal, a.proteina_g, a.hidratos_g,
+                 a.grasa_g, _estado(a.dia, hoy), int(a.pendiente_cantidad), ahora),
+            )
+            if cur.lastrowid is None:  # sqlite always sets it after an INSERT
+                raise RuntimeError("no se ha podido apuntar el alimento")
+            return self._fila(self._leer(conn, cur.lastrowid))
 
     def apuntes_del_dia(self, dia: date) -> list[dict]:
         with self._connect() as conn:
@@ -202,6 +250,15 @@ class RegistroComidas:
                 "SELECT id, hora, texto, confirmada_sin_cambios FROM interpretacion ORDER BY id"
             ).fetchall()
         return [{**dict(f), "confirmada_sin_cambios": bool(f["confirmada_sin_cambios"])} for f in filas]
+
+    @staticmethod
+    def _leer(conn: sqlite3.Connection, alimento_id: int) -> sqlite3.Row:
+        fila = conn.execute(
+            f"SELECT {_COLUMNAS} FROM alimento_apuntado WHERE id = ?", (alimento_id,)  # noqa: S608
+        ).fetchone()
+        if fila is None:
+            raise KeyError(alimento_id)
+        return fila
 
     @staticmethod
     def _fila(fila: sqlite3.Row) -> dict:

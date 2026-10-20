@@ -1,10 +1,18 @@
-"""Starlette app: the day page and four JSON routes.
+"""Starlette app: the day page and its JSON routes.
 
-    GET  /                 the page (static HTML + JS modules + CSS)
-    POST /api/interpretar  text -> interpreted list; saves NOTHING (R-1)
-    POST /api/confirmar    reviewed list -> saved food by food; returns the day (R-4, R-5)
-    POST /api/alimento/N   change a saved food (name, quantity, unit, kcal); returns its day
-    GET  /api/dia          the day table, total, expenditure and margins (?fecha=AAAA-MM-DD)
+    GET  /                        the page (static HTML + JS modules + CSS)
+    POST /api/interpretar         text -> interpreted list; saves NOTHING (R-1)
+    POST /api/confirmar           reviewed list -> saved food by food; returns today (R-4, R-5)
+    POST /api/alimento            add a food by hand (no AI, no interpretation); body with `dia`
+    POST /api/alimento/N          change a saved food (name, quantity, unit, kcal; `dia` optional
+                                  moves it, with the planned/eaten rule)
+    POST /api/alimento/N/borrar   delete a saved food; only with {"confirmado": true} (R-11)
+    POST /api/alimento/N/comido   mark a planned food as eaten (today or a past day only)
+    GET  /api/dia                 the day table, total, expenditure and margins (?fecha=AAAA-MM-DD)
+
+Every /api/alimento route answers {"alimento": ..., "dia": ...}, where `dia` is the day the food
+was in BEFORE the action (the screen being looked at; for an added food, its day).
+404 if the food does not exist, 400 malformed data, 422 a business rule.
 """
 from __future__ import annotations
 
@@ -25,6 +33,7 @@ from ..ia import ErrorInterpretacion
 from ..nutricion import Alimento, ConfigGasto, RegistroComidas, resumen_del_dia
 
 ESTATICOS = Path(__file__).parent / "static"
+NO_ESTA = "Ese alimento ya no está apuntado."
 
 
 def _error(mensaje: str, estado: int, **extra: Any) -> JSONResponse:
@@ -86,25 +95,59 @@ def crear_app(
             return _error(str(exc), 422)
         return JSONResponse({"guardados": guardados, "dia": _dia(hoy())})
 
-    async def cambiar(request: Request) -> Response:
+    async def anadir(request: Request) -> Response:
         cuerpo = await _cuerpo(request) or {}
         try:
-            Alimento.desde_dict({**cuerpo, "dia": hoy().isoformat()})
+            alimento = Alimento.desde_dict({**cuerpo, "estimado": False, "dudoso": False, "supuestos": []})
         except ValueError as exc:
             return _error(str(exc), 400)
         try:
-            cambiado = registro.cambiar(request.path_params["id"], cuerpo)
-        except KeyError:
-            return _error("Ese alimento ya no está apuntado.", 404)
+            anadido = registro.anadir(alimento, hoy=hoy())
         except ValueError as exc:
             return _error(str(exc), 422)
-        return JSONResponse({"alimento": cambiado, "dia": _dia(date.fromisoformat(cambiado["dia"]))})
+        return JSONResponse({"alimento": anadido, "dia": _dia(alimento.dia)})
+
+    async def cambiar(request: Request) -> Response:
+        cuerpo = await _cuerpo(request) or {}
+        try:
+            Alimento.desde_dict({**cuerpo, "dia": cuerpo.get("dia") or hoy().isoformat()})
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        try:
+            origen = registro.alimento(request.path_params["id"])
+            cambiado = registro.cambiar(request.path_params["id"], cuerpo, hoy=hoy())
+        except KeyError:
+            return _error(NO_ESTA, 404)
+        except ValueError as exc:
+            return _error(str(exc), 422)
+        return JSONResponse({"alimento": cambiado, "dia": _dia(date.fromisoformat(origen["dia"]))})
+
+    async def borrar(request: Request) -> Response:
+        if (await _cuerpo(request) or {}).get("confirmado") is not True:
+            return _error("Hay que confirmar antes de borrar: no se ha borrado nada.", 400)
+        try:
+            borrado = registro.borrar(request.path_params["id"])
+        except KeyError:
+            return _error(NO_ESTA, 404)
+        return JSONResponse({"alimento": borrado, "dia": _dia(date.fromisoformat(borrado["dia"]))})
+
+    async def comido(request: Request) -> Response:
+        try:
+            marcado = registro.marcar_comido(request.path_params["id"], hoy=hoy())
+        except KeyError:
+            return _error(NO_ESTA, 404)
+        except ValueError as exc:
+            return _error(str(exc), 422)
+        return JSONResponse({"alimento": marcado, "dia": _dia(date.fromisoformat(marcado["dia"]))})
 
     return Starlette(routes=[
         Route("/", pagina),
         Route("/api/dia", dia),
         Route("/api/interpretar", interpretar, methods=["POST"]),
         Route("/api/confirmar", confirmar, methods=["POST"]),
+        Route("/api/alimento", anadir, methods=["POST"]),
         Route("/api/alimento/{id:int}", cambiar, methods=["POST"]),
+        Route("/api/alimento/{id:int}/borrar", borrar, methods=["POST"]),
+        Route("/api/alimento/{id:int}/comido", comido, methods=["POST"]),
         Mount("/static", StaticFiles(directory=ESTATICOS), name="static"),
     ])

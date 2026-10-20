@@ -418,5 +418,137 @@
     }
    ]
   }
+ ],
+ "_nota_piezas": "`piezas`: mensajes INVENTADOS de peso y de nuevo día (unidad 007). `peso`: kg y día esperados (`nota`: true si debe traer nota). `objetivo_dia`: `tipo` palabras aceptadas, `porcentaje`, `niveles` y `pasos` exactos (null = no lo dice), `entreno`: true si debe traerlo. `dudosas`: cuántas frases dudosas. `alimentos`: como en `casos`.",
+ "piezas": [
+  {
+   "texto": "peso 70,2",
+   "esperado": {
+    "peso": {
+     "kg": 70.2,
+     "dia": "2026-03-04"
+    },
+    "objetivo_dia": null,
+    "dudosas": 0,
+    "alimentos": []
+   }
+  },
+  {
+   "texto": "peso 70,2 retención tras la cena",
+   "esperado": {
+    "peso": {
+     "kg": 70.2,
+     "dia": "2026-03-04",
+     "nota": true
+    },
+    "objetivo_dia": null,
+    "dudosas": 0,
+    "alimentos": []
+   }
+  },
+  {
+   "texto": "ayer pesaba 70,5",
+   "esperado": {
+    "peso": {
+     "kg": 70.5,
+     "dia": "2026-03-03"
+    },
+    "objetivo_dia": null,
+    "dudosas": 0,
+    "alimentos": []
+   }
+  },
+  {
+   "texto": "nuevo día 70,2, descanso, 30 minutos suaves, desayuno porridge",
+   "esperado": {
+    "peso": {
+     "kg": 70.2,
+     "dia": "2026-03-04"
+    },
+    "objetivo_dia": {
+     "tipo": [
+      "descanso"
+     ],
+     "porcentaje": null,
+     "niveles": null,
+     "entreno": true,
+     "pasos": null
+    },
+    "dudosas": 0,
+    "alimentos": [
+     {
+      "nombre": [
+       "porridge",
+       "gachas",
+       "avena"
+      ],
+      "cantidad": null,
+      "unidad": null,
+      "dia": "2026-03-04"
+     }
+    ]
+   }
+  },
+  {
+   "texto": "nuevo día, entreno, déficit del 15, niveles menos 15 y 0, 8.000 pasos",
+   "esperado": {
+    "peso": null,
+    "objetivo_dia": {
+     "tipo": [
+      "entreno"
+     ],
+     "porcentaje": -15,
+     "niveles": [
+      -15,
+      0
+     ],
+     "entreno": false,
+     "pasos": 8000
+    },
+    "dudosas": 0,
+    "alimentos": []
+   }
+  },
+  {
+   "texto": "nuevo día 70,2 y lo del martes ya sabes",
+   "esperado": {
+    "peso": {
+     "kg": 70.2,
+     "dia": "2026-03-04"
+    },
+    "objetivo_dia": null,
+    "dudosas": 1,
+    "alimentos": []
+   }
+  },
+  {
+   "texto": "buenos días, 69,8 esta mañana, hoy toca descanso y 6000 pasos, 200 gramos de yogur",
+   "esperado": {
+    "peso": {
+     "kg": 69.8,
+     "dia": "2026-03-04"
+    },
+    "objetivo_dia": {
+     "tipo": [
+      "descanso"
+     ],
+     "porcentaje": null,
+     "niveles": null,
+     "entreno": false,
+     "pasos": 6000
+    },
+    "dudosas": 0,
+    "alimentos": [
+     {
+      "nombre": [
+       "yogur"
+      ],
+      "cantidad": 200,
+      "unidad": "g",
+      "dia": "2026-03-04"
+     }
+    ]
+   }
+  }
  ]
 }

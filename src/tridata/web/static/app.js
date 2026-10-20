@@ -2,13 +2,19 @@
 // Nothing is saved until "Confirmar y guardar"; the server computes every total.
 // A saved food is changed, moved, deleted or marked eaten by tapping its row in the day table.
 // Every card reads its inputs when "Guardar" / "Confirmar" is pressed, not on `change`.
+// One message can bring several pieces (unit 007): weight, objective of the day, foods and
+// doubtful phrases. They are reviewed together and saved together, or nothing is saved.
 
 const $ = (id) => document.getElementById(id);
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 });
+const kilos = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 }); // 0,25 kg/semana must not read 0,3
 const fechaLarga = new Intl.DateTimeFormat("es-ES", { weekday: "long", day: "numeric", month: "long" });
-const NIVELES = { "-10": "−10 %", "0": "Mantenimiento", "10": "+10 %" };
+const signo = (n) => (n > 0 ? "+" : n < 0 ? "−" : "") + numero.format(Math.abs(n));
+const etiquetaNivel = (n) => (n === 0 ? "Mantenimiento" : `${signo(n)} %`);
+const PESO_MIN = 30;
+const PESO_MAX = 250;
 
-let revision = null; // { texto, hoy, original, alimentos }
+let revision = null; // { texto, hoy, original, alimentos, peso, objetivo, dudosas }
 let hoyISO = null; // today, as the server says on the first load
 let diaVisto = null; // the day on screen (ISO)
 let ultimoDia = null;
@@ -83,10 +89,15 @@ function pintarDia(dia) {
   $("ir-hoy").disabled = esHoy;
   $("t-comido").firstChild.textContent = esHoy ? "Comido hoy " : `El ${deFecha(dia.fecha)} `;
   $("vacio").textContent = esHoy ? "Aún no has apuntado nada hoy." : `No hay nada apuntado el ${deFecha(dia.fecha)}.`;
-  $("margenes").replaceChildren(...dia.margenes.map((m) => el("div", { className: `margen n${m.nivel}` },
-    el("span", { className: "etiqueta", textContent: NIVELES[m.nivel] ?? `${m.nivel} %` }),
+  $("margenes").replaceChildren(...dia.margenes.map((m) => el("div", { className: `margen n${m.nivel}${m.objetivo ? " objetivo" : ""}` },
+    el("span", { className: "etiqueta", textContent: etiquetaNivel(m.nivel) }),
     el("strong", { textContent: kcal(m.kcal) }),
+    m.objetivo ? el("span", { className: "marca-objetivo", textContent: "objetivo del día" }) : null,
   )));
+  pintarPeso(dia);
+  const objetivo = textoObjetivo(dia.objetivo_dia, dia.gasto);
+  $("objetivo-dia").textContent = objetivo;
+  $("objetivo-dia").hidden = !objetivo;
   $("plan").textContent = textoPlan(dia.plan);
   $("gasto").textContent = `Gasto estimado ${kcal(dia.gasto.kcal)}: ${dia.gasto.explicacion}.`;
   $("total").textContent = kcal(dia.total_kcal);
@@ -121,6 +132,42 @@ function pintarDia(dia) {
     className: "aviso",
     textContent: `Falta la cantidad de: ${dia.pendientes.map((p) => p.nombre).join(", ")}. No suma hasta que la pongas.`,
   })] : []));
+}
+
+// The weight line of the day being looked at: weight, 7-day mean, basal and projection (unit 007).
+function pintarPeso(dia) {
+  const p = dia.peso;
+  if (!p) { $("peso-dia").textContent = ""; $("peso-media").textContent = ""; $("peso-proyeccion").textContent = ""; return; }
+  const quien = dia.fecha === hoyISO ? "Peso de hoy" : `Peso del ${deFecha(dia.fecha)}`;
+  const nota = p.del_dia && p.del_dia.nota ? ` (${p.del_dia.nota})` : "";
+  $("peso-dia").textContent = p.del_dia ? `${quien} ${kilos.format(p.del_dia.kg)} kg${nota}` : `${quien}: sin apuntar`;
+  const media = p.media_7_dias
+    ? `Media de 7 días ${kilos.format(p.media_7_dias.kg)} kg (${p.media_7_dias.dias_con_peso} ${p.media_7_dias.dias_con_peso === 1 ? "día" : "días"} con peso)`
+    : `Media de 7 días: ${p.media_texto}`;
+  const b = p.basal;
+  const basal = b.kcal === null ? "basal: sin dato" : `basal ${kcal(b.kcal)} (${b.origen === "peso" ? "con tu peso" : "el de Ajustes"})`;
+  $("peso-media").textContent = `${media} · ${basal}.`;
+  const y = p.proyeccion;
+  let proyeccion = `Proyección: ${p.proyeccion_texto ?? ""}.`;
+  if (y && y.faltan_kg !== null) {
+    const ritmo = y.kg_por_semana === null ? "la fecha ya ha pasado"
+      : `hace falta ${kilos.format(Math.abs(y.kg_por_semana))} kg por semana`;
+    const verbo = y.faltan_kg >= 0 ? "faltan" : "sobran";
+    proyeccion = `Objetivo ${kilos.format(y.objetivo_kg)} kg el ${deFecha(y.fecha)}: ${verbo} ${kilos.format(Math.abs(y.faltan_kg))} kg, ${ritmo}.`;
+  } else if (y) {
+    proyeccion = `Objetivo ${numero.format(y.objetivo_kg)} kg el ${deFecha(y.fecha)}: ${p.proyeccion_texto}.`;
+  }
+  $("peso-proyeccion").textContent = proyeccion;
+}
+
+// The objective of the day in one line; "" when the day has none.
+function textoObjetivo(o, gasto) {
+  if (!o) return "";
+  const partes = [`Objetivo del día: ${o.tipo ?? "sin tipo"}`];
+  if (o.porcentaje !== null) partes[0] += ` ${signo(o.porcentaje)} %`;
+  if (o.pasos !== null) partes.push(`${numero.format(o.pasos)} pasos previstos`);
+  if (o.entreno) partes.push(`entreno previsto «${o.entreno}» (aún no suma kcal al gasto)`);
+  return `${partes.join(" · ")}.`;
 }
 
 // Inputs of a saved-food card; `leer()` takes what is typed at that moment (R7).
@@ -335,7 +382,71 @@ function pintarRevision() {
     );
   });
   $("lista").replaceChildren(...tarjetas);
+  $("piezas").replaceChildren(...tarjetasPiezas());
   pintarBloqueo();
+}
+
+// Cards of the other pieces: weight (numeric keyboard), objective of the day, doubtful phrases.
+function tarjetaPieza(titulo, clase, ...hijos) {
+  return el("article", { className: `tarjeta ${clase}` }, el("p", { className: "titulo-pieza", textContent: titulo }), ...hijos);
+}
+
+function botonQuitar(alQuitar) {
+  const quitar = el("button", { type: "button", className: "quitar", textContent: "Quitar" });
+  quitar.addEventListener("click", () => { alQuitar(); pintarRevision(); });
+  return quitar;
+}
+
+// Inputs that copy what is typed into `modelo[clave]` on input and before confirming (R9 of 002).
+function enlazar(modelo, campos, conversiones) {
+  const leer = () => { for (const [clave, c] of Object.entries(campos)) modelo[clave] = conversiones[clave](c.entrada.value); };
+  for (const c of Object.values(campos)) c.entrada.addEventListener("input", () => { leer(); pintarBloqueo(); });
+  lectores.push(leer);
+}
+
+const comoTexto = (v) => v.trim() || null;
+const comoNiveles = (v) => (v.trim() === "" ? null : v.split(/[;\s]+|,(?=\s)|,$/).filter(Boolean).map((n) => comoNumero(n.replace("−", "-"))));
+const textoNiveles = (n) => (n ? n.map((x) => numero.format(x)).join("; ") : "");
+
+function tarjetasPiezas() {
+  const tarjetas = [];
+  const p = revision.peso;
+  if (p) {
+    const campos = {
+      kg: campo("Peso (kg)", p.kg, "text", null, { inputMode: "decimal", autocomplete: "off" }),
+      dia: campo("Día", p.dia, "date"),
+      nota: campo("Nota", p.nota, "text"),
+    };
+    campos.kg.entrada.value = p.kg === null || Number.isNaN(p.kg) ? "" : kilos.format(p.kg);
+    enlazar(p, campos, { kg: comoNumero, dia: (v) => v, nota: comoTexto });
+    const marcas = p.dia !== revision.hoy ? [el("span", { className: "marca", textContent: deFecha(p.dia) })] : [];
+    tarjetas.push(tarjetaPieza("Peso del día", "pieza peso",
+      el("div", { className: "marcas" }, ...marcas),
+      el("div", { className: "fila dos" }, campos.kg, campos.dia), campos.nota,
+      botonQuitar(() => { revision.peso = null; })));
+  }
+  const o = revision.objetivo;
+  if (o) {
+    const campos = {
+      tipo: campo("Tipo de día", o.tipo, "text"),
+      porcentaje: campo("% objetivo (con signo)", o.porcentaje, "text", null, { inputMode: "decimal" }),
+      niveles: campo("Niveles (%; separa con ;)", textoNiveles(o.niveles), "text"),
+      pasos: campo("Pasos previstos", o.pasos, "number", null, { inputMode: "numeric", min: "0", step: "1" }),
+      entreno: campo("Entreno previsto (aún no suma kcal)", o.entreno, "text"),
+    };
+    enlazar(o, campos, { tipo: comoTexto, porcentaje: (v) => comoNumero(v.replace("−", "-")), niveles: comoNiveles, pasos: comoNumero, entreno: comoTexto });
+    tarjetas.push(tarjetaPieza("Objetivo del día", "pieza objetivo",
+      el("div", { className: "fila dos" }, campos.tipo, campos.porcentaje),
+      el("div", { className: "fila dos" }, campos.niveles, campos.pasos), campos.entreno,
+      botonQuitar(() => { revision.objetivo = null; })));
+  }
+  revision.dudosas.forEach((frase, i) => {
+    tarjetas.push(tarjetaPieza("No sé dónde ponerlo", "dudosa",
+      el("span", { className: "marca alerta", textContent: "dudoso: quítalo para poder confirmar" }),
+      el("p", { className: "frase", textContent: `«${frase}»` }),
+      botonQuitar(() => { revision.dudosas.splice(i, 1); })));
+  });
+  return tarjetas;
 }
 
 function motivoBloqueo() {
@@ -344,7 +455,16 @@ function motivoBloqueo() {
   const dudosos = nombres((a) => a.dudoso);
   const sinKcal = nombres((a) => !a.dudoso && a.nombre && a.cantidad !== null && a.kcal === null);
   const malos = nombres((a) => a.nombre && ((a.cantidad !== null && !(a.cantidad > 0)) || Number.isNaN(a.kcal) || !a.dia));
-  if (!lista.length) return "No queda ningún alimento en la lista.";
+  const { peso, objetivo, dudosas } = revision;
+  if (dudosas.length) return `No sé dónde poner ${dudosas.map((d) => `«${d}»`).join(", ")}: quítalo para poder confirmar.`;
+  if (!lista.length && !peso && !objetivo) return "No queda nada que guardar.";
+  if (peso && (peso.kg === null || Number.isNaN(peso.kg) || peso.kg < PESO_MIN || peso.kg > PESO_MAX)) return `El peso tiene que estar entre ${PESO_MIN} y ${PESO_MAX} kg.`;
+  if (peso && !peso.dia) return "Pon el día del peso.";
+  if (peso && peso.dia > revision.hoy) return "El peso no puede ser de un día que aún no ha llegado.";
+  if (objetivo && Number.isNaN(objetivo.porcentaje)) return "El % del objetivo del día no es un número.";
+  if (objetivo && objetivo.niveles && objetivo.niveles.some((n) => Number.isNaN(n))) return "Algún nivel del día no es un número.";
+  if (objetivo && (Number.isNaN(objetivo.pasos) || (objetivo.pasos !== null && !Number.isInteger(objetivo.pasos)))) return "Los pasos previstos tienen que ser un número entero.";
+  if (!lista.length) return "";
   if (lista.some((a) => !a.nombre)) return "Hay un alimento sin nombre: ponle nombre o quítalo para poder confirmar.";
   if (dudosos.length) return `No entiendo ${dudosos.join(", ")}: corrígelo o quítalo para poder confirmar.`;
   if (malos.length) return `Revisa la cantidad, las kcal o el día de ${malos.join(", ")}.`;
@@ -383,12 +503,17 @@ async function interpretar(evento) {
   }
   mensaje("");
   revision = {
-    texto, hoy: hoyISO,
-    original: JSON.stringify(datos.alimentos), alimentos: datos.alimentos,
+    texto, hoy: hoyISO, alimentos: datos.alimentos, peso: datos.peso ?? null,
+    objetivo: datos.objetivo_dia ?? null, dudosas: datos.dudosas ?? [],
   };
+  revision.original = huella(revision);
+  $("confirmar").disabled = false; // a new review starts usable, also after an earlier confirmation
   pintarRevision();
   $("revision").scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+// What was interpreted, to tell later whether Andrés changed anything before confirming.
+const huella = (r) => JSON.stringify([r.alimentos, r.peso, r.objetivo, r.dudosas]);
 
 async function confirmar() {
   for (const leer of lectores) leer();
@@ -396,8 +521,8 @@ async function confirmar() {
   $("confirmar").disabled = true;
   const alimentos = revision.alimentos.map(({ anadida, ...a }) => a);
   const { ok, datos } = await api("/api/confirmar", {
-    texto: revision.texto, alimentos,
-    sin_cambios: JSON.stringify(revision.alimentos) === revision.original,
+    texto: revision.texto, alimentos, peso: revision.peso, objetivo_dia: revision.objetivo,
+    dudosas: revision.dudosas, sin_cambios: huella(revision) === revision.original,
   });
   if (!ok) {
     mensaje(datos.error ?? "No se ha podido guardar.", "error");
@@ -405,6 +530,8 @@ async function confirmar() {
     return;
   }
   const partes = ["Guardado."];
+  if (datos.peso) partes.push(`Peso ${kilos.format(datos.peso.kg)} kg (${nombreDelDia(datos.peso.dia).toLowerCase()}).`);
+  if (datos.objetivo_dia) partes.push(`Objetivo del día: ${datos.objetivo_dia.tipo ?? "guardado"}.`);
   const planeados = datos.guardados.filter((a) => a.estado === "planeado");
   if (planeados.length) partes.push(`Planeado: ${planeados.map((a) => `${a.nombre} (${deFecha(a.dia)})`).join(", ")}.`);
   const pendientes = datos.guardados.filter((a) => a.pendiente_cantidad);

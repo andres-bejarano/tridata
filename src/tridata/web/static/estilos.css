@@ -135,3 +135,15 @@ button.cambiar { flex-shrink: 0; min-height: 44px; font-size: 0.95rem; }
 .fila.dos { grid-template-columns: 1fr 1fr; }
 .pregunta { border-color: var(--alerta); }
 .fuerte { margin: 0; font-weight: 600; }
+
+/* Weight of the day, objective of the day and their review cards (unit 007). */
+.margenes { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 1fr; }
+.margen.objetivo { border-color: var(--bien); border-width: 2px; }
+.margen .marca-objetivo { display: block; font-size: 0.72rem; color: var(--bien); font-weight: 600; }
+.bloque-peso { margin-top: 12px; }
+.bloque-peso p { margin: 2px 0; }
+.peso-dia { font-weight: 600; font-variant-numeric: tabular-nums; }
+.objetivo-dia { margin: 8px 0 4px; font-size: 0.95rem; }
+.tarjeta .titulo-pieza { margin: 0; font-weight: 600; }
+.tarjeta.pieza { border-color: var(--acento); }
+.tarjeta .frase { margin: 0; font-style: italic; }

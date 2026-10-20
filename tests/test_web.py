@@ -394,3 +394,265 @@ def test_cmd_web_siembra_de_env_una_sola_vez(tmp_path, monkeypatch):  # R10
     monkeypatch.delenv("TRIDATA_BASAL_KCAL")
     monkeypatch.delenv("TRIDATA_KCAL_POR_PASO")
     assert cli._cmd_web("127.0.0.1", 8765, db_path=db) == 0  # .env no longer needed
+
+
+# == unit 007: weight of the day and "nuevo día" in one message =============================
+# "Today" is Tuesday 2026-03-10. Settings since always: 175 cm, 40 years, basal 1600 by hand,
+# 0.04 kcal/step, 10,000 steps. All weights are invented.
+
+HOY7 = date(2026, 3, 10)
+AYER7 = HOY7 - timedelta(days=1)
+TABLAS7 = ("alimento_apuntado", "interpretacion", "peso_dia", "objetivo_dia")
+
+
+@pytest.fixture
+def dia7(tmp_path):
+    from tridata.nutricion import ObjetivosDia, RegistroPeso
+
+    db = tmp_path / "data.sqlite3"
+    registro = RegistroComidas(db)
+    ajustes = Ajustes(db)
+    ajustes.cambiar({"altura_cm": 175, "edad": 40, "basal_kcal": 1600, "kcal_por_paso": 0.04,
+                     "pasos_por_defecto": 10000}, desde=DESDE_SIEMPRE)
+    interprete = MagicMock()
+    cliente = TestClient(crear_app(registro, interprete, ajustes, hoy=lambda: HOY7))  # pesos/objetivos by default
+    env = SimpleEnv(cliente, interprete, db)
+    env.ajustes, env.pesos, env.objetivos = ajustes, RegistroPeso(db), ObjetivosDia(db)
+    return env
+
+
+def _piezas7(alimentos=(), peso=None, objetivo=None, dudosas=()):
+    from tridata.ia import ListaInterpretada, ObjetivoDiaInterpretado, PesoInterpretado
+
+    return ListaInterpretada(
+        alimentos=list(alimentos),
+        peso=PesoInterpretado(**{"dia": HOY7, "nota": None, **peso}) if peso else None,
+        objetivo_dia=ObjetivoDiaInterpretado(**{"tipo": None, "porcentaje": None, "niveles": None, "entreno": None,
+                                                "pasos": None, **objetivo}) if objetivo else None,
+        dudosas=list(dudosas),
+    )
+
+
+def _cuentas(env):
+    return {t: env.filas(t) for t in TABLAS7}
+
+
+def _confirmar7(env, **cuerpo):
+    return env.cliente.post("/api/confirmar", json={"texto": "x", "sin_cambios": True, **cuerpo})
+
+
+def _comida7(nombre, **campos):
+    return _json(nombre, dia=HOY7, **campos)
+
+
+def test_nuevo_dia_se_ve_junto_y_no_guarda_nada(dia7):  # R6
+    porridge = _item("porridge", cantidad=None, unidad=None, kcal=None, dia=HOY7)
+    dia7.interprete.interpretar.return_value = _piezas7(
+        [porridge], peso={"kg": 70.2}, objetivo={"tipo": "descanso", "entreno": "30 min suaves"})
+    texto = "nuevo día 70,2, descanso, 30 minutos suaves, desayuno porridge"
+
+    r = dia7.cliente.post("/api/interpretar", json={"texto": texto})
+
+    assert r.status_code == 200
+    cuerpo = r.json()
+    assert cuerpo["peso"] == {"kg": 70.2, "dia": "2026-03-10", "nota": None}
+    assert cuerpo["objetivo_dia"]["tipo"] == "descanso" and cuerpo["objetivo_dia"]["entreno"] == "30 min suaves"
+    assert [a["nombre"] for a in cuerpo["alimentos"]] == ["porridge"]
+    assert cuerpo["alimentos"][0]["cantidad"] is None
+    assert cuerpo["dudosas"] == []
+    assert _cuentas(dia7) == dict.fromkeys(TABLAS7, 0)
+
+
+def test_solo_comida_sigue_igual_con_piezas_vacias(dia7):  # R10
+    dia7.interprete.interpretar.return_value = [_item("yogur", dia=HOY7)]  # an interpreter that only knows foods
+    cuerpo = dia7.cliente.post("/api/interpretar", json={"texto": "un yogur"}).json()
+    assert [a["nombre"] for a in cuerpo["alimentos"]] == ["yogur"]
+    assert cuerpo["peso"] is None and cuerpo["objetivo_dia"] is None and cuerpo["dudosas"] == []
+
+    r = _confirmar7(dia7, alimentos=[_comida7("yogur", kcal=80)])
+    assert r.status_code == 200
+    assert r.json()["dia"]["total_kcal"] == 80
+    assert _cuentas(dia7) == {"alimento_apuntado": 1, "interpretacion": 1, "peso_dia": 0, "objetivo_dia": 0}
+
+
+def test_confirmar_nuevo_dia_guarda_cada_pieza_en_su_sitio(dia7):  # R6, R7, R10
+    r = _confirmar7(
+        dia7, sin_cambios=False,
+        peso={"kg": 70.1, "dia": "2026-03-10", "nota": None},
+        objetivo_dia={"tipo": "descanso", "porcentaje": None, "niveles": None, "entreno": "30 min suaves", "pasos": None},
+        alimentos=[_comida7("porridge", cantidad=None, unidad=None, kcal=None)],
+    )
+    assert r.status_code == 200
+    cuerpo = r.json()
+    assert cuerpo["peso"]["kg"] == 70.1
+    assert cuerpo["objetivo_dia"]["tipo"] == "descanso"
+    dia = cuerpo["dia"]
+    assert dia["peso"]["del_dia"]["kg"] == 70.1
+    assert dia["objetivo_dia"]["entreno"] == "30 min suaves"
+    assert [p["nombre"] for p in dia["pendientes"]] == ["porridge"]
+    assert _cuentas(dia7) == {"alimento_apuntado": 1, "interpretacion": 1, "peso_dia": 1, "objetivo_dia": 1}
+    assert RegistroComidas(dia7.db).interpretaciones()[0]["confirmada_sin_cambios"] is False
+
+
+def test_peso_de_hoy_se_sustituye(dia7):  # R1 (criterio portante), R2
+    assert _confirmar7(dia7, peso={"kg": 70.4, "dia": "2026-03-10", "nota": None}).status_code == 200
+    r = _confirmar7(dia7, peso={"kg": 70.2, "dia": "2026-03-10", "nota": "retención tras la cena"})
+    assert r.status_code == 200
+    assert r.json()["dia"]["peso"]["del_dia"] == {"dia": "2026-03-10", "kg": 70.2, "nota": "retención tras la cena"}
+    assert dia7.filas("peso_dia") == 1
+
+    assert _confirmar7(dia7, peso={"kg": 70.5, "dia": "2026-03-09", "nota": None}).status_code == 200
+    assert dia7.pesos.del_dia(AYER7)["kg"] == 70.5
+    assert dia7.pesos.del_dia(HOY7)["kg"] == 70.2
+
+
+def test_solo_peso_deja_su_interpretacion(dia7):  # R10
+    r = _confirmar7(dia7, texto="peso 70,2", sin_cambios=True, peso={"kg": 70.2, "dia": "2026-03-10", "nota": None})
+    assert r.status_code == 200
+    assert r.json()["guardados"] == []
+    (interpretacion,) = RegistroComidas(dia7.db).interpretaciones()
+    assert interpretacion["texto"] == "peso 70,2" and interpretacion["confirmada_sin_cambios"] is True
+
+
+def test_objetivo_del_dia_entra_en_el_margen(dia7):  # R7
+    r = _confirmar7(dia7, objetivo_dia={"tipo": "entreno", "porcentaje": -15, "niveles": [-15, 0],
+                                        "entreno": "30 min suaves", "pasos": 8000})
+    assert r.status_code == 200
+    dia = r.json()["dia"]
+    assert dia["gasto"]["kcal"] == 1920
+    assert [(m["nivel"], m["kcal"], m.get("objetivo", False)) for m in dia["margenes"]] == [
+        (-15, 1632, True), (0, 1920, False)]
+    assert dia["gasto"]["entreno_previsto"] == "30 min suaves"
+    assert "no suma" in dia["gasto"]["explicacion"]
+    assert dia["peso"]["basal"]["origen"] == "ajustes" and dia["peso"]["basal"]["kcal"] == 1600
+
+    _confirmar7(dia7, objetivo_dia={"tipo": "descanso"})  # the last one wins; no % keeps only the type
+    dia = _dia(dia7)
+    assert dia["objetivo_dia"]["tipo"] == "descanso" and dia["objetivo_dia"]["porcentaje"] is None
+    assert dia7.filas("objetivo_dia") == 1
+    assert [m["nivel"] for m in dia["margenes"]] == [-10, 0, 10]
+    assert dia["gasto"]["kcal"] == 2000
+
+    ayer = _dia(dia7, AYER7)  # a day without objective, as before
+    assert ayer["objetivo_dia"] is None
+    assert [m["nivel"] for m in ayer["margenes"]] == [-10, 0, 10] and ayer["gasto"]["pasos"] == 10000
+
+
+def test_una_dudosa_bloquea_y_al_quitarla_se_guarda_el_resto(dia7):  # R8
+    piezas = {"peso": {"kg": 70.2, "dia": "2026-03-10", "nota": None}}
+    r = _confirmar7(dia7, dudosas=["lo del martes ya sabes"], **piezas)
+    assert r.status_code == 422
+    assert "lo del martes ya sabes" in r.json()["error"]
+    assert _cuentas(dia7) == dict.fromkeys(TABLAS7, 0)
+
+    r = _confirmar7(dia7, dudosas=[], **piezas)
+    assert r.status_code == 200
+    assert _cuentas(dia7) == {"alimento_apuntado": 0, "interpretacion": 1, "peso_dia": 1, "objetivo_dia": 0}
+
+
+def test_confirmar_sin_ninguna_pieza_se_rechaza(dia7):
+    r = _confirmar7(dia7, alimentos=[], peso=None, objetivo_dia=None)
+    assert r.status_code == 400
+    assert _cuentas(dia7) == dict.fromkeys(TABLAS7, 0)
+
+
+@pytest.mark.parametrize(("piezas", "motivo"), [
+    ({"peso": {"kg": 0, "dia": "2026-03-10", "nota": None}}, "el peso tiene que estar entre 30 y 250 kg"),
+    ({"peso": {"kg": 300, "dia": "2026-03-10", "nota": None}}, "el peso tiene que estar entre 30 y 250 kg"),
+    ({"peso": {"kg": 70.2, "dia": "2026-03-11", "nota": None}}, "peso"),
+    ({"objetivo_dia": {"tipo": "entreno", "porcentaje": "mucho"}}, "%"),
+    ({"objetivo_dia": {"tipo": "entreno", "pasos": "muchos"}}, "pasos"),
+])
+def test_todo_o_nada(dia7, piezas, motivo):  # R11
+    cuerpo = {"peso": {"kg": 70.2, "dia": "2026-03-10", "nota": None},
+              "objetivo_dia": {"tipo": "entreno", "porcentaje": -15}, **piezas}
+    r = _confirmar7(dia7, alimentos=[_comida7("pan", kcal=250)], **cuerpo)
+    assert 400 <= r.status_code < 500
+    assert motivo in r.json()["error"]
+    assert _cuentas(dia7) == dict.fromkeys(TABLAS7, 0)
+
+
+def test_todo_o_nada_con_un_alimento_malo(dia7):  # R11
+    r = _confirmar7(dia7, peso={"kg": 70.2, "dia": "2026-03-10", "nota": None},
+                    alimentos=[_comida7("pan", kcal=None)])
+    assert 400 <= r.status_code < 500
+    assert _cuentas(dia7) == dict.fromkeys(TABLAS7, 0)
+
+
+def test_el_dia_trae_peso_media_basal_y_proyeccion(dia7):  # R3, R4, R5
+    for dia, kg in ((3, 75.0), (4, 71.0), (5, 70.8), (7, 70.6), (8, 70.4), (9, 70.2), (10, 70.0)):
+        dia7.pesos.apuntar(date(2026, 3, dia), kg)
+    dia7.ajustes.cambiar({"objetivo_peso": {"kg": 68.0, "fecha": "2026-05-19"}}, desde=DESDE_SIEMPRE)
+
+    dia = _dia(dia7)
+    peso = dia["peso"]
+    assert peso["del_dia"]["kg"] == 70.0
+    assert peso["media_7_dias"] == {"kg": 70.5, "dias_con_peso": 6}
+    assert (peso["basal"]["kcal"], peso["basal"]["origen"]) == (1599, "peso")
+    assert dia["gasto"]["kcal"] == 1999 and dia["gasto"]["basal_kcal"] == 1599
+    assert "Mifflin" in dia["gasto"]["explicacion"]
+    assert peso["proyeccion"]["faltan_kg"] == 2.5 and peso["proyeccion"]["kg_por_semana"] == 0.25
+
+    _confirmar7(dia7, peso={"kg": 70.2, "dia": "2026-03-10", "nota": None})  # corrected: basal 1601
+    assert _dia(dia7)["peso"]["basal"]["kcal"] == 1601
+
+
+def test_el_dia_sin_hoy_usa_el_ultimo_anterior_y_sin_objetivo_no_proyecta(dia7):  # R4, R5
+    dia7.pesos.apuntar(date(2026, 3, 8), 70.0)
+    dia = _dia(dia7)
+    assert dia["peso"]["del_dia"] is None
+    assert dia["peso"]["basal"]["dia_del_peso"] == "2026-03-08" and dia["peso"]["basal"]["kcal"] == 1599
+    assert dia["peso"]["proyeccion"] is None
+    assert dia["peso"]["proyeccion_texto"] == "sin objetivo de peso"
+
+
+def test_el_dia_sin_pesos_lo_dice(dia7):  # R3, R4
+    dia = _dia(dia7)
+    assert dia["peso"]["media_7_dias"] is None and "sin" in dia["peso"]["media_texto"]
+    assert dia["peso"]["basal"]["origen"] == "ajustes"
+    assert dia["gasto"]["kcal"] == 2000
+    assert "a mano" in dia["gasto"]["explicacion"]
+
+
+def test_peticion_a_claude_sin_datos_guardados(tmp_path):  # R9
+    from tridata.ia import INSTRUCCION, InterpreteClaude, ListaInterpretada, PesoInterpretado
+    from tridata.nutricion import ObjetivosDia, RegistroPeso
+
+    db = tmp_path / "data.sqlite3"
+    ajustes = Ajustes(db)
+    ajustes.cambiar({"altura_cm": 175, "edad": 40, "basal_kcal": 1600, "kcal_por_paso": 0.04,
+                     "objetivo_peso": {"kg": 68.0, "fecha": "2026-05-19"}}, desde=DESDE_SIEMPRE)
+    RegistroPeso(db).apuntar(AYER7, 70.4)
+    ObjetivosDia(db).guardar(AYER7, {"tipo": "entreno", "porcentaje": -15})
+    claude = MagicMock()
+    claude.messages.parse.return_value = MagicMock(
+        parsed_output=ListaInterpretada(alimentos=[], peso=PesoInterpretado(kg=70.2, dia=HOY7, nota=None)),
+        stop_reason="end_turn")
+    cliente = TestClient(crear_app(RegistroComidas(db), InterpreteClaude(cliente=claude, modelo="m"), ajustes,
+                                   hoy=lambda: HOY7))
+
+    r = cliente.post("/api/interpretar", json={"texto": "peso 70,2"})
+
+    assert r.status_code == 200 and r.json()["peso"]["kg"] == 70.2
+    kwargs = claude.messages.parse.call_args.kwargs
+    assert kwargs["system"] == INSTRUCCION
+    assert kwargs["messages"] == [
+        {"role": "user", "content": "Hoy es martes, 2026-03-10.\n\nLo que ha escrito:\npeso 70,2"}]
+    enviado = repr(kwargs["messages"]) + kwargs["system"]
+    for dato in ("70,4", "70.4", "1600", "175", "68", "2026-05-19", "-15"):
+        assert dato not in enviado
+
+
+def test_cmd_web_crea_pesos_y_objetivos_en_la_misma_base(tmp_path, monkeypatch):
+    db = tmp_path / "data.sqlite3"
+    arrancado = MagicMock()
+    monkeypatch.setattr("uvicorn.run", arrancado)
+    monkeypatch.setenv("TRIDATA_BASAL_KCAL", "1600")
+    monkeypatch.setenv("TRIDATA_KCAL_POR_PASO", "0.04")
+    assert cli._cmd_web("127.0.0.1", 8765, db_path=db) == 0
+    app = TestClient(arrancado.call_args.args[0])
+    r = app.post("/api/confirmar", json={"texto": "peso 70,2", "sin_cambios": True,
+                                         "peso": {"kg": 70.2, "dia": date.today().isoformat(), "nota": None}})
+    assert r.status_code == 200
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT kg FROM peso_dia").fetchall() == [(70.2,)]

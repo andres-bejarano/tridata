@@ -23,9 +23,17 @@
       </nav>
     </header>
 
+    <section aria-labelledby="t-peso" class="bloque-peso">
+      <h2 id="t-peso" class="oculto">Peso</h2>
+      <p id="peso-dia" class="peso-dia"></p>
+      <p id="peso-media" class="suave"></p>
+      <p id="peso-proyeccion" class="suave"></p>
+    </section>
+
     <section aria-labelledby="t-margen">
       <h2 id="t-margen">Lo que te queda</h2>
       <div id="margenes" class="margenes"></div>
+      <p id="objetivo-dia" class="objetivo-dia" hidden></p>
       <p id="plan" class="suave"></p>
       <p id="gasto" class="suave"></p>
     </section>
@@ -45,6 +53,7 @@
     <section id="revision" aria-labelledby="t-revision" hidden>
       <h2 id="t-revision">Esto he entendido</h2>
       <p class="suave">Revísalo: corrige lo que haga falta y confirma. Hasta entonces no se guarda nada.</p>
+      <div id="piezas"></div>
       <div id="lista"></div>
       <button id="anadir-revision" type="button" class="anadir">Añadir alimento</button>
       <p id="bloqueo" class="aviso" hidden></p>
@@ -58,8 +67,8 @@
   </main>
 
   <form id="entrada">
-    <label for="texto" class="oculto">¿Qué has comido o vas a comer?</label>
-    <textarea id="texto" rows="2" placeholder="¿Qué has comido o vas a comer?" required></textarea>
+    <label for="texto" class="oculto">¿Qué has comido o vas a comer? También tu peso o «nuevo día…»</label>
+    <textarea id="texto" rows="2" placeholder="Comida, «peso 70,2» o «nuevo día…»" required></textarea>
     <button id="enviar" type="submit" class="principal">Interpretar</button>
   </form>
 </body>

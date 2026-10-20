@@ -23,6 +23,16 @@
       </nav>
     </header>
 
+    <section id="barra" class="barra" aria-label="Lo comido frente al objetivo del día">
+      <div class="barra-pista" id="barra-pista">
+        <div class="barra-relleno" id="barra-relleno"></div>
+        <div class="barra-limite" id="barra-limite" hidden></div>
+      </div>
+      <p class="barra-texto"><strong id="barra-pct"></strong> <span id="barra-quedan"></span></p>
+      <p id="barra-objetivo" class="suave"></p>
+      <p id="barra-aviso" class="aviso" hidden></p>
+    </section>
+
     <section aria-labelledby="t-peso" class="bloque-peso">
       <h2 id="t-peso" class="oculto">Peso</h2>
       <p id="peso-dia" class="peso-dia"></p>
@@ -36,6 +46,54 @@
       <p id="objetivo-dia" class="objetivo-dia" hidden></p>
       <p id="plan" class="suave"></p>
       <p id="gasto" class="suave"></p>
+      <div id="desglose" class="desglose"></div>
+      <div class="garmin">
+        <button id="actualizar-garmin" type="button">Actualizar Garmin</button>
+        <p id="garmin-estado" class="suave" role="status" aria-live="polite"></p>
+      </div>
+
+      <div id="controles-hoy" class="controles">
+        <details id="objetivo-hoy" class="tarjeta">
+          <summary>Objetivo de hoy</summary>
+          <p id="objetivo-actual" class="suave"></p>
+          <div class="fila dos">
+            <label class="campo"><span>% de hoy (con signo)</span>
+              <input id="objetivo-pct" type="text" inputmode="decimal" autocomplete="off"></label>
+            <button id="objetivo-mantenimiento" type="button">Mantenimiento</button>
+          </div>
+          <div class="acciones">
+            <button id="objetivo-guardar" type="button" class="principal">Cambiar el de hoy</button>
+            <button id="objetivo-plan" type="button">Volver al plan</button>
+          </div>
+          <p id="retraso" class="fuerte" hidden></p>
+          <p id="objetivo-error" class="aviso" hidden></p>
+        </details>
+
+        <details id="niveles" class="tarjeta">
+          <summary>Niveles de margen de hoy</summary>
+          <label class="campo"><span>De 1 a 5 niveles, entre −50 y +50 % (separa con ;)</span>
+            <input id="niveles-texto" type="text" inputmode="text" autocomplete="off"></label>
+          <div class="acciones">
+            <button id="niveles-guardar" type="button" class="principal">Usar estos hoy</button>
+            <button id="niveles-defecto" type="button">−10 / 0 / +10</button>
+          </div>
+          <p id="niveles-error" class="aviso" hidden></p>
+        </details>
+
+        <details id="previsto" class="tarjeta">
+          <summary>Entreno previsto</summary>
+          <p id="previsto-actual" class="suave"></p>
+          <label class="campo"><span>Como este entreno (últimos 14 días)</span>
+            <select id="previsto-actividad"></select></label>
+          <label class="campo"><span>Minutos que harás</span>
+            <input id="previsto-minutos" type="number" inputmode="numeric" min="1" max="600" step="1"></label>
+          <div class="acciones">
+            <button id="previsto-guardar" type="button" class="principal">Poner previsto</button>
+            <button id="previsto-quitar" type="button">Quitar (ya hecho)</button>
+          </div>
+          <p id="previsto-error" class="aviso" hidden></p>
+        </details>
+      </div>
     </section>
 
     <section aria-labelledby="t-comido">
@@ -54,6 +112,7 @@
       <h2 id="t-revision">Esto he entendido</h2>
       <p class="suave">Revísalo: corrige lo que haga falta y confirma. Hasta entonces no se guarda nada.</p>
       <div id="piezas"></div>
+      <div id="simulacion" class="tarjeta simulacion" hidden></div>
       <div id="lista"></div>
       <button id="anadir-revision" type="button" class="anadir">Añadir alimento</button>
       <p id="bloqueo" class="aviso" hidden></p>

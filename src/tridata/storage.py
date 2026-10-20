@@ -448,6 +448,24 @@ class DataStore:
             result.append(activity)
         return result
 
+    def activities_between(self, start: date, end: date) -> list[dict]:
+        """Payloads of the activities with `activity_date` in [start, end], oldest first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM activities WHERE activity_date BETWEEN ? AND ? "
+                "ORDER BY activity_date, activity_id",
+                (start.isoformat(), end.isoformat()),
+            ).fetchall()
+        return [json.loads(r[0]) for r in rows]
+
+    def daily_stats_on(self, day: date) -> dict | None:
+        """Payload of the daily stats of `day`, or None if that day was never synced."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM daily_stats WHERE stat_date = ?", (day.isoformat(),)
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
     def export_all(self) -> dict:
         """Dump everything in the store, keyed by category, oldest-first."""
         def _rows(conn, sql):

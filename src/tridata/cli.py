@@ -33,6 +33,7 @@ import logging
 import os
 import shutil
 import sys
+from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -298,6 +299,23 @@ def _cmd_backup(store: DataStore, dest_root: Path, keep: int, extras: list[Path]
     return 0
 
 
+def _actualizador_garmin(store: DataStore, entorno: Mapping[str, str] | None = None) -> Callable[[date], None] | None:
+    """The «Actualizar Garmin» button: the same sync as `tridata sync`, for one day only.
+
+    `revalidate_days=1` fetches today again even if it already has a row. Nothing talks to Garmin
+    until it is called. None without GARMIN_EMAIL / GARMIN_PASSWORD (the button says so).
+    """
+    entorno = os.environ if entorno is None else entorno
+    email, password = entorno.get("GARMIN_EMAIL"), entorno.get("GARMIN_PASSWORD")
+    if not email or not password:
+        return None
+
+    def actualizar(dia: date) -> None:
+        SyncService(GarminClient(email, password), store).sync(since=dia, until=dia, revalidate_days=1)
+
+    return actualizar
+
+
 def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
     try:
         import uvicorn
@@ -318,8 +336,10 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
         print(exc, file=sys.stderr)
         return 1
 
+    store = DataStore(db_path)
     app = crear_app(RegistroComidas(db_path), InterpreteClaude(), ajustes,
-                    pesos=RegistroPeso(db_path), objetivos=ObjetivosDia(db_path))
+                    pesos=RegistroPeso(db_path), objetivos=ObjetivosDia(db_path),
+                    store=store, actualizar_garmin=_actualizador_garmin(store))
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(f"Warning: listening on {host}, reachable from outside this PC.", file=sys.stderr)
     print(f"TriData web on http://{host}:{port} (Ctrl+C to stop)")

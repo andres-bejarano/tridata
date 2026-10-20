@@ -656,3 +656,253 @@ def test_cmd_web_crea_pesos_y_objetivos_en_la_misma_base(tmp_path, monkeypatch):
     assert r.status_code == 200
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT kg FROM peso_dia").fetchall() == [(70.2,)]
+
+
+# == unit 008: the full margin of today ====================================================
+# "Today" is Tuesday 2026-03-10. Settings since always: basal 1600 by hand, no weight, 0.04
+# kcal/step, 10,000 steps, no plan unless said. Garmin rows are invented and saved in a
+# temporary SQLite through `DataStore`; Garmin itself is never called.
+
+HOY8 = date(2026, 3, 10)
+TABLAS8 = ("alimento_apuntado", "interpretacion", "objetivo_dia", "activities", "daily_stats")
+
+
+@pytest.fixture
+def dia8(tmp_path):
+    from tridata.nutricion import ObjetivosDia
+    from tridata.storage import DataStore
+
+    db = tmp_path / "data.sqlite3"
+    registro = RegistroComidas(db)
+    ajustes = Ajustes(db)
+    ajustes.cambiar({"basal_kcal": 1600, "kcal_por_paso": 0.04, "pasos_por_defecto": 10000}, desde=DESDE_SIEMPRE)
+    store = DataStore(db)
+    interprete = MagicMock()
+    cliente = TestClient(crear_app(registro, interprete, ajustes, hoy=lambda: HOY8, store=store))
+    env = SimpleEnv(cliente, interprete, db)
+    env.ajustes, env.store, env.registro, env.objetivos = ajustes, store, registro, ObjetivosDia(db)
+    return env
+
+
+def _garmin8(env, pasos=None, actividades=()):
+    from tridata.models import DailyStats
+
+    if pasos is not None:
+        env.store.save_daily_stats(DailyStats(stat_date=HOY8, steps=pasos, total_calories=1234))
+    if actividades:
+        env.store.save_activities(list(actividades))
+
+
+def _act8(id_, tipo, kcal, minutos, dia=HOY8, cadencia=None, nombre=None):
+    from tridata.models import Activity
+
+    return Activity(activity_id=id_, activity_date=dia, activity_type=tipo, name=nombre or tipo,
+                    duration_seconds=minutos * 60, calories=kcal, avg_cadence=cadencia)
+
+
+def _comer8(env, kcal, dia=HOY8):
+    r = env.cliente.post("/api/confirmar", json={"texto": "x", "sin_cambios": True,
+                                                 "alimentos": [_json("comida", dia=dia, kcal=kcal)]})
+    assert r.status_code == 200
+    return r.json()["dia"]
+
+
+def _cuentas8(env):
+    return {t: env.filas(t) for t in TABLAS8}
+
+
+def test_dia_con_garmin_trae_gasto_desglose_niveles_y_barra(dia8):  # R1, R11
+    _garmin8(dia8, pasos=4000, actividades=[_act8("n1", "lap_swimming", 300, 45, nombre="Natación")])
+    dia8.objetivos.cambiar(HOY8, niveles=[-20, -15])
+    _comer8(dia8, 1000)
+
+    dia = _dia(dia8)
+    assert dia["gasto"]["kcal"] == 2300
+    d = dia["gasto"]["desglose"]
+    assert (d["basal_kcal"], d["pasos_hechos"], d["pasos_supuestos"], d["kcal_por_paso"]) == (1600, 4000, 6000, 0.04)
+    assert [(a["nombre"], a["kcal"]) for a in d["entreno_hecho"]] == [("Natación", 300)]
+    assert d["previsto"] is None
+    assert [(m["nivel"], m["kcal"]) for m in dia["margenes"]] == [(-20, 840), (-15, 955)]
+    assert dia["gasto"]["garmin"]["hay_datos"] is True
+    assert dia["objetivo"]["origen"] == "sin_plan" and "mantenimiento" in dia["objetivo"]["texto"]
+    assert dia["barra"]["objetivo_kcal"] == 2300 and dia["barra"]["quedan_kcal"] == 1300
+
+
+def test_dia_con_pasos_incompletos_avisa(dia8):  # R3
+    _garmin8(dia8, pasos=3000, actividades=[_act8("c1", "running", 400, 30, cadencia=170)])
+    dia = _dia(dia8)
+    assert dia["gasto"]["kcal"] == 2400
+    assert any("incompleto" in a for a in dia["gasto"]["avisos"])
+
+
+def test_dia_sin_garmin_lo_dice(dia8):  # R4
+    dia = _dia(dia8)
+    assert dia["gasto"]["kcal"] == 2000
+    assert "sin datos de Garmin de hoy" in dia["gasto"]["garmin"]["texto"]
+
+
+def test_niveles_desde_la_web_solo_para_hoy(dia8):  # R6
+    assert [m["nivel"] for m in _dia(dia8)["margenes"]] == [-10, 0, 10]
+    r = dia8.cliente.post("/api/dia/objetivo", json={"niveles": [-20, -15, 0]})
+    assert r.status_code == 200
+    assert [m["nivel"] for m in r.json()["dia"]["margenes"]] == [-20, -15, 0]
+    r = dia8.cliente.post("/api/dia/objetivo", json={"niveles": [-30]})  # changed again the same day
+    assert [m["nivel"] for m in r.json()["dia"]["margenes"]] == [-30]
+    assert dia8.filas("objetivo_dia") == 1
+    manana = _dia(dia8, HOY8 + timedelta(days=1))
+    assert [m["nivel"] for m in manana["margenes"]] == [-10, 0, 10]
+
+
+@pytest.mark.parametrize("cuerpo", [
+    {"niveles": [-60]}, {"niveles": [-20, 55]}, {"niveles": []}, {"niveles": [1, 2, 3, 4, 5, 6]},
+    {"niveles": "mucho"}, {"porcentaje": 70}, {"nada": 1}, {},
+])
+def test_objetivo_no_valido_no_cambia_nada(dia8, cuerpo):  # R6
+    dia8.cliente.post("/api/dia/objetivo", json={"niveles": [-20, -15]})
+    r = dia8.cliente.post("/api/dia/objetivo", json=cuerpo)
+    assert 400 <= r.status_code < 500
+    assert dia8.objetivos.del_dia(HOY8)["niveles"] == [-20, -15]
+
+
+def test_cambiar_el_objetivo_de_hoy_y_los_dias_de_retraso(dia8):  # R7
+    dia8.ajustes.cambiar({"objetivo_pct": -20, "limite_saludable_pct": 25,
+                          "objetivo_peso": {"kg": 68.0, "fecha": "2026-03-30"}}, desde=DESDE_SIEMPRE)
+    antes = _dia(dia8)
+    assert antes["objetivo"]["porcentaje"] == -20 and antes["objetivo"]["origen"] == "plan"
+    assert antes["objetivo"]["retraso"] is None
+
+    r = dia8.cliente.post("/api/dia/objetivo", json={"porcentaje": 0})
+    assert r.status_code == 200
+    dia = r.json()["dia"]
+    assert dia["objetivo"]["porcentaje"] == 0 and dia["barra"]["objetivo_kcal"] == 2000
+    assert dia["objetivo"]["retraso"]["dias"] == 1
+    assert dia["objetivo"]["retraso"]["texto"] == "llegas al objetivo 1 día más tarde"
+    assert dia8.ajustes.vigentes(HOY8).objetivo_pct == -20  # the plan does not change
+    assert _dia(dia8, HOY8 + timedelta(days=1))["objetivo"]["porcentaje"] == -20
+
+    r = dia8.cliente.post("/api/dia/objetivo", json={"porcentaje": -10})
+    assert r.json()["dia"]["objetivo"]["retraso"]["dias"] == 0.5
+    r = dia8.cliente.post("/api/dia/objetivo", json={"porcentaje": -30})
+    assert r.json()["dia"]["objetivo"]["retraso"]["texto"] == "llegas al objetivo 0,5 días antes"
+    assert r.json()["dia"]["barra"]["limite"]["superado"] is True  # R12: -30 % is past the 25 % limit
+
+
+def test_cambiar_objetivo_sin_objetivo_de_peso_no_da_dias(dia8):  # R7
+    dia8.ajustes.cambiar({"objetivo_pct": -20}, desde=DESDE_SIEMPRE)
+    r = dia8.cliente.post("/api/dia/objetivo", json={"porcentaje": 0})
+    assert r.status_code == 200
+    assert r.json()["dia"]["objetivo"]["porcentaje"] == 0
+    assert r.json()["dia"]["objetivo"]["retraso"] is None
+
+
+def test_ayer_no_cuenta_en_el_margen_de_hoy(dia8):  # R8
+    _comer8(dia8, 3000, dia=HOY8 - timedelta(days=1))  # a past day is saved as eaten
+    dia = _dia(dia8)
+    assert dia["total_kcal"] == 0 and [m["kcal"] for m in dia["margenes"]] == [1800, 2000, 2200]
+
+
+def test_barra_se_actualiza_al_confirmar_cambiar_y_borrar(dia8):  # R11
+    dia = _comer8(dia8, 1500)
+    assert dia["barra"]["pct"] == 75 and dia["barra"]["texto"] == "quedan 500 kcal"
+    (comida,) = dia8.registro.apuntes_del_dia(HOY8)
+    r = dia8.cliente.post(f"/api/alimento/{comida['id']}", json={"nombre": "comida", "cantidad": 100, "unidad": "g",
+                                                                  "kcal": 2200})
+    assert r.json()["dia"]["barra"]["pct"] == 110 and r.json()["dia"]["barra"]["texto"] == "te has pasado 200 kcal"
+    r = dia8.cliente.post(f"/api/alimento/{comida['id']}/borrar", json={"confirmado": True})
+    assert r.json()["dia"]["barra"]["pct"] == 0
+
+
+def test_limite_saludable_en_la_barra(dia8):  # R12
+    dia8.ajustes.cambiar({"limite_saludable_pct": 25, "objetivo_pct": -20}, desde=DESDE_SIEMPRE)
+    dia = _dia(dia8)
+    assert dia["barra"]["limite"]["kcal"] == 1500 and dia["barra"]["limite"]["superado"] is False
+    sin = Ajustes(dia8.db)
+    sin.cambiar({"objetivo_pct": 0}, desde=HOY8)  # still a limit: maintenance does not pass it
+    assert _dia(dia8)["barra"]["limite"]["superado"] is False
+
+
+def test_simular_no_guarda_nada(dia8):  # R10
+    _garmin8(dia8, pasos=4000, actividades=[_act8("n1", "lap_swimming", 300, 45)])
+    dia8.objetivos.cambiar(HOY8, niveles=[-20, -15])
+    _comer8(dia8, 1000)
+    antes = _cuentas8(dia8)
+
+    lista = [_json("arroz", dia=HOY8, cantidad=200, kcal=300), _json("pollo", dia=HOY8, cantidad=150, kcal=200)]
+    r = dia8.cliente.post("/api/simular", json={"alimentos": lista})
+
+    assert r.status_code == 200
+    cuerpo = r.json()
+    assert cuerpo["kcal_lista"] == 500
+    assert [(m["nivel"], m["kcal"]) for m in cuerpo["margenes"]] == [(-20, 340), (-15, 455)]
+    assert cuerpo["barra"]["comido_kcal"] == 1500
+    assert _cuentas8(dia8) == antes
+    assert _dia(dia8)["total_kcal"] == 1000
+
+
+def test_cuanto_me_cabe_desde_la_web(dia8):  # R9
+    _comer8(dia8, 1600)  # margin 400 kcal for maintenance (no plan) with an expenditure of 2000
+    antes = _cuentas8(dia8)
+    pasta = _json("pasta seca", dia=HOY8, cantidad=100, unidad="g", kcal=360)
+    r = dia8.cliente.post("/api/simular", json={"alimentos": [pasta]})
+    assert r.status_code == 200
+    (cabe,) = r.json()["caben"]
+    assert cabe["cantidad"] == 111 and cabe["unidad"] == "g"
+    assert _cuentas8(dia8) == antes
+
+    _comer8(dia8, 400)  # margin 0
+    (cabe,) = dia8.cliente.post("/api/simular", json={"alimentos": [pasta]}).json()["caben"]
+    assert cabe["cantidad"] == 0 and cabe["texto"] == "no te cabe hoy"
+
+
+def test_simular_con_datos_malos_se_rechaza(dia8):
+    r = dia8.cliente.post("/api/simular", json={"alimentos": "pan"})
+    assert r.status_code == 400
+
+
+def test_previsto_desde_la_web(dia8):  # R5
+    hace3 = HOY8 - timedelta(days=3)
+    hace20 = HOY8 - timedelta(days=20)
+    _garmin8(dia8, actividades=[_act8("l1", "running", 350, 35, dia=hace3, nombre="Rodaje"),
+                                _act8("v1", "running", 500, 50, dia=hace20, nombre="Viejo")])
+
+    recientes = dia8.cliente.get("/api/actividades-recientes").json()["actividades"]
+    assert [a["actividad_id"] for a in recientes] == ["l1"]
+    assert recientes[0]["minutos"] == 35 and recientes[0]["kcal"] == 350
+
+    r = dia8.cliente.post("/api/dia/objetivo", json={"previsto": {"actividad_id": "v1", "minutos": 30}})
+    assert 400 <= r.status_code < 500
+    assert dia8.objetivos.del_dia(HOY8) is None
+
+    sin = _dia(dia8)["gasto"]["kcal"]
+    r = dia8.cliente.post("/api/dia/objetivo", json={"previsto": {"actividad_id": "l1", "minutos": 30}})
+    assert r.status_code == 200
+    dia = r.json()["dia"]
+    assert dia["gasto"]["kcal"] == sin + 300
+    assert dia["gasto"]["desglose"]["previsto"]["nombre"] == "Rodaje"
+    assert dia["gasto"]["desglose"]["previsto_kcal"] == 300
+
+    r = dia8.cliente.post("/api/dia/objetivo", json={"previsto": None})
+    assert r.json()["dia"]["gasto"]["kcal"] == sin
+
+
+@pytest.mark.parametrize("previsto", [{"actividad_id": "l1", "minutos": 0}, {"actividad_id": "l1"},
+                                      {"actividad_id": "nada", "minutos": 30}, "rodaje"])
+def test_previsto_no_valido_no_cambia_nada(dia8, previsto):  # R5
+    _garmin8(dia8, actividades=[_act8("l1", "running", 350, 35, dia=HOY8 - timedelta(days=3))])
+    r = dia8.cliente.post("/api/dia/objetivo", json={"previsto": previsto})
+    assert 400 <= r.status_code < 500
+    assert dia8.objetivos.del_dia(HOY8) is None
+
+
+def test_sin_store_el_dia_es_sin_garmin_y_lo_de_antes_sigue(entorno):  # R4
+    dia = _dia(entorno)
+    assert dia["gasto"]["kcal"] == 2000
+    assert "sin datos de Garmin" in dia["gasto"]["garmin"]["texto"]
+    assert entorno.cliente.get("/api/actividades-recientes").json()["actividades"] == []
+
+
+def test_la_pantalla_tiene_barra_boton_y_niveles(dia8):
+    html = dia8.cliente.get("/").text
+    for ident in ('id="barra"', 'id="actualizar-garmin"', 'id="niveles"', 'id="desglose"', 'id="previsto"',
+                  'id="objetivo-hoy"'):
+        assert ident in html

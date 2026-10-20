@@ -147,3 +147,33 @@ button.cambiar { flex-shrink: 0; min-height: 44px; font-size: 0.95rem; }
 .tarjeta .titulo-pieza { margin: 0; font-weight: 600; }
 .tarjeta.pieza { border-color: var(--acento); }
 .tarjeta .frase { margin: 0; font-style: italic; }
+
+/* Full margin of today (unit 008): bar at the top, breakdown, Garmin button, today's controls. */
+.barra {
+  position: sticky; top: 0; z-index: 2; margin: 8px -16px 0; padding: 10px 16px;
+  background: var(--fondo); border-bottom: 1px solid var(--borde);
+}
+.barra-pista { position: relative; height: 18px; border-radius: 999px; background: var(--tarjeta); border: 1px solid var(--borde); overflow: hidden; }
+.barra-relleno { height: 100%; width: 0; background: var(--acento); transition: width 0.25s; }
+.barra.pasada .barra-relleno { background: var(--peligro); }
+.barra-limite { position: absolute; top: -2px; bottom: -2px; width: 3px; background: var(--alerta); }
+.barra-texto { margin: 6px 0 0; font-variant-numeric: tabular-nums; }
+.barra p.suave { margin: 2px 0 0; }
+.barra .aviso { margin: 6px 0 0; font-size: 0.9rem; }
+.desglose { display: grid; gap: 2px; margin: 6px 0; font-size: 0.9rem; }
+.desglose .linea { display: flex; justify-content: space-between; gap: 8px; }
+.desglose .linea span:last-child { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.desglose .aviso { margin: 4px 0 0; font-size: 0.9rem; }
+.garmin { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+.garmin p { flex: 1; min-width: 12em; }
+.garmin p.error { color: var(--error); }
+.controles { display: grid; gap: 8px; margin-top: 12px; }
+.controles details > summary { min-height: 44px; display: flex; align-items: center; font-weight: 600; cursor: pointer; }
+.controles .fila.dos { align-items: end; }
+select {
+  font: inherit; color: var(--texto); background: var(--fondo); border: 1px solid var(--borde);
+  border-radius: 10px; padding: 10px; width: 100%; min-height: 48px;
+}
+.simulacion { border-color: var(--acento); }
+.simulacion p { margin: 0; }
+.cabe { margin: 0; font-weight: 600; color: var(--acento); }

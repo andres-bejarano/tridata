@@ -17,6 +17,8 @@ se comprueba a sí mismo.
 | Correr la suite completa | `scripts/ci/full-suite` |
 | Correr los linters | `scripts/ci/lint` |
 | Lanzar una instancia para que la use el usuario (solo lectura: la carga de entreno CTL/ATL/TSB) | `tridata export-pmc --out /tmp/tridata-pmc.md` → se abre con `less /tmp/tridata-pmc.md` |
+| Instalar el dictado por voz (extra `voz`, en el entorno que corre `tridata web`) | `python -m pip install -e ".[voz]"` |
+| Prueba de humo del dictado con el modelo real en la GPU (fuera de la suite) | `PYTHONPATH=src python scripts/probar_dictado.py .runtime/<unidad>/audio.m4a --veces 10` |
 | Comprobación de seguridad | `scripts/ci/security` |
 | Todo seguido (lint, suite, seguridad) | `scripts/check.sh` |
 | Parar / limpiar | `rm -f /tmp/tridata-pmc.md && deactivate` (el entorno entero: `rm -rf ~/.venvs/tridata-dev`) |
@@ -45,6 +47,17 @@ PR, al entrar en `master` y cada lunes). Dependabot propone las actualizaciones.
 - El venv `~/.venvs/tridata-dev` con el extra `dev` (pytest, ruff, mypy, pip-audit, mcp).
   Instalado en editable, apunta al checkout desde el que se instaló: si ese worktree se
   borra, se reinstala con `~/.venvs/tridata-dev/bin/python -m pip install -e ".[dev]"`.
+- **Dictado por voz (opcional, extra `voz`)**: faster-whisper con `large-v3-turbo` en la GPU
+  (RTX 2060, 6 GB; driver con CUDA 12 o superior). Descarga ≈ 3 GB: ≈ 1,45 GB de librerías
+  (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, ctranslate2, PyAV) y ≈ 1,6 GB de modelo, que baja
+  solo a `~/.cache/huggingface` la primera vez. No hace falta CUDA del sistema, ni ffmpeg, ni
+  `LD_LIBRARY_PATH`: `ia/whisper.py` precarga cuBLAS y cuDNN desde el `site-packages` del entorno
+  (probado con faster-whisper 1.2.1, ctranslate2 4.8.3, av 18.1.0). El modelo se cambia con
+  `TRIDATA_MODELO_VOZ` en `.env`. Sin el extra, `tridata web` arranca igual, avisa de que el
+  dictado está desactivado y escribir sigue funcionando. No va en `dev`: la suite dobla el
+  transcriptor y ningún test carga el modelo. `scripts/probar_dictado.py` imprime dispositivo,
+  segundos de carga y de cada transcripción y el texto; el audio de prueba (frases inventadas)
+  va a `.runtime/` del meta-repo, nunca a este repo.
 - `gitleaks` 8.30.1 en `~/.local/bin` (que está en el `PATH`). Sin él, `scripts/ci/security`
   sale en rojo y dice qué instalar.
 

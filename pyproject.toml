@@ -21,6 +21,10 @@ mcp = ["mcp>=2.3"]
 # Food log web app (`tridata web`): Claude API client, ASGI app and server.
 # starlette 1.8 needs Python 3.11; 1.7 is the newest that still runs on 3.10.
 app = ["anthropic>=1.15,<2", "starlette>=1.7", "uvicorn>=0.54"]
+# Dictation (`tridata web`, unit 006): Whisper large-v3-turbo on the GPU. Not in `dev`: the tests use a
+# double and CI must not download ~1.4 GB of CUDA libraries. Tested with faster-whisper 1.2.1,
+# ctranslate2 4.8.3, av 18.1.0, nvidia-cublas-cu12 12.9.2.10 and nvidia-cudnn-cu12 9.27.0.42.
+voz = ["faster-whisper>=1.2,<2", "nvidia-cublas-cu12>=12.4,<13", "nvidia-cudnn-cu12>=9,<10"]
 dev = [
     "pytest>=8.0.0", "mcp>=2.3", "ruff>=0.17", "mypy>=1.10", "pip-audit>=2.7",
     "anthropic>=1.15,<2", "starlette>=1.7", "uvicorn>=0.54",

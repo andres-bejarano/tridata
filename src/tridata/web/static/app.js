@@ -1,5 +1,6 @@
 // Day page of the food log. Plain ES module, no build step.
 // Nothing is saved until "Confirmar y guardar"; the server computes every total.
+// A saved food is changed by tapping its row in the day table.
 
 const $ = (id) => document.getElementById(id);
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 });
@@ -8,6 +9,8 @@ const NIVELES = { "-10": "−10 %", "0": "Mantenimiento", "10": "+10 %" };
 
 let revision = null; // { texto, hoy, original, alimentos }
 let hoyISO = null;
+let ultimoDia = null;
+let editando = null; // id of the saved food whose row is open for change
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -42,6 +45,7 @@ function mensaje(texto, tipo = "") {
 
 function pintarDia(dia) {
   hoyISO = dia.fecha;
+  ultimoDia = dia;
   $("fecha").textContent = deFecha(dia.fecha);
   $("margenes").replaceChildren(...dia.margenes.map((m) => el("div", { className: `margen n${m.nivel}` },
     el("span", { className: "etiqueta", textContent: NIVELES[m.nivel] ?? `${m.nivel} %` }),
@@ -51,16 +55,19 @@ function pintarDia(dia) {
   $("total").textContent = kcal(dia.total_kcal);
 
   const filas = dia.alimentos.map((a) => {
+    if (a.id === editando) return el("tr", {}, el("td", { colSpan: 3 }, fichaCambio(a)));
     const marcas = [];
     if (a.estimado) marcas.push(el("span", { className: "marca", textContent: "estimado" }));
     if (a.pendiente_cantidad) marcas.push(el("span", { className: "marca alerta", textContent: "pendiente de cantidad" }));
     if (a.estado === "planeado") marcas.push(el("span", { className: "marca", textContent: "planeado" }));
     const sumado = a.estado === "comido" && !a.pendiente_cantidad;
-    return el("tr", { className: sumado ? "" : "fuera" },
+    const fila = el("tr", { className: sumado ? "" : "fuera", title: "Toca para cambiarlo" },
       el("td", {}, a.nombre, ...marcas),
       el("td", { textContent: cantidad(a) }),
       el("td", { className: "num", textContent: sumado ? numero.format(a.kcal) : "—" }),
     );
+    fila.addEventListener("click", () => { editando = a.id; mensaje(""); pintarDia(ultimoDia); });
+    return fila;
   });
   $("tabla").tBodies[0].replaceChildren(...filas);
   $("tabla").hidden = filas.length === 0;
@@ -70,6 +77,39 @@ function pintarDia(dia) {
     className: "aviso",
     textContent: `Falta la cantidad de: ${dia.pendientes.map((p) => p.nombre).join(", ")}. No suma hasta que la pongas.`,
   })] : []));
+}
+
+// Change card of a saved food: only name, quantity, unit and kcal; nothing changes until saved.
+function fichaCambio(a) {
+  const nuevo = { nombre: a.nombre, cantidad: a.cantidad, unidad: a.unidad, kcal: a.kcal };
+  const poner = (clave, convertir = (v) => v) => (valor) => {
+    nuevo[clave] = convertir(valor);
+    if (clave === "cantidad" && nuevo.cantidad !== null && !nuevo.unidad) nuevo.unidad = "g";
+  };
+  const guardar = el("button", { type: "button", className: "principal", textContent: "Guardar cambios" });
+  const cancelar = el("button", { type: "button", textContent: "Cancelar" });
+  cancelar.addEventListener("click", () => { editando = null; mensaje(""); pintarDia(ultimoDia); });
+  guardar.addEventListener("click", async () => {
+    guardar.disabled = true;
+    const { ok, datos } = await api(`/api/alimento/${a.id}`, nuevo);
+    if (!ok) { // the saved food stays as it was; the card stays open with what was typed
+      mensaje(datos.error ?? "No se ha podido guardar el cambio.", "error");
+      guardar.disabled = false;
+      return;
+    }
+    editando = null;
+    mensaje(`Cambiado: ${datos.alimento.nombre}.`, "bien");
+    pintarDia(datos.dia);
+  });
+  return el("article", { className: "tarjeta" },
+    campo("Alimento", a.nombre, "text", poner("nombre")),
+    el("div", { className: "fila" },
+      campo("Cantidad", a.cantidad, "number", poner("cantidad", comoNumero), { step: "any", min: "0", inputMode: "decimal" }),
+      campo("Unidad", a.unidad, "text", poner("unidad", (v) => v.trim() || null)),
+      campo("kcal", a.kcal, "number", poner("kcal", comoNumero), { step: "any", min: "0", inputMode: "decimal" }),
+    ),
+    el("div", { className: "acciones" }, guardar, cancelar),
+  );
 }
 
 async function cargarDia() {

@@ -162,6 +162,32 @@ class RegistroComidas:
             ).fetchall()
         return [self._fila(f) for f in filas]
 
+    def cambiar(self, alimento_id: int, datos: dict) -> dict:
+        """Change name, quantity, unit and kcal of a saved food; day and state stay as they were.
+
+        New kcal stop being `estimado`. KeyError if the id does not exist, ValueError if invalid.
+        """
+        with self._connect() as conn:
+            fila = conn.execute(
+                f"SELECT {_COLUMNAS} FROM alimento_apuntado WHERE id = ?", (alimento_id,)  # noqa: S608
+            ).fetchone()
+            if fila is None:
+                raise KeyError(alimento_id)
+            nuevo = Alimento.desde_dict({**datos, "dia": fila["dia"]})
+            if nuevo.cantidad is not None and nuevo.kcal is None:
+                raise ValueError(f"«{nuevo.nombre}» tiene cantidad pero no kcal")
+            estimado = bool(fila["estimado"]) and nuevo.kcal == fila["kcal"]
+            conn.execute(
+                "UPDATE alimento_apuntado SET nombre = ?, cantidad = ?, unidad = ?, kcal = ?, estimado = ?, "
+                "pendiente_cantidad = ? WHERE id = ?",
+                (nuevo.nombre, nuevo.cantidad, nuevo.unidad, nuevo.kcal, int(estimado),
+                 int(nuevo.pendiente_cantidad), alimento_id),
+            )
+            fila = conn.execute(
+                f"SELECT {_COLUMNAS} FROM alimento_apuntado WHERE id = ?", (alimento_id,)  # noqa: S608
+            ).fetchone()
+        return self._fila(fila)
+
     def apuntes_del_dia(self, dia: date) -> list[dict]:
         with self._connect() as conn:
             filas = conn.execute(

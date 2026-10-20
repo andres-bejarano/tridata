@@ -8,11 +8,20 @@
                                   moves it, with the planned/eaten rule)
     POST /api/alimento/N/borrar   delete a saved food; only with {"confirmado": true} (R-11)
     POST /api/alimento/N/comido   mark a planned food as eaten (today or a past day only)
-    GET  /api/dia                 the day table, total, expenditure and margins (?fecha=AAAA-MM-DD)
+    GET  /api/dia                 the day table, total, expenditure, margins and plan (?fecha=AAAA-MM-DD),
+                                  all with the settings in force THAT day
+    GET  /ajustes                 the settings page
+    GET  /api/ajustes             settings in force (?fecha=, default today), changes to come, races
+    POST /api/ajustes             {"datos": {...}, "desde": "AAAA-MM-DD"} save one or more settings
+                                  (`desde` defaults to today); says whether to ask for the limit
+    POST /api/carrera             add a race {"nombre", "fecha", "dias_mantenimiento"}
+    POST /api/carrera/N           change a race (same body)
+    POST /api/carrera/N/quitar    remove a race; only with {"confirmado": true}
 
 Every /api/alimento route answers {"alimento": ..., "dia": ...}, where `dia` is the day the food
 was in BEFORE the action (the screen being looked at; for an added food, its day).
-404 if the food does not exist, 400 malformed data, 422 a business rule.
+404 if the food does not exist, 400 malformed data, 422 a business rule. A settings value that
+is not valid is a 400 and nothing is saved. A day with no basal or kcal per step is a 409.
 """
 from __future__ import annotations
 
@@ -30,10 +39,15 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from ..ia import ErrorInterpretacion
-from ..nutricion import Alimento, ConfigGasto, RegistroComidas, resumen_del_dia
+from ..nutricion import Ajustes, Alimento, RegistroComidas, resumen_del_dia
 
 ESTATICOS = Path(__file__).parent / "static"
 NO_ESTA = "Ese alimento ya no está apuntado."
+NO_ESTA_CARRERA = "Esa carrera ya no está en tus ajustes."
+
+
+class FaltanAjustes(Exception):
+    """A day cannot be computed: the settings of that day lack basal or kcal per step."""
 
 
 def _error(mensaje: str, estado: int, **extra: Any) -> JSONResponse:
@@ -48,16 +62,93 @@ async def _cuerpo(request: Request) -> dict | None:
     return datos if isinstance(datos, dict) else None
 
 
+def _plan(vigentes: Any) -> dict:
+    return {"objetivo_pct": vigentes.objetivo_pct, "motivo": vigentes.motivo_objetivo,
+            "limite_saludable_pct": vigentes.limite_saludable_pct}
+
+
 def crear_app(
-    registro: RegistroComidas, interprete: Any, config: ConfigGasto, hoy: Callable[[], date] = date.today,
+    registro: RegistroComidas, interprete: Any, ajustes: Ajustes, hoy: Callable[[], date] = date.today,
 ) -> Starlette:
-    """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double)."""
+    """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double).
+
+    Every day is computed with `ajustes.vigentes(that day)`: no expenditure config is fixed at start.
+    """
 
     def _dia(fecha: date) -> dict:
-        return resumen_del_dia(registro.apuntes_del_dia(fecha), fecha, config)
+        vigentes = ajustes.vigentes(fecha)
+        try:
+            config = vigentes.config_gasto()
+        except ValueError as exc:
+            raise FaltanAjustes(str(exc)) from None
+        return {**resumen_del_dia(registro.apuntes_del_dia(fecha), fecha, config), "plan": _plan(vigentes)}
+
+    def _vista_ajustes(fecha: date) -> dict:
+        vigentes = ajustes.vigentes(fecha)
+        return {
+            "fecha": fecha.isoformat(),
+            "vigentes": ajustes.valores_con_fecha(fecha),
+            "futuros": ajustes.cambios_futuros(fecha),
+            "carreras": [c.como_dict() for c in vigentes.carreras],
+            "plan": _plan(vigentes),
+        }
+
+    async def faltan_ajustes(request: Request, exc: Exception) -> Response:
+        return _error(f"{exc} Ponlos en Ajustes.", 409)
 
     async def pagina(request: Request) -> Response:
         return FileResponse(ESTATICOS / "index.html")
+
+    async def pagina_ajustes(request: Request) -> Response:
+        return FileResponse(ESTATICOS / "ajustes.html")
+
+    async def ver_ajustes(request: Request) -> Response:
+        texto = request.query_params.get("fecha")
+        try:
+            fecha = date.fromisoformat(texto) if texto else hoy()
+        except ValueError:
+            return _error(f"Fecha no válida: {texto!r}", 400)
+        return JSONResponse(_vista_ajustes(fecha))
+
+    async def guardar_ajustes(request: Request) -> Response:
+        cuerpo = await _cuerpo(request) or {}
+        datos = cuerpo.get("datos")
+        if not isinstance(datos, dict) or not datos:
+            return _error("No hay ningún ajuste que guardar.", 400)
+        desde = cuerpo.get("desde") or hoy()
+        try:
+            guardado = ajustes.cambiar(datos, desde=desde)
+        except ValueError as exc:
+            return _error(f"No se ha guardado nada: {exc}.", 400)
+        return JSONResponse({**guardado, "ajustes": _vista_ajustes(hoy()), "dia": _dia(hoy())})
+
+    async def anadir_carrera(request: Request) -> Response:
+        cuerpo = await _cuerpo(request) or {}
+        try:
+            carrera = ajustes.anadir_carrera(cuerpo.get("nombre"), cuerpo.get("fecha"), cuerpo.get("dias_mantenimiento"))
+        except ValueError as exc:
+            return _error(f"No se ha guardado la carrera: {exc}.", 400)
+        return JSONResponse({"carrera": carrera, "ajustes": _vista_ajustes(hoy())})
+
+    async def cambiar_carrera(request: Request) -> Response:
+        cuerpo = await _cuerpo(request) or {}
+        try:
+            carrera = ajustes.cambiar_carrera(request.path_params["id"], cuerpo.get("nombre"), cuerpo.get("fecha"),
+                                              cuerpo.get("dias_mantenimiento"))
+        except KeyError:
+            return _error(NO_ESTA_CARRERA, 404)
+        except ValueError as exc:
+            return _error(f"No se ha cambiado la carrera: {exc}.", 400)
+        return JSONResponse({"carrera": carrera, "ajustes": _vista_ajustes(hoy())})
+
+    async def quitar_carrera(request: Request) -> Response:
+        if (await _cuerpo(request) or {}).get("confirmado") is not True:
+            return _error("Hay que confirmar antes de quitar la carrera: no se ha quitado nada.", 400)
+        try:
+            carrera = ajustes.quitar_carrera(request.path_params["id"])
+        except KeyError:
+            return _error(NO_ESTA_CARRERA, 404)
+        return JSONResponse({"carrera": carrera, "ajustes": _vista_ajustes(hoy())})
 
     async def dia(request: Request) -> Response:
         texto = request.query_params.get("fecha")
@@ -140,9 +231,15 @@ def crear_app(
             return _error(str(exc), 422)
         return JSONResponse({"alimento": marcado, "dia": _dia(date.fromisoformat(marcado["dia"]))})
 
-    return Starlette(routes=[
+    return Starlette(exception_handlers={FaltanAjustes: faltan_ajustes}, routes=[
         Route("/", pagina),
+        Route("/ajustes", pagina_ajustes),
         Route("/api/dia", dia),
+        Route("/api/ajustes", ver_ajustes),
+        Route("/api/ajustes", guardar_ajustes, methods=["POST"]),
+        Route("/api/carrera", anadir_carrera, methods=["POST"]),
+        Route("/api/carrera/{id:int}", cambiar_carrera, methods=["POST"]),
+        Route("/api/carrera/{id:int}/quitar", quitar_carrera, methods=["POST"]),
         Route("/api/interpretar", interpretar, methods=["POST"]),
         Route("/api/confirmar", confirmar, methods=["POST"]),
         Route("/api/alimento", anadir, methods=["POST"]),

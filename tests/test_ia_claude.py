@@ -15,7 +15,7 @@ import pytest
 
 from tridata.ia import (
     INSTRUCCION, MODELO_POR_DEFECTO, AlimentoInterpretado, ErrorInterpretacion, InterpreteClaude,
-    ListaInterpretada,
+    ListaInterpretada, ObjetivoDiaInterpretado, PesoInterpretado,
 )
 
 HOY = date(2026, 3, 4)  # a Wednesday
@@ -84,7 +84,7 @@ def test_respuesta_estructurada_a_lista_con_sus_marcas():
         _item("kfjd", cantidad=None, unidad=None, kcal=40, dudoso=True),
         _item("leche", cantidad=None, unidad=None, kcal=None),
     )
-    lista = InterpreteClaude(cliente=cliente, modelo="m").interpretar("texto inventado", HOY)
+    lista = InterpreteClaude(cliente=cliente, modelo="m").interpretar("texto inventado", HOY).alimentos
 
     assert [a.nombre for a in lista] == ["jamón de york", "tortilla de patata", "kfjd", "leche"]
     jamon, tortilla, kfjd, leche = lista
@@ -197,3 +197,144 @@ def test_script_marca_fallo_si_la_cantidad_o_el_dia_no_cuadran():
     assert script.comparar(esperado, [dict(bien[0], cantidad=37.0)])
     assert script.comparar(esperado, [dict(bien[0], dia="2026-03-05")])
     assert script.comparar(esperado, bien + [dict(bien[0], nombre="avena")])  # one too many
+
+
+# == unit 007: one interpretation with every piece (weight, objective of the day, doubtful) ==
+
+HOY7 = date(2026, 3, 10)  # a Tuesday
+
+
+def _piezas(**campos):
+    datos = {"alimentos": [], "peso": None, "objetivo_dia": None, "dudosas": []}
+    datos.update(campos)
+    return ListaInterpretada(**datos)
+
+
+def _cliente_piezas(salida):
+    cliente = MagicMock()
+    cliente.messages.parse.return_value = SimpleNamespace(parsed_output=salida, stop_reason="end_turn")
+    return cliente
+
+
+def test_nuevo_dia_trae_todas_las_piezas():  # R6
+    porridge = _item("porridge", cantidad=None, unidad=None, kcal=None, dia=HOY7)
+    salida = _piezas(
+        alimentos=[porridge],
+        peso=PesoInterpretado(kg=70.2, dia=HOY7, nota=None),
+        objetivo_dia=ObjetivoDiaInterpretado(tipo="descanso", porcentaje=None, niveles=None,
+                                             entreno="30 min suaves", pasos=None),
+    )
+    cliente = _cliente_piezas(salida)
+    texto = "nuevo día 70,2, descanso, 30 minutos suaves, desayuno porridge"
+
+    resultado = InterpreteClaude(cliente=cliente, modelo="m").interpretar(texto, HOY7)
+
+    assert resultado.peso.kg == 70.2 and resultado.peso.dia == HOY7
+    assert resultado.objetivo_dia.tipo == "descanso" and resultado.objetivo_dia.entreno == "30 min suaves"
+    assert [a.nombre for a in resultado.alimentos] == ["porridge"]
+    assert resultado.alimentos[0].cantidad is None
+    assert resultado.dudosas == []
+
+
+def test_frase_dudosa_viene_aparte():  # R8
+    salida = _piezas(peso=PesoInterpretado(kg=70.2, dia=HOY7, nota=None), dudosas=["lo del martes ya sabes"])
+    resultado = InterpreteClaude(cliente=_cliente_piezas(salida), modelo="m").interpretar(
+        "nuevo día 70,2 y lo del martes ya sabes", HOY7)
+    assert resultado.dudosas == ["lo del martes ya sabes"]
+    assert resultado.alimentos == []
+
+
+def test_solo_peso_sin_alimentos():  # R10
+    salida = _piezas(peso=PesoInterpretado(kg=70.2, dia=HOY7, nota="retención tras la cena"))
+    resultado = InterpreteClaude(cliente=_cliente_piezas(salida), modelo="m").interpretar(
+        "peso 70,2 retención tras la cena", HOY7)
+    assert resultado.peso.nota == "retención tras la cena" and resultado.alimentos == []
+
+
+def test_peticion_de_nuevo_dia_sigue_siendo_minima(monkeypatch):  # R9
+    monkeypatch.delenv("TRIDATA_MODELO_TEXTO", raising=False)
+    cliente = _cliente_piezas(_piezas(peso=PesoInterpretado(kg=70.2, dia=HOY7, nota=None)))
+    InterpreteClaude(cliente=cliente).interpretar("peso 70,2", HOY7)
+    kwargs = cliente.messages.parse.call_args.kwargs
+    assert set(kwargs) == {"model", "max_tokens", "system", "messages", "output_format", "output_config"}
+    assert kwargs["system"] == INSTRUCCION
+    assert kwargs["messages"] == [
+        {"role": "user", "content": "Hoy es martes, 2026-03-10.\n\nLo que ha escrito:\npeso 70,2"}]
+
+
+def test_esquema_pide_todas_las_piezas_siempre():
+    from anthropic.lib._parse._transform import transform_schema
+
+    esquema = transform_schema(ListaInterpretada)
+    assert set(esquema["required"]) == {"alimentos", "peso", "objetivo_dia", "dudosas"}
+    for nombre in ("PesoInterpretado", "ObjetivoDiaInterpretado"):
+        definicion = esquema["$defs"][nombre]
+        assert set(definicion["required"]) == set(definicion["properties"])
+
+
+def test_la_instruccion_explica_las_piezas():
+    for regla in ("peso", "nuevo día", "objetivo_dia", "dudosas", "niveles", "pasos"):
+        assert regla in INSTRUCCION
+    assert re.search(r"\d{4}-\d{2}-\d{2}", INSTRUCCION) is None
+
+
+# -- unit 007: the manual Haiku test also judges weight, objective and doubtful phrases --------
+
+def test_dictados_de_piezas_entre_5_y_8_bien_formados():
+    datos = _dictados()
+    assert 20 <= len(datos["casos"]) <= 30  # the food ones are untouched
+    assert 5 <= len(datos["piezas"]) <= 8
+    for caso in datos["piezas"]:
+        assert caso["texto"].strip()
+        esperado = caso["esperado"]
+        assert set(esperado) == {"peso", "objetivo_dia", "dudosas", "alimentos"}
+        if esperado["peso"]:
+            date.fromisoformat(esperado["peso"]["dia"])
+            assert 30 <= esperado["peso"]["kg"] <= 250
+
+
+def _como_si_claude_acertara_piezas(caso):
+    e = caso["esperado"]
+    peso = e["peso"] and PesoInterpretado(kg=e["peso"]["kg"], dia=date.fromisoformat(e["peso"]["dia"]),
+                                          nota="nota inventada" if e["peso"].get("nota") else None)
+    o = e["objetivo_dia"]
+    objetivo = o and ObjetivoDiaInterpretado(
+        tipo=o["tipo"][0] if o["tipo"] else None, porcentaje=o["porcentaje"], niveles=o["niveles"],
+        entreno="algo suave" if o["entreno"] else None, pasos=o["pasos"])
+    return ListaInterpretada(alimentos=_como_si_claude_acertara({"esperado": e["alimentos"]}), peso=peso or None, objetivo_dia=objetivo or None,
+                             dudosas=["frase inventada"] * e["dudosas"])
+
+
+def test_script_cuenta_aciertos_de_piezas_con_un_doble():
+    script, datos = _script(), _dictados()
+    interprete = MagicMock()
+    interprete.interpretar.side_effect = lambda texto, hoy: _como_si_claude_acertara_piezas(
+        next(c for c in datos["piezas"] if c["texto"] == texto))
+
+    resultado = script.evaluar_piezas(interprete, datos)
+
+    assert resultado.aciertos == resultado.total == len(datos["piezas"])
+    assert interprete.interpretar.call_count == len(datos["piezas"])  # the 20-30 food cases are not called
+
+
+def test_script_marca_fallo_en_las_piezas():
+    script = _script()
+    esperado = {"peso": {"kg": 70.2, "dia": "2026-03-04"},
+                "objetivo_dia": {"tipo": ["descanso"], "porcentaje": None, "niveles": None, "entreno": True, "pasos": None},
+                "dudosas": 0, "alimentos": []}
+    bien = {"peso": {"kg": 70.2, "dia": "2026-03-04", "nota": None},
+            "objetivo_dia": {"tipo": "descanso", "porcentaje": None, "niveles": None, "entreno": "30 min suaves",
+                             "pasos": None},
+            "dudosas": [], "alimentos": []}
+    assert script.comparar_piezas(esperado, bien) == []
+    assert script.comparar_piezas(esperado, {**bien, "peso": {**bien["peso"], "kg": 72.0}})
+    assert script.comparar_piezas(esperado, {**bien, "peso": {**bien["peso"], "dia": "2026-03-03"}})
+    assert script.comparar_piezas(esperado, {**bien, "peso": None})
+    assert script.comparar_piezas(esperado, {**bien, "objetivo_dia": {**bien["objetivo_dia"], "tipo": "entreno"}})
+    assert script.comparar_piezas(esperado, {**bien, "objetivo_dia": {**bien["objetivo_dia"], "entreno": None}})
+    assert script.comparar_piezas(esperado, {**bien, "dudosas": ["nuevo día"]})
+    assert script.comparar_piezas(esperado, {**bien, "alimentos": [{"nombre": "nuevo día", "cantidad": None,
+                                                                     "unidad": None, "dia": "2026-03-04"}]})
+    sin_objetivo = {**esperado, "objetivo_dia": None}
+    vacio = {"tipo": None, "porcentaje": None, "niveles": None, "entreno": None, "pasos": None}
+    assert script.comparar_piezas(sin_objetivo, {**bien, "objetivo_dia": vacio}) == []  # empty counts as absent

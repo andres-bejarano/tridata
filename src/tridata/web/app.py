@@ -1,15 +1,18 @@
 """Starlette app: the day page and its JSON routes.
 
     GET  /                        the page (static HTML + JS modules + CSS)
-    POST /api/interpretar         text -> interpreted list; saves NOTHING (R-1)
-    POST /api/confirmar           reviewed list -> saved food by food; returns today (R-4, R-5)
+    POST /api/interpretar         text -> every piece in it (foods, weight, objective of the day,
+                                  doubtful phrases); saves NOTHING (R-1, R-31)
+    POST /api/confirmar           reviewed pieces (at least one) -> each saved in its place, all or
+                                  nothing; a doubtful phrase blocks it; returns today (R-4, R-5, R-32)
     POST /api/alimento            add a food by hand (no AI, no interpretation); body with `dia`
     POST /api/alimento/N          change a saved food (name, quantity, unit, kcal; `dia` optional
                                   moves it, with the planned/eaten rule)
     POST /api/alimento/N/borrar   delete a saved food; only with {"confirmado": true} (R-11)
     POST /api/alimento/N/comido   mark a planned food as eaten (today or a past day only)
     GET  /api/dia                 the day table, total, expenditure, margins and plan (?fecha=AAAA-MM-DD),
-                                  all with the settings in force THAT day
+                                  all with the settings in force THAT day, plus the weight block (weight,
+                                  7-day mean, basal and projection) and the objective of the day
     GET  /ajustes                 the settings page
     GET  /api/ajustes             settings in force (?fecha=, default today), changes to come, races
     POST /api/ajustes             {"datos": {...}, "desde": "AAAA-MM-DD"} save one or more settings
@@ -27,7 +30,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +42,11 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from ..ia import ErrorInterpretacion
-from ..nutricion import Ajustes, Alimento, RegistroComidas, resumen_del_dia
+from ..nutricion import (
+    Ajustes, Alimento, ConfigGasto, ObjetivosDia, RegistroComidas, RegistroPeso, basal_del_dia, objetivo_valido,
+    peso_valido, resumen_del_dia, resumen_peso,
+)
+from ..nutricion.margen import PASOS_POR_DEFECTO
 
 ESTATICOS = Path(__file__).parent / "static"
 NO_ESTA = "Ese alimento ya no está apuntado."
@@ -67,21 +74,49 @@ def _plan(vigentes: Any) -> dict:
             "limite_saludable_pct": vigentes.limite_saludable_pct}
 
 
+def _piezas(resultado: Any) -> dict:
+    """The interpretation as JSON: every piece, empty when absent. A bare list is foods only."""
+    if isinstance(resultado, list):
+        alimentos, peso, objetivo, dudosas = resultado, None, None, []
+    else:
+        alimentos, peso, objetivo, dudosas = (resultado.alimentos, resultado.peso, resultado.objetivo_dia,
+                                              resultado.dudosas)
+    return {
+        "alimentos": [a.model_dump(mode="json") for a in alimentos],
+        "peso": peso.model_dump(mode="json") if peso is not None else None,
+        "objetivo_dia": objetivo.model_dump(mode="json") if objetivo is not None else None,
+        "dudosas": list(dudosas),
+    }
+
+
 def crear_app(
-    registro: RegistroComidas, interprete: Any, ajustes: Ajustes, hoy: Callable[[], date] = date.today,
+    registro: RegistroComidas, interprete: Any, ajustes: Ajustes, hoy: Callable[[], date] = date.today, *,
+    pesos: RegistroPeso | None = None, objetivos: ObjetivosDia | None = None,
 ) -> Starlette:
     """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double).
 
     Every day is computed with `ajustes.vigentes(that day)`: no expenditure config is fixed at start.
+    Weights and objectives of the day live in the same SQLite as `registro` unless given.
     """
+    pesos = pesos or RegistroPeso(registro.db_path)
+    objetivos = objetivos or ObjetivosDia(registro.db_path)
 
     def _dia(fecha: date) -> dict:
         vigentes = ajustes.vigentes(fecha)
+        ultimo = pesos.ultimo_hasta(fecha)
+        basal = basal_del_dia(vigentes, [ultimo] if ultimo else [], fecha)
         try:
             config = vigentes.config_gasto()
         except ValueError as exc:
-            raise FaltanAjustes(str(exc)) from None
-        return {**resumen_del_dia(registro.apuntes_del_dia(fecha), fecha, config), "plan": _plan(vigentes)}
+            # without a hand-written basal, a day with a weight can still use its Mifflin-St Jeor one
+            if basal.kcal is None or vigentes.kcal_por_paso is None:
+                raise FaltanAjustes(str(exc)) from None
+            pasos = PASOS_POR_DEFECTO if vigentes.pasos_por_defecto is None else vigentes.pasos_por_defecto
+            config = ConfigGasto(basal_kcal=basal.kcal, kcal_por_paso=vigentes.kcal_por_paso, pasos=pasos)
+        ventana = pesos.entre(fecha - timedelta(days=6), fecha)
+        resumen = resumen_del_dia(registro.apuntes_del_dia(fecha), fecha, config, objetivo_dia=objetivos.del_dia(fecha),
+                                  basal=basal, peso=resumen_peso(ventana, fecha, vigentes, basal))
+        return {**resumen, "plan": _plan(vigentes)}
 
     def _vista_ajustes(fecha: date) -> dict:
         vigentes = ajustes.vigentes(fecha)
@@ -163,28 +198,57 @@ def crear_app(
         if not isinstance(texto, str) or not texto.strip():
             return _error("Escribe lo que has comido o vas a comer.", 400, texto=texto or "")
         try:
-            lista = await run_in_threadpool(interprete.interpretar, texto.strip(), hoy())
+            resultado = await run_in_threadpool(interprete.interpretar, texto.strip(), hoy())
         except ErrorInterpretacion as exc:
             return _error(f"No he podido interpretar lo que has escrito ({exc}). Inténtalo de nuevo.", 502,
                           texto=texto)
-        return JSONResponse({"texto": texto, "alimentos": [a.model_dump(mode="json") for a in lista]})
+        return JSONResponse({"texto": texto, **_piezas(resultado)})
 
     async def confirmar(request: Request) -> Response:
+        """Validate EVERY piece first; only if all are valid is anything written (R11)."""
         cuerpo = await _cuerpo(request) or {}
+        dia_hoy = hoy()
         crudos = cuerpo.get("alimentos")
-        if not isinstance(crudos, list) or not crudos:
-            return _error("No hay ningún alimento que guardar.", 400)
+        if crudos is None:
+            crudos = []
+        if not isinstance(crudos, list):
+            return _error("Los alimentos tienen que ser una lista.", 400)
+        dudosas = cuerpo.get("dudosas") or []
+        if not isinstance(dudosas, list):
+            return _error("Las frases dudosas tienen que ser una lista.", 400)
+        if dudosas:
+            frases = ", ".join(f"«{d}»" for d in dudosas)
+            return _error(f"No sé dónde poner {frases}: quítalo antes de confirmar. No se ha guardado nada.", 422)
         try:
             alimentos = [Alimento.desde_dict(a) for a in crudos]
         except ValueError as exc:
-            return _error(str(exc), 400)
-        texto = cuerpo.get("texto")
+            return _error(f"No se ha guardado nada: {exc}.", 400)
+        peso = None
+        if cuerpo.get("peso") is not None:
+            try:
+                peso = peso_valido(cuerpo["peso"], dia_hoy)
+            except ValueError as exc:
+                return _error(f"No se ha guardado nada: {exc}.", 422)
+        objetivo = None
+        if cuerpo.get("objetivo_dia") is not None:
+            try:
+                objetivo = objetivo_valido(cuerpo["objetivo_dia"])
+            except ValueError as exc:
+                return _error(f"No se ha guardado nada: {exc}.", 400)
+        if not alimentos and peso is None and objetivo is None:
+            return _error("No hay nada que guardar.", 400)
         try:
-            guardados = registro.guardar(alimentos, hoy=hoy(), texto=texto if isinstance(texto, str) else "",
-                                         sin_cambios=bool(cuerpo.get("sin_cambios")))
+            registro.validar(alimentos)
         except ValueError as exc:
-            return _error(str(exc), 422)
-        return JSONResponse({"guardados": guardados, "dia": _dia(hoy())})
+            return _error(f"No se ha guardado nada: {exc}.", 422)
+
+        texto = cuerpo.get("texto")
+        guardados = registro.guardar(alimentos, hoy=dia_hoy, texto=texto if isinstance(texto, str) else "",
+                                     sin_cambios=bool(cuerpo.get("sin_cambios")))
+        peso_guardado = pesos.apuntar(*peso, hoy=dia_hoy) if peso is not None else None
+        objetivo_guardado = objetivos.guardar(dia_hoy, objetivo) if objetivo is not None else None
+        return JSONResponse({"guardados": guardados, "peso": peso_guardado, "objetivo_dia": objetivo_guardado,
+                             "dia": _dia(dia_hoy)})
 
     async def anadir(request: Request) -> Response:
         cuerpo = await _cuerpo(request) or {}

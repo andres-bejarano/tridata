@@ -130,18 +130,28 @@ class RegistroComidas:
         finally:
             conn.close()
 
-    def guardar(self, alimentos: list[Alimento], hoy: date, texto: str, sin_cambios: bool) -> list[dict]:
-        """Save a confirmed list, food by food, plus its interpretation. All or nothing.
+    @property
+    def db_path(self) -> Path:
+        """The SQLite file, so the weight and objective repositories open the same store."""
+        return self._db_path
 
-        A food for a later day is `planeado` there; today (or a past day) it is `comido`.
-        """
-        if not alimentos:
-            raise ValueError("la lista está vacía")
+    @staticmethod
+    def validar(alimentos: list[Alimento]) -> None:
+        """The business rules of a confirmed list, checked before anything is written."""
         for a in alimentos:
             if a.dudoso:
                 raise ValueError(f"«{a.nombre}» está marcado como dudoso: corrígelo o quítalo antes de confirmar")
             if a.cantidad is not None and a.kcal is None:
                 raise ValueError(f"«{a.nombre}» tiene cantidad pero no kcal")
+
+    def guardar(self, alimentos: list[Alimento], hoy: date, texto: str, sin_cambios: bool) -> list[dict]:
+        """Save a confirmed list, food by food, plus its interpretation. All or nothing.
+
+        A food for a later day is `planeado` there; today (or a past day) it is `comido`. The list
+        may be empty (a confirmation with only a weight or an objective, unit 007): the
+        interpretation is saved all the same.
+        """
+        self.validar(alimentos)
         ahora = datetime.now().isoformat(timespec="seconds")
         with self._connect() as conn:
             cur = conn.execute(

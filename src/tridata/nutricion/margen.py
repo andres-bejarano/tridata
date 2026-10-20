@@ -1,15 +1,20 @@
 """Day total and margin: pure functions over the saved rows.
 
-Simple expenditure: basal + default steps × kcal per step, with the settings in force THAT day
+Simple expenditure: basal + steps × kcal per step, with the settings in force THAT day
 (`Ajustes.vigentes(dia).config_gasto()`, unit 005). The margin of a level is
 expenditure × (1 + level) − eaten, for −10 %, 0 % and +10 % (R-16, G-30).
+
+Unit 007: the basal of the day comes from `peso.basal_del_dia` (Mifflin-St Jeor with the last
+weight) and the objective of the day, when there is one, brings the levels and the planned steps.
+The planned training is shown but does not add kcal yet (R-15, unit 008).
 """
 from __future__ import annotations
 
 import os
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
+from typing import Any
 
 NIVELES_POR_DEFECTO = (-10, 0, 10)
 PASOS_POR_DEFECTO = 10_000
@@ -53,16 +58,58 @@ def total_del_dia(apuntes: Iterable[Mapping], dia: date) -> float:
     ), 1)
 
 
-def margenes(gasto: float, comido: float, niveles: Iterable[int] = NIVELES_POR_DEFECTO) -> dict[int, float]:
+def margenes(gasto: float, comido: float, niveles: Iterable[float] = NIVELES_POR_DEFECTO) -> dict[float, float]:
     return {nivel: round(gasto * (100 + nivel) / 100 - comido, 1) for nivel in niveles}
 
 
-def resumen_del_dia(apuntes: Iterable[Mapping], dia: date, config: ConfigGasto) -> dict:
-    """What the day screen shows: the whole table, total, expenditure and where it comes from, margins."""
+def niveles_del_dia(objetivo: Mapping[str, Any] | None) -> tuple[tuple[float, ...], float | None]:
+    """Levels of the margin of a day and the one marked as its objective.
+
+    Without objective (or without levels): −10/0/+10 %. The % of the objective, if said, is always
+    one of the levels and is the marked one. Levels are shown from lowest to highest.
+    """
+    objetivo = objetivo or {}
+    porcentaje = objetivo.get("porcentaje")
+    niveles = list(objetivo.get("niveles") or NIVELES_POR_DEFECTO)
+    if porcentaje is not None and porcentaje not in niveles:
+        niveles.append(porcentaje)
+    return tuple(sorted(set(niveles))), porcentaje
+
+
+def _texto_numero(n: float) -> str:
+    return f"{n:g}".replace(".", ",")
+
+
+def resumen_del_dia(
+    apuntes: Iterable[Mapping], dia: date, config: ConfigGasto, *,
+    objetivo_dia: Mapping[str, Any] | None = None, basal: Any = None, peso: Mapping[str, Any] | None = None,
+) -> dict:
+    """What the day screen shows: the whole table, total, expenditure and where it comes from, margins.
+
+    `config` is the one of the settings in force that day; `basal` (a `peso.BasalDelDia`) and the
+    planned steps of `objetivo_dia` replace its basal and steps. `peso` is the weight block.
+    """
+    pasos_previstos = objetivo_dia.get("pasos") if objetivo_dia else None
+    if basal is not None and basal.kcal is not None:
+        config = replace(config, basal_kcal=basal.kcal)
+    if pasos_previstos is not None:
+        config = replace(config, pasos=pasos_previstos)
     del_dia = [dict(a) for a in apuntes if a["dia"] == dia.isoformat()]
     total = total_del_dia(del_dia, dia)
     gasto = gasto_simple(config)
-    por_paso = f"{config.kcal_por_paso:g}".replace(".", ",")
+    por_paso = _texto_numero(config.kcal_por_paso)
+    entreno = objetivo_dia.get("entreno") if objetivo_dia else None
+    if basal is None and objetivo_dia is None:  # the explanation as it was before unit 007
+        explicacion = (f"basal {config.basal_kcal:g} kcal + {config.pasos} pasos × {por_paso} kcal/paso "
+                       "(tus ajustes vigentes ese día; día sin entreno)")
+    else:
+        de_basal = f" ({basal.explicacion})" if basal is not None else ""
+        de_pasos = "previstos para el día" if pasos_previstos is not None else "por defecto de tus ajustes"
+        de_entreno = (f"entreno previsto «{entreno}» guardado, pero aún no suma kcal" if entreno
+                      else "día sin entreno")
+        explicacion = (f"basal {config.basal_kcal:g} kcal{de_basal} + {config.pasos} pasos {de_pasos} × "
+                       f"{por_paso} kcal/paso (tus ajustes vigentes ese día; {de_entreno})")
+    niveles, marcado = niveles_del_dia(objetivo_dia)
     return {
         "fecha": dia.isoformat(),
         "alimentos": del_dia,
@@ -73,10 +120,12 @@ def resumen_del_dia(apuntes: Iterable[Mapping], dia: date, config: ConfigGasto) 
             "basal_kcal": config.basal_kcal,
             "pasos": config.pasos,
             "kcal_por_paso": config.kcal_por_paso,
-            "explicacion": (
-                f"basal {config.basal_kcal:g} kcal + {config.pasos} pasos × {por_paso} kcal/paso "
-                "(tus ajustes vigentes ese día; día sin entreno)"
-            ),
+            "entreno_previsto": entreno,
+            "entreno_suma_kcal": False,
+            "explicacion": explicacion,
         },
-        "margenes": [{"nivel": nivel, "kcal": kcal} for nivel, kcal in margenes(gasto, total).items()],
+        "margenes": [{"nivel": nivel, "kcal": kcal, **({"objetivo": True} if nivel == marcado else {})}
+                     for nivel, kcal in margenes(gasto, total, niveles).items()],
+        "objetivo_dia": dict(objetivo_dia) if objetivo_dia else None,
+        "peso": dict(peso) if peso is not None else None,
     }

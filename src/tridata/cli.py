@@ -303,7 +303,7 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
         import uvicorn
 
         from .ia import InterpreteClaude
-        from .nutricion import Ajustes, RegistroComidas
+        from .nutricion import Ajustes, ObjetivosDia, RegistroComidas, RegistroPeso
         from .web import crear_app
     except ImportError as exc:
         print(f"Missing the `app` extra ({exc}). Install it: pip install -e '.[app]'", file=sys.stderr)
@@ -318,7 +318,8 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
         print(exc, file=sys.stderr)
         return 1
 
-    app = crear_app(RegistroComidas(db_path), InterpreteClaude(), ajustes)
+    app = crear_app(RegistroComidas(db_path), InterpreteClaude(), ajustes,
+                    pesos=RegistroPeso(db_path), objetivos=ObjetivosDia(db_path))
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(f"Warning: listening on {host}, reachable from outside this PC.", file=sys.stderr)
     print(f"TriData web on http://{host}:{port} (Ctrl+C to stop)")

@@ -238,3 +238,28 @@ def test_con_cantidad_pero_sin_kcal_no_se_guarda(tmp_path):
     with pytest.raises(ValueError, match="kcal"):
         registro.guardar([_alimento("pan", None)], hoy=HOY, texto="pan", sin_cambios=False)
     assert registro.apuntes_del_dia(HOY) == []
+
+
+# == unit 007: a confirmation without foods still leaves its interpretation (R10) ==========
+
+def test_confirmar_sin_alimentos_guarda_la_interpretacion(tmp_path):
+    registro = _registro(tmp_path)
+    assert registro.guardar([], hoy=HOY, texto="peso 70,2", sin_cambios=False) == []
+    assert registro.apuntes_del_dia(HOY) == []
+    (interpretacion,) = registro.interpretaciones()
+    assert interpretacion["texto"] == "peso 70,2" and interpretacion["confirmada_sin_cambios"] is False
+
+
+def test_registro_expone_su_base(tmp_path):
+    registro = _registro(tmp_path)
+    assert registro.db_path == tmp_path / "data.sqlite3"
+
+
+def test_validar_lista_antes_de_escribir(tmp_path):
+    registro = _registro(tmp_path)
+    with pytest.raises(ValueError, match="dudoso"):
+        registro.validar([Alimento(nombre="kfjd", dia=HOY, dudoso=True)])
+    with pytest.raises(ValueError, match="kcal"):
+        registro.validar([_alimento("pan", None)])
+    registro.validar([_alimento("pan", 250)])
+    assert registro.interpretaciones() == []

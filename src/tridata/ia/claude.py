@@ -1,7 +1,8 @@
-"""Turn a written meal into a list of foods with the Claude API.
+"""Turn what Andrés writes into its pieces with the Claude API, in ONE request.
 
-Only the written text, today's date and a fixed instruction leave the PC (R-12, C-12):
-never weights, previous days, totals or anything saved. The client is created lazily and
+The pieces (unit 007): foods (as before), the weight of a day, the objective of the day and the
+doubtful phrases that fit nowhere. Only the written text, today's date and a fixed instruction
+leave the PC (R-12, C-12): never saved weights, the mean, the basal, the profile or any target. The client is created lazily and
 can be injected, so tests use a double and never call the API.
 """
 from __future__ import annotations
@@ -12,7 +13,7 @@ from datetime import date
 from typing import Any
 
 import anthropic
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger(__name__)
 
@@ -20,9 +21,12 @@ MODELO_POR_DEFECTO = "claude-haiku-5-5"
 _DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
 INSTRUCCION = """\
-Eres el intérprete de un diario de comidas. Recibes la fecha de hoy y un texto que la persona \
-ha escrito o dictado sobre lo que ha comido o piensa comer. Devuelve la lista de alimentos que \
-menciona, uno por elemento, siguiendo estas reglas:
+Eres el intérprete de un diario de comidas y de peso. Recibes la fecha de hoy y un texto que la \
+persona ha escrito o dictado: lo que ha comido o piensa comer, su peso, o el mensaje con el que \
+abre el día («nuevo día …»). Separa el texto en piezas: alimentos, peso, objetivo_dia y dudosas. \
+Un texto puede traer una sola pieza o varias; lo que no aparezca va vacío (lista vacía o null).
+
+Alimentos: la lista de alimentos que menciona, uno por elemento, siguiendo estas reglas:
 
 1. Vale lo último: si se corrige dentro del texto (cantidad, alimento o día, p. ej. «37 gramos \
 de avena… no, 33 de avena»), quédate solo con lo último que dijo. Lo corregido no aparece.
@@ -47,6 +51,29 @@ si no, null.
 120 g», «lentejas cocidas»). Lista vacía si no hay.
 9. No añadas alimentos que no se mencionen, no repitas un alimento corregido y no hagas \
 preguntas. Nombres en español, en minúsculas y breves.
+
+Las otras piezas:
+
+10. peso: si dice su peso («peso 70,2», «hoy peso 70,2», «ayer pesaba 70,5»), pon los kg (con \
+decimales, la coma es decimal), el día (como en la regla 2; sin día, es hoy) y una nota con lo \
+que añada sobre ese peso (p. ej. «retención tras la cena»), o null si no añade nada. Un número \
+suelto justo después de «nuevo día» es el peso de hoy. Si dice varios pesos, vale el último. Sin \
+peso, peso = null. El peso nunca es un alimento.
+11. objetivo_dia: solo si abre el día («nuevo día», «hoy toca …») o dice cómo quiere el día. \
+tipo: el tipo de día en una o dos palabras, en minúsculas (p. ej. «descanso», «entreno», \
+«carrera»). porcentaje: el % de déficit o superávit que pide, con signo (un déficit, como \
+«menos 15» o «déficit del 15», va en negativo; un superávit, en positivo); null si no dice \
+ningún %. niveles: \
+los % de margen que quiere ver ese día, con signo (p. ej. «niveles menos 15 y 0»), o null si no \
+los dice. entreno: el entreno previsto tal como lo dice, breve (p. ej. «30 min suaves»), o null. \
+pasos: los pasos previstos como número entero («8.000 pasos» es 8000), o null. Vale lo último \
+dicho. Si no dice nada de esto, objetivo_dia = null.
+12. «nuevo día», «buenos días» y palabras parecidas no son alimentos ni dudosas: solo abren el \
+día.
+13. dudosas: frases del texto que no son un alimento, ni el peso, ni parte del objetivo del día, \
+y que no sabes dónde poner (p. ej. «y lo del martes ya sabes»). Cópialas tal cual, una por \
+elemento; no las conviertas en alimentos. Una palabra suelta que parece un alimento pero no \
+entiendes sigue la regla 6. Lista vacía si no hay.
 """
 
 
@@ -64,8 +91,38 @@ class AlimentoInterpretado(BaseModel):
     supuestos: list[str] = Field(description="Supuestos usados para calcular")
 
 
+class PesoInterpretado(BaseModel):
+    kg: float = Field(description="Peso en kilos (p. ej. 70.2)")
+    dia: date = Field(description="Día de ese peso (AAAA-MM-DD)")
+    nota: str | None = Field(description="Lo que dice sobre ese peso, o null")
+
+
+class ObjetivoDiaInterpretado(BaseModel):
+    tipo: str | None = Field(description="Tipo de día en minúsculas (descanso, entreno…), o null")
+    porcentaje: float | None = Field(description="% pedido con signo (déficit negativo), o null")
+    niveles: list[float] | None = Field(description="% de margen que quiere ver, con signo, o null")
+    entreno: str | None = Field(description="Entreno previsto tal como lo dice, breve, o null")
+    pasos: int | None = Field(description="Pasos previstos, o null")
+
+
+def _todo_requerido(esquema: dict[str, Any]) -> None:
+    """Claude must always say every piece (null or an empty list when absent), never skip one."""
+    esquema["required"] = list(esquema.get("properties", {}))
+
+
 class ListaInterpretada(BaseModel):
+    """The whole interpretation of one text: every piece found in it."""
+
+    model_config = ConfigDict(json_schema_extra=_todo_requerido)
+
     alimentos: list[AlimentoInterpretado]
+    peso: PesoInterpretado | None = Field(default=None, description="Peso dicho en el texto, o null")
+    objetivo_dia: ObjetivoDiaInterpretado | None = Field(
+        default=None, description="Objetivo del día dicho al abrir el día, o null")
+    dudosas: list[str] = Field(default_factory=list, description="Frases que no sabes dónde poner")
+
+
+Interpretacion = ListaInterpretada  # the name the web uses: one interpretation, all its pieces
 
 
 class ErrorInterpretacion(Exception):
@@ -92,7 +149,7 @@ class InterpreteClaude:
         self._cliente = cliente
         self.modelo = modelo or os.environ.get("TRIDATA_MODELO_TEXTO") or MODELO_POR_DEFECTO
 
-    def interpretar(self, texto: str, hoy: date) -> list[AlimentoInterpretado]:
+    def interpretar(self, texto: str, hoy: date) -> ListaInterpretada:
         try:
             if self._cliente is None:
                 self._cliente = anthropic.Anthropic(timeout=30.0)
@@ -119,4 +176,4 @@ class InterpreteClaude:
         for alimento in lista.alimentos:
             if alimento.dudoso:  # a doubtful item never adds kcal (R-7)
                 alimento.kcal = alimento.proteina_g = alimento.hidratos_g = alimento.grasa_g = None
-        return list(lista.alimentos)
+        return lista

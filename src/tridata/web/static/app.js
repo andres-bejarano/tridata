@@ -61,6 +61,16 @@ function nombreDelDia(iso) {
   return mayuscula(deFecha(iso));
 }
 
+// The plan of the day being looked at, from the settings in force that day (unit 005).
+function textoPlan(plan) {
+  if (!plan || plan.objetivo_pct === null) return "Plan: sin objetivo fijado (en Ajustes).";
+  const n = plan.objetivo_pct;
+  const objetivo = n === 0 ? "mantenimiento" : `${n > 0 ? "+" : "−"}${numero.format(Math.abs(n))} %`;
+  const motivo = plan.motivo.startsWith("carrera ") ? ` por la ${plan.motivo}` : "";
+  const limite = plan.limite_saludable_pct === null ? "" : ` · límite saludable ${numero.format(plan.limite_saludable_pct)} %`;
+  return `Plan: ${objetivo}${motivo}${limite}.`;
+}
+
 function pintarDia(dia) {
   if (hoyISO === null) hoyISO = dia.fecha;
   if (dia.fecha !== diaVisto) { editando = null; anadiendo = false; }
@@ -77,6 +87,7 @@ function pintarDia(dia) {
     el("span", { className: "etiqueta", textContent: NIVELES[m.nivel] ?? `${m.nivel} %` }),
     el("strong", { textContent: kcal(m.kcal) }),
   )));
+  $("plan").textContent = textoPlan(dia.plan);
   $("gasto").textContent = `Gasto estimado ${kcal(dia.gasto.kcal)}: ${dia.gasto.explicacion}.`;
   $("total").textContent = kcal(dia.total_kcal);
 

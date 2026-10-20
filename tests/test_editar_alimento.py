@@ -7,11 +7,10 @@ from unittest.mock import MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from tridata.nutricion import Alimento, ConfigGasto, RegistroComidas
+from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, RegistroComidas
 from tridata.web import crear_app
 
 HOY = date(2026, 3, 4)
-CONFIG = ConfigGasto(basal_kcal=1600, kcal_por_paso=0.04)
 
 
 def _guardar(registro, **campos):
@@ -20,14 +19,21 @@ def _guardar(registro, **campos):
     return registro.guardar([Alimento(**datos)], hoy=HOY, texto="un yogur", sin_cambios=True)[0]
 
 
+def _ajustes(tmp_path):
+    """Settings in the same temporary SQLite: 1600 + 10000 steps x 0.04 = 2000, since always."""
+    ajustes = Ajustes(tmp_path / "data.sqlite3")
+    ajustes.cambiar({"basal_kcal": 1600, "kcal_por_paso": 0.04}, desde=DESDE_SIEMPRE)
+    return ajustes
+
+
 @pytest.fixture
 def registro(tmp_path):
     return RegistroComidas(tmp_path / "data.sqlite3")
 
 
 @pytest.fixture
-def cliente(registro):
-    return TestClient(crear_app(registro, MagicMock(), CONFIG, hoy=lambda: HOY))
+def cliente(registro, tmp_path):
+    return TestClient(crear_app(registro, MagicMock(), _ajustes(tmp_path), hoy=lambda: HOY))
 
 
 # -- RegistroComidas.cambiar -----------------------------------------------------------

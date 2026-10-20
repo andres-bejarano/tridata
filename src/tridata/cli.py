@@ -303,18 +303,22 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
         import uvicorn
 
         from .ia import InterpreteClaude
-        from .nutricion import ConfigGasto, RegistroComidas
+        from .nutricion import Ajustes, RegistroComidas
         from .web import crear_app
     except ImportError as exc:
         print(f"Missing the `app` extra ({exc}). Install it: pip install -e '.[app]'", file=sys.stderr)
         return 1
+    # First start: basal and kcal per step are copied ONCE from .env as settings "since always";
+    # from then on they are changed in the Ajustes page and .env no longer decides any day.
+    ajustes = Ajustes(db_path)
     try:
-        config = ConfigGasto.desde_entorno()
+        ajustes.sembrar_desde_entorno()
+        ajustes.vigentes(date.today()).config_gasto()
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 1
 
-    app = crear_app(RegistroComidas(db_path), InterpreteClaude(), config)
+    app = crear_app(RegistroComidas(db_path), InterpreteClaude(), ajustes)
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(f"Warning: listening on {host}, reachable from outside this PC.", file=sys.stderr)
     print(f"TriData web on http://{host}:{port} (Ctrl+C to stop)")

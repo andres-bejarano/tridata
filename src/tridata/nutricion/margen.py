@@ -1,7 +1,7 @@
 """Day total and margin: pure functions over the saved rows.
 
-Skeleton expenditure (ROADMAP, unit 002): basal + 10,000 steps × kcal per step, both fixed
-values from `.env` until the settings unit. The margin of a level is
+Simple expenditure: basal + default steps × kcal per step, with the settings in force THAT day
+(`Ajustes.vigentes(dia).config_gasto()`, unit 005). The margin of a level is
 expenditure × (1 + level) − eaten, for −10 %, 0 % and +10 % (R-16, G-30).
 """
 from __future__ import annotations
@@ -75,7 +75,7 @@ def resumen_del_dia(apuntes: Iterable[Mapping], dia: date, config: ConfigGasto) 
             "kcal_por_paso": config.kcal_por_paso,
             "explicacion": (
                 f"basal {config.basal_kcal:g} kcal + {config.pasos} pasos × {por_paso} kcal/paso "
-                "(valores fijos de .env; día sin entreno)"
+                "(tus ajustes vigentes ese día; día sin entreno)"
             ),
         },
         "margenes": [{"nivel": nivel, "kcal": kcal} for nivel, kcal in margenes(gasto, total).items()],

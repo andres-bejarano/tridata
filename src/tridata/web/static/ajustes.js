@@ -75,6 +75,21 @@ function campo(etiqueta, valor, tipo, extra = {}) {
   return etiquetado;
 }
 
+// iPhone's decimal keypad has no minus key: a ± button next to every signed % field flips the sign.
+function conSigno(entrada) {
+  const boton = el("button", { type: "button", className: "signo", textContent: "±", title: "Cambiar el signo (déficit / superávit)" });
+  boton.addEventListener("click", () => {
+    const v = entrada.value.trim();
+    entrada.value = /^[-−]/.test(v) ? v.replace(/^[-−]\s*/, "") : `-${v}`;
+    entrada.dispatchEvent(new Event("change"));
+    entrada.focus();
+  });
+  const caja = el("div", { className: "con-signo" });
+  entrada.replaceWith(caja);
+  caja.append(entrada, boton);
+  return entrada;
+}
+
 const numerico = (modo) => ({ type: "text", inputMode: modo, autocomplete: "off" });
 const crudo = (entrada) => entrada.value.trim();
 
@@ -117,6 +132,7 @@ function fichaCambio(dato, valor) {
   } else {
     const nuevo = campo(`${dato.etiqueta} (${dato.unidad})`, valor, "text", numerico(dato.modo));
     nodos.push(nuevo);
+    if (dato.signo) conSigno(nuevo.entrada);
     leer = () => crudo(nuevo.entrada) || null;
     setTimeout(() => nuevo.entrada.focus(), 0);
   }

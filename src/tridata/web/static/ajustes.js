@@ -1,11 +1,15 @@
 // Settings page: profile and plan, each value with the date from which it applies.
 // Plain ES module, no build step. The server validates and keeps the history; nothing is
 // overwritten: a change is a new value "desde" a date (by default today).
+// Unit 010: iOS-style rows (name, value in force, ›); tapping a row opens the same change card as
+// before. A «Conexión» row says whether the PC answered. The tabs at the bottom go back to /#….
 
 const $ = (id) => document.getElementById(id);
-const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 });
+const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2, useGrouping: "always" });
 const diaMes = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "long" });
 const diaMesAno = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "long", year: "numeric" });
+const kilos = new Intl.NumberFormat("es-ES", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+const diaMesCorto = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short" });
 const SIEMPRE = "0001-01-01";
 
 // One row per setting. `peso` is the weight goal (kg + target date).
@@ -43,10 +47,18 @@ async function api(ruta, cuerpo) {
   try {
     const r = await fetch(ruta, opciones);
     const datos = await r.json().catch(() => ({}));
+    ponerConexion(r.ok || Boolean(datos.error));
     return { ok: r.ok, datos };
   } catch {
+    ponerConexion(false);
     return { ok: false, datos: { error: "No hay conexión con el PC. Inténtalo de nuevo." } };
   }
+}
+
+// The «Conexión» row: whether /api/… answered the last time.
+function ponerConexion(hay) {
+  $("conexion-valor").textContent = hay ? "conectado" : "sin conexión";
+  $("conexion-punto").classList.toggle("apagado", !hay);
 }
 
 function mensaje(texto, tipo = "") {
@@ -58,12 +70,17 @@ const fecha = (iso) => {
   const d = new Date(`${iso}T12:00:00`);
   return (iso.slice(0, 4) === hoyISO.slice(0, 4) ? diaMes : diaMesAno).format(d);
 };
+// «28 feb», and the year only when it is not this one («28 feb 2027»): it fits in a row
+const fechaCorta = (iso) => {
+  const corta = diaMesCorto.format(new Date(`${iso}T12:00:00`)).replace(".", "");
+  return iso.slice(0, 4) === hoyISO.slice(0, 4) ? corta : `${corta} ${iso.slice(0, 4)}`;
+};
 const desdeTexto = (iso) => (iso === SIEMPRE ? "desde siempre" : `desde el ${fecha(iso)}`);
 const pct = (n, signo) => `${signo && n > 0 ? "+" : ""}${numero.format(n).replace("-", "−")} %`;
 
 function valorTexto(dato, valor) {
   if (valor === null || valor === undefined) return "sin fijar";
-  if (dato.peso) return `${numero.format(valor.kg)} kg para el ${fecha(valor.fecha)}`;
+  if (dato.peso) return `${kilos.format(valor.kg)} kg · ${fechaCorta(valor.fecha)}`;
   if (dato.unidad === "%") return pct(valor, dato.signo);
   return `${numero.format(valor)} ${dato.unidad}`;
 }
@@ -95,30 +112,27 @@ const crudo = (entrada) => entrada.value.trim();
 
 // -- one setting --------------------------------------------------------------------
 
+// One row per setting; tapping it opens (or closes) its change card under it.
 function filaDato(dato) {
   const { valor, desde } = vista.vigentes[dato.clave];
   const futuros = vista.futuros.filter((f) => f.clave === dato.clave);
-  const cabecera = el("div", { className: "dato" },
-    el("div", {},
-      el("span", { className: "etiqueta", textContent: dato.etiqueta }),
-      el("strong", { textContent: valorTexto(dato, valor) }),
-      desde ? el("span", { className: "suave desde", textContent: desdeTexto(desde) }) : null,
-    ),
-  );
-  const tarjeta = el("article", { className: "tarjeta" }, cabecera);
-  for (const f of futuros) {
-    tarjeta.append(el("p", { className: "futuro", textContent: `${valorTexto(dato, f.valor)} a partir del ${fecha(f.desde)}` }));
-  }
-  if (dato.nota) tarjeta.append(el("p", { className: "suave nota", textContent: dato.nota }));
-  if (abierto === dato.clave) {
-    tarjeta.classList.add("nueva");
-    tarjeta.append(...fichaCambio(dato, valor));
-  } else {
-    const cambiar = el("button", { type: "button", className: "cambiar", textContent: "Cambiar" });
-    cambiar.addEventListener("click", () => { abierto = dato.clave; carreraAbierta = null; mensaje(""); pintar(); });
-    cabecera.append(cambiar);
-  }
-  return tarjeta;
+  const notas = [];
+  if (desde && desde !== SIEMPRE) notas.push(desdeTexto(desde));
+  if (dato.nota) notas.push(dato.nota);
+  const que = el("span", { className: "que" }, dato.etiqueta,
+    notas.length ? el("span", { textContent: notas.join(" · ") }) : null,
+    ...futuros.map((f) => el("span", { className: "futuro", textContent: `${valorTexto(dato, f.valor)} a partir del ${fecha(f.desde)}` })));
+  const fila = el("button", { type: "button", className: "ajuste" }, que,
+    el("span", { className: "valor num", textContent: valorTexto(dato, valor) }), el("span", { className: "chev", textContent: "›" }));
+  fila.setAttribute("aria-expanded", String(abierto === dato.clave));
+  fila.addEventListener("click", () => {
+    abierto = abierto === dato.clave ? null : dato.clave;
+    carreraAbierta = null;
+    mensaje("");
+    pintar();
+  });
+  if (abierto !== dato.clave) return [fila];
+  return [fila, el("article", { className: "tarjeta nueva" }, ...fichaCambio(dato, valor))];
 }
 
 function fichaCambio(dato, valor) {
@@ -239,16 +253,18 @@ function fichaCarrera(c) {
 }
 
 function filaCarrera(c) {
-  if (carreraAbierta === c.id) return fichaCarrera(c);
   const antes = c.dias_mantenimiento === 1 ? "1 día" : `${c.dias_mantenimiento} días`;
-  const cambiar = el("button", { type: "button", className: "cambiar", textContent: "Cambiar" });
-  cambiar.addEventListener("click", () => { carreraAbierta = c.id; abierto = null; mensaje(""); pintar(); });
-  return el("article", { className: "tarjeta" }, el("div", { className: "dato" },
-    el("div", {},
-      el("span", { className: "etiqueta", textContent: fecha(c.fecha) }),
-      el("strong", { textContent: c.nombre }),
-      el("span", { className: "suave desde", textContent: `mantenimiento ${antes} antes y el día de la carrera` }),
-    ), cambiar));
+  const fila = el("button", { type: "button", className: "ajuste" },
+    el("span", { className: "que" }, c.nombre, el("span", { textContent: `${fecha(c.fecha)} · ${antes} de mantenimiento antes` })),
+    el("span", { className: "chev", textContent: "›" }));
+  fila.setAttribute("aria-expanded", String(carreraAbierta === c.id));
+  fila.addEventListener("click", () => {
+    carreraAbierta = carreraAbierta === c.id ? null : c.id;
+    abierto = null;
+    mensaje("");
+    pintar();
+  });
+  return carreraAbierta === c.id ? [fila, fichaCarrera(c)] : [fila];
 }
 
 // -- the page -------------------------------------------------------------------------
@@ -262,11 +278,11 @@ function planDeHoy(plan) {
 
 function pintar() {
   for (const seccion of ["perfil", "plan"]) {
-    $(seccion).replaceChildren(...DATOS.filter((d) => d.seccion === seccion).map(filaDato));
+    $(seccion).replaceChildren(...DATOS.filter((d) => d.seccion === seccion).flatMap(filaDato));
   }
   $("plan-hoy").textContent = planDeHoy(vista.plan);
   $("pregunta-limite").replaceChildren(...(preguntaLimite ? [fichaLimite()] : []));
-  $("carreras").replaceChildren(...vista.carreras.map(filaCarrera));
+  $("carreras").replaceChildren(...vista.carreras.flatMap(filaCarrera));
   $("sin-carreras").hidden = vista.carreras.length > 0 || carreraAbierta === "nueva";
   $("carrera-nueva").replaceChildren(...(carreraAbierta === "nueva" ? [fichaCarrera(null)] : []));
   $("anadir-carrera").hidden = carreraAbierta === "nueva";

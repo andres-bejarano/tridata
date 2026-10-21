@@ -19,6 +19,7 @@ se comprueba a sí mismo.
 | Lanzar una instancia para que la use el usuario (solo lectura: la carga de entreno CTL/ATL/TSB) | `tridata export-pmc --out /tmp/tridata-pmc.md` → se abre con `less /tmp/tridata-pmc.md` |
 | Instalar el dictado por voz (extra `voz`, en el entorno que corre `tridata web`) | `python -m pip install -e ".[voz]"` |
 | Prueba de humo del dictado con el modelo real en la GPU (fuera de la suite) | `PYTHONPATH=src python scripts/probar_dictado.py .runtime/<unidad>/audio.m4a --veces 10` |
+| Instalar y correr el E2E de la pantalla del móvil (extra `e2e`, fuera de `dev` y del CI; sin él `tests/e2e/` se salta) | `python -m pip install -e ".[dev,e2e]" && python -m playwright install chromium`, y luego `TRIDATA_CAPTURAS=../../.runtime/<unidad>/capturas PYTHONPATH=src python -m pytest -q tests/e2e` (las capturas solo si se pone `TRIDATA_CAPTURAS`) |
 | Comprobación de seguridad | `scripts/ci/security` |
 | Todo seguido (lint, suite, seguridad) | `scripts/check.sh` |
 | Parar / limpiar | `rm -f /tmp/tridata-pmc.md && deactivate` (el entorno entero: `rm -rf ~/.venvs/tridata-dev`) |

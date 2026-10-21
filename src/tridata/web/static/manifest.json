@@ -1,0 +1,16 @@
+{
+  "name": "TriData",
+  "short_name": "TriData",
+  "description": "Lo que comes, lo que te queda y tu peso, desde el PC de casa.",
+  "lang": "es-ES",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f2f3f6",
+  "theme_color": "#1a6fe8",
+  "icons": [
+    { "src": "/static/icono-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/static/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icono.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

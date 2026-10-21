@@ -4,83 +4,134 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f2f3f6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0e1115" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="TriData">
   <title>TriData · Hoy</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="icon" href="/static/icono.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/icono-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icono-180.png">
   <link rel="stylesheet" href="/static/estilos.css">
   <script type="module" src="/static/app.js"></script>
 </head>
 <body>
   <main>
-    <header>
-      <a href="/ajustes" class="enlace enlace-ajustes">Ajustes ▸</a>
+    <!-- ================= HOY ================= -->
+    <section id="hoy" class="pantalla" data-pestana="hoy" aria-label="Hoy">
       <nav class="dias" aria-label="Cambiar de día">
-        <button id="anterior" type="button" aria-label="Día anterior">◀</button>
+        <button id="anterior" type="button" class="flecha" aria-label="Día anterior">◀</button>
         <div class="dia-visto">
           <h1 id="titulo">Hoy</h1>
-          <p id="fecha" class="suave"></p>
+          <p id="fecha"></p>
+          <button id="ir-hoy" type="button" class="volver-hoy" hidden>Volver a hoy</button>
         </div>
-        <button id="siguiente" type="button" aria-label="Día siguiente">▶</button>
-        <button id="ir-hoy" type="button" disabled>Hoy</button>
+        <button id="siguiente" type="button" class="flecha" aria-label="Día siguiente">▶</button>
       </nav>
-    </header>
 
-    <section id="barra" class="barra" aria-label="Lo comido frente al objetivo del día">
-      <div class="barra-pista" id="barra-pista">
-        <div class="barra-relleno" id="barra-relleno"></div>
-        <div class="barra-limite" id="barra-limite" hidden></div>
-      </div>
-      <p class="barra-texto"><strong id="barra-pct"></strong> <span id="barra-quedan"></span></p>
-      <p id="barra-objetivo" class="suave"></p>
-      <p id="barra-aviso" class="aviso" hidden></p>
-    </section>
-
-    <section id="cola" class="cola" aria-label="Grabaciones" aria-live="polite">
-      <p id="sin-conexion" class="aviso" hidden>Sin conexión con el PC. Lo que grabes se guarda en el móvil y se envía cuando vuelva.</p>
-      <p id="sin-enviar" class="aviso-cola" hidden></p>
-      <div id="no-transcritas"></div>
-      <div id="pendientes" class="tarjeta pendientes" hidden>
-        <p id="pendientes-texto" class="fuerte"></p>
-        <button id="revisar" type="button" class="principal">Revisar</button>
-      </div>
-    </section>
-
-    <section aria-labelledby="t-peso" class="bloque-peso">
-      <h2 id="t-peso" class="oculto">Peso</h2>
-      <p id="peso-dia" class="peso-dia"></p>
-      <p id="peso-media" class="suave"></p>
-      <p id="peso-proyeccion" class="suave"></p>
-    </section>
-
-    <section aria-labelledby="t-margen">
-      <h2 id="t-margen">Lo que te queda</h2>
-      <div id="margenes" class="margenes"></div>
-      <p id="objetivo-dia" class="objetivo-dia" hidden></p>
-      <p id="plan" class="suave"></p>
-      <p id="gasto" class="suave"></p>
-      <div id="desglose" class="desglose"></div>
-      <div class="garmin">
-        <button id="actualizar-garmin" type="button">Actualizar Garmin</button>
-        <p id="garmin-estado" class="suave" role="status" aria-live="polite"></p>
-      </div>
-
-      <div id="controles-hoy" class="controles">
-        <details id="objetivo-hoy" class="tarjeta">
-          <summary>Objetivo de hoy</summary>
-          <p id="objetivo-actual" class="suave"></p>
-          <div class="fila dos">
-            <label class="campo"><span>% de hoy (con signo)</span>
-              <input id="objetivo-pct" type="text" inputmode="decimal" autocomplete="off"></label>
-            <button id="objetivo-mantenimiento" type="button">Mantenimiento</button>
+      <article id="queda" class="tarjeta queda" aria-label="Lo que te queda">
+        <div class="etiqueta">
+          <span id="queda-texto">Te quedan para comer</span>
+          <span id="nivel-activo" class="nivel-activo">Nivel</span>
+        </div>
+        <div class="cifra num"><span id="queda-cifra">—</span><small>kcal</small></div>
+        <p id="queda-objetivo" class="marca-objetivo" hidden>objetivo del día</p>
+        <section id="barra" class="barra" aria-label="Lo comido frente al objetivo del día">
+          <div class="barra-pista" id="barra-pista">
+            <div class="barra-planeado" id="barra-planeado" hidden></div>
+            <div class="barra-relleno" id="barra-relleno"></div>
+            <div class="barra-limite" id="barra-limite" hidden></div>
           </div>
+          <div class="barra-leyenda" id="barra-leyenda">
+            <span><strong id="barra-pct" class="num"></strong> <span id="barra-quedan"></span></span>
+            <span id="barra-leyenda-planeado" hidden>▨ planeado</span>
+          </div>
+          <p id="barra-aviso" class="aviso" hidden></p>
+        </section>
+        <div id="otros" class="otros" aria-label="Otros niveles: toca uno para mirarlo"></div>
+        <button id="abrir-hoja" type="button" class="ajustar" aria-haspopup="dialog">
+          <span>⚙︎ Ajustar el día</span><span id="ajustar-resumen" class="resumen"></span>
+        </button>
+      </article>
+
+      <p id="mensaje" role="status" aria-live="polite"></p>
+
+      <section id="cola" class="cola" aria-label="Grabaciones" aria-live="polite">
+        <p id="sin-conexion" class="aviso" hidden>Sin conexión con el PC. Lo que grabes se guarda en el móvil y se envía cuando vuelva.</p>
+        <p id="sin-enviar" class="aviso-cola" hidden></p>
+        <div id="no-transcritas"></div>
+        <div id="pendientes" class="tarjeta pendientes" hidden>
+          <p id="pendientes-texto" class="fuerte"></p>
+          <button id="revisar" type="button" class="principal">Revisar</button>
+        </div>
+      </section>
+
+      <section id="revision" aria-labelledby="t-revision" hidden>
+        <h2 id="t-revision">Esto he entendido</h2>
+        <p id="dicho" class="dicho" hidden></p>
+        <p id="dia-grabacion" class="marca alerta" hidden></p>
+        <p class="suave">Revísalo: corrige lo que haga falta y confirma. Hasta entonces no se guarda nada.</p>
+        <div id="piezas"></div>
+        <div id="simulacion" class="tarjeta simulacion" hidden></div>
+        <div id="lista"></div>
+        <button id="anadir-revision" type="button" class="anadir">Añadir alimento</button>
+        <p id="bloqueo" class="aviso" hidden></p>
+        <div class="acciones">
+          <button id="confirmar" type="button" class="principal">Confirmar y guardar</button>
+          <button id="descartar" type="button">Descartar</button>
+        </div>
+        <div id="confirmar-descarte" class="confirmar-borrado" hidden>
+          <p>¿Descartar esta lista? No se guardará nada.</p>
           <div class="acciones">
-            <button id="objetivo-guardar" type="button" class="principal">Cambiar el de hoy</button>
-            <button id="objetivo-plan" type="button">Volver al plan</button>
+            <button id="descarte-si" type="button" class="peligro principal">Sí, descartar</button>
+            <button id="descarte-no" type="button">No</button>
           </div>
-          <p id="retraso" class="fuerte" hidden></p>
-          <p id="objetivo-error" class="aviso" hidden></p>
-        </details>
+        </div>
+      </section>
 
-        <details id="niveles" class="tarjeta">
-          <summary>Niveles de margen de hoy</summary>
+      <h2 id="t-comido"><span id="t-comido-dia">Tu día</span> <small id="total" class="num"></small></h2>
+      <div id="avisos"></div>
+      <article id="lista-dia" class="tarjeta lista" hidden></article>
+      <p id="vacio" class="suave vacio-dia">Aún no has apuntado nada hoy.</p>
+      <div id="anadir-ficha"></div>
+      <button id="anadir" type="button" class="anadir">Añadir</button>
+    </section>
+
+    <!-- ================= PESO (peso.js) ================= -->
+    <section id="peso" class="pantalla" data-pestana="peso" aria-label="Peso" hidden>
+      <h1 class="titulo-pantalla">Peso</h1>
+      <div id="peso-contenido"><p class="suave">Cargando…</p></div>
+    </section>
+
+    <!-- ================= RECETAS (empty until unit 011) ================= -->
+    <section id="recetas" class="pantalla" data-pestana="recetas" aria-label="Recetas" hidden>
+      <h1 class="titulo-pantalla">Recetas</h1>
+      <article class="tarjeta vacio">
+        <div class="dibujo" aria-hidden="true"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5"/><path d="M9 8h6M9 12h6"/></svg></div>
+        <h3>Aún no hay nada aquí</h3>
+        <p>Tus recetas, taras y alimentos fijos.</p>
+        <p>Lo que guardes aquí lo entenderá al dictar: «la tortilla de siempre», «el táper grande».</p>
+      </article>
+      <article class="tarjeta tipos">
+        <div class="tipo"><div class="ico ico-receta" aria-hidden="true">🍲</div><div><strong>Recetas</strong><span>Platos con sus ingredientes y raciones</span></div></div>
+        <div class="tipo"><div class="ico ico-tara" aria-hidden="true">⚖️</div><div><strong>Taras</strong><span>Lo que pesa cada táper o plato vacío</span></div></div>
+        <div class="tipo"><div class="ico ico-fijo" aria-hidden="true">📌</div><div><strong>Alimentos fijos</strong><span>Los de siempre, con sus kcal ya puestas</span></div></div>
+      </article>
+      <button type="button" class="pronto" disabled>＋ Añadir · próximamente</button>
+    </section>
+  </main>
+
+  <!-- ================= HOJA: AJUSTES DEL DÍA ================= -->
+  <dialog id="hoja" class="hoja" aria-labelledby="hoja-titulo">
+    <div class="hoja-in">
+      <div class="asa" aria-hidden="true"></div>
+      <div class="hoja-cab"><h3 id="hoja-titulo">Ajustes de hoy</h3><button id="cerrar-hoja" type="button" class="cerrar">Listo</button></div>
+
+      <article id="bloque-nivel" class="tarjeta bloque">
+        <div class="dato-fila"><h4>Nivel que miras</h4><button id="abrir-niveles" type="button" class="enlace-boton">Cambiar niveles</button></div>
+        <div id="segmentado" class="segmentado" role="group" aria-label="Nivel que miras"></div>
+        <div id="niveles" class="desplegable" hidden>
           <label class="campo"><span>De 1 a 5 niveles, entre −50 y +50 % (separa con ;)</span>
             <input id="niveles-texto" type="text" inputmode="text" autocomplete="off"></label>
           <div class="acciones">
@@ -88,67 +139,81 @@
             <button id="niveles-defecto" type="button">−10 / 0 / +10</button>
           </div>
           <p id="niveles-error" class="aviso" hidden></p>
-        </details>
+        </div>
+      </article>
 
-        <details id="previsto" class="tarjeta">
-          <summary>Entreno previsto</summary>
-          <p id="previsto-actual" class="suave"></p>
+      <article id="objetivo-hoy" class="tarjeta bloque">
+        <div class="dato-fila"><h4>Objetivo de hoy</h4><strong id="objetivo-valor" class="num"></strong></div>
+        <p id="objetivo-kcal" class="suave"></p>
+        <p id="objetivo-actual" class="suave"></p>
+        <p id="objetivo-dia" class="objetivo-dia" hidden></p>
+        <p id="retraso" class="fuerte" hidden></p>
+        <div class="botones">
+          <button id="abrir-pct" type="button" class="boton">Cambiar %</button>
+          <button id="objetivo-mantenimiento" type="button" class="boton">Mantenimiento</button>
+        </div>
+        <div id="caja-pct" class="desplegable" hidden>
+          <label class="campo"><span>% de hoy (con signo)</span>
+            <input id="objetivo-pct" type="text" inputmode="decimal" autocomplete="off"></label>
+          <button id="objetivo-guardar" type="button" class="principal">Cambiar el de hoy</button>
+        </div>
+        <button id="objetivo-plan" type="button" class="boton ancho">Volver al plan</button>
+        <p id="objetivo-error" class="aviso" hidden></p>
+        <p id="plan" class="suave"></p>
+      </article>
+
+      <article id="previsto" class="tarjeta bloque">
+        <div class="dato-fila"><h4>Entreno previsto</h4><strong id="previsto-valor" class="num">—</strong></div>
+        <p id="previsto-actual" class="suave"></p>
+        <div class="botones">
+          <button id="abrir-previsto" type="button" class="boton">Cambiar</button>
+          <button id="previsto-quitar" type="button" class="boton">Ya hecho</button>
+        </div>
+        <div id="caja-previsto" class="desplegable" hidden>
           <label class="campo"><span>Como este entreno (últimos 14 días)</span>
             <select id="previsto-actividad"></select></label>
           <label class="campo"><span>Minutos que harás</span>
             <input id="previsto-minutos" type="number" inputmode="numeric" min="1" max="600" step="1"></label>
-          <div class="acciones">
-            <button id="previsto-guardar" type="button" class="principal">Poner previsto</button>
-            <button id="previsto-quitar" type="button">Quitar (ya hecho)</button>
-          </div>
-          <p id="previsto-error" class="aviso" hidden></p>
-        </details>
-      </div>
-    </section>
-
-    <section aria-labelledby="t-comido">
-      <h2 id="t-comido">Comido hoy <span id="total" class="total"></span></h2>
-      <div id="avisos"></div>
-      <table id="tabla">
-        <thead><tr><th>Alimento</th><th>Cantidad</th><th class="num">kcal</th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <p id="vacio" class="suave">Aún no has apuntado nada hoy.</p>
-      <div id="anadir-ficha"></div>
-      <button id="anadir" type="button" class="anadir">Añadir</button>
-    </section>
-
-    <section id="revision" aria-labelledby="t-revision" hidden>
-      <h2 id="t-revision">Esto he entendido</h2>
-      <p id="dicho" class="dicho" hidden></p>
-      <p id="dia-grabacion" class="marca alerta" hidden></p>
-      <p class="suave">Revísalo: corrige lo que haga falta y confirma. Hasta entonces no se guarda nada.</p>
-      <div id="piezas"></div>
-      <div id="simulacion" class="tarjeta simulacion" hidden></div>
-      <div id="lista"></div>
-      <button id="anadir-revision" type="button" class="anadir">Añadir alimento</button>
-      <p id="bloqueo" class="aviso" hidden></p>
-      <div class="acciones">
-        <button id="confirmar" type="button" class="principal">Confirmar y guardar</button>
-        <button id="descartar" type="button">Descartar</button>
-      </div>
-      <div id="confirmar-descarte" class="confirmar-borrado" hidden>
-        <p>¿Descartar esta lista? Lo que dijiste no se guardará.</p>
-        <div class="acciones">
-          <button id="descarte-si" type="button" class="peligro principal">Sí, descartar</button>
-          <button id="descarte-no" type="button">No</button>
+          <button id="previsto-guardar" type="button" class="principal">Poner previsto</button>
         </div>
+        <p id="previsto-error" class="aviso" hidden></p>
+      </article>
+
+      <article id="bloque-gasto" class="tarjeta bloque">
+        <div class="dato-fila"><h4 id="gasto-titulo">Gasto de hoy</h4><strong id="gasto-total" class="num"></strong></div>
+        <div id="desglose" class="desglose"></div>
+        <p id="gasto" class="suave"></p>
+        <div id="bloque-garmin" class="garmin">
+          <p id="garmin-estado" class="suave" role="status" aria-live="polite"></p>
+          <button id="actualizar-garmin" type="button" class="principal">↻ Actualizar Garmin</button>
+        </div>
+      </article>
+    </div>
+  </dialog>
+
+  <!-- ================= ABAJO: CAJA + PESTAÑAS ================= -->
+  <div id="abajo" class="abajo">
+    <form id="entrada" class="caja">
+      <label for="texto" class="oculto">¿Qué has comido o vas a comer? También tu peso o «nuevo día…»</label>
+      <div class="texto-caja">
+        <textarea id="texto" rows="1" placeholder="Comida, «peso 72,4» o «nuevo día…»" required></textarea>
+        <button id="enviar" type="submit" class="enviar" aria-label="Interpretar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
       </div>
-    </section>
-
-    <p id="mensaje" role="status" aria-live="polite"></p>
-  </main>
-
-  <form id="entrada">
-    <label for="texto" class="oculto">¿Qué has comido o vas a comer? También tu peso o «nuevo día…»</label>
-    <button id="grabar" type="button" class="grabar" aria-label="Grabar lo que has comido">Grabar</button>
-    <textarea id="texto" rows="2" placeholder="Comida, «peso 70,2» o «nuevo día…»" required></textarea>
-    <button id="enviar" type="submit" class="principal">Interpretar</button>
-  </form>
+      <button id="grabar" type="button" class="micro" aria-label="Grabar lo que has comido">
+        <svg class="micro-icono" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg>
+        <span id="grabar-tiempo" class="micro-tiempo" hidden></span>
+      </button>
+    </form>
+    <nav class="pestanas" aria-label="Pantallas">
+      <a class="pestana" href="#hoy" data-ir="hoy">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><path d="M12 8v4l2.5 2"/></svg>Hoy</a>
+      <a class="pestana" href="#peso" data-ir="peso">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M7.5 11a4.5 4.5 0 0 1 9 0"/><path d="M12 11l1.8-2.6"/><path d="M8 16h8"/></svg>Peso</a>
+      <a class="pestana" href="#recetas" data-ir="recetas">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5"/><path d="M9 8h6M9 12h6"/></svg>Recetas</a>
+      <a class="pestana" href="/ajustes" data-ir="ajustes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>Ajustes</a>
+    </nav>
+  </div>
 </body>
 </html>

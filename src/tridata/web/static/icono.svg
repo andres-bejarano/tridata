@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>TriData</title>
+  <defs>
+    <clipPath id="tile"><rect width="512" height="512" rx="112"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="512" height="171" fill="#1a7cf0"/>
+    <rect y="171" width="512" height="171" fill="#f28a1c"/>
+    <rect y="342" width="512" height="170" fill="#1fa55a"/>
+  </g>
+  <g fill="none" stroke="#fff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Nadar: olas -->
+    <path d="M118 74 q34.5 -30 69 0 t69 0 t69 0 t69 0"/>
+    <path d="M118 120 q34.5 -30 69 0 t69 0 t69 0 t69 0"/>
+    <!-- Bici -->
+    <g transform="translate(0 171)">
+      <circle cx="170" cy="100" r="50"/>
+      <circle cx="342" cy="100" r="50"/>
+      <path d="M170 100 L250 100 L226 48 Z M226 48 L316 48 L250 100 M316 48 L342 100 M302 30 L322 30 L316 48 M210 36 L242 36"/>
+    </g>
+    <!-- Correr -->
+    <g transform="translate(0 342)">
+      <circle cx="292" cy="30" r="17" fill="#fff" stroke="none"/>
+      <path d="M278 58 L250 104 M270 70 L302 90 L328 78 M270 70 L238 80 L218 100 M250 104 L290 120 L292 152 M250 104 L228 136 L194 140"/>
+    </g>
+  </g>
+</svg>

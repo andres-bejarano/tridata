@@ -3,15 +3,19 @@ set -euo pipefail
 
 cd "$(dirname "$0")" || exit 1
 
-TRIDATA=/home/ankalagon/anaconda3/envs/tridata/bin/tridata
-LOG=/home/ankalagon/projects/tridata/sync.log
-EXPORT=/home/ankalagon/projects/tridata/exports/garmin_export.md
-METRICS=/home/ankalagon/projects/tridata/exports/metrics.md
-RUNNING=/home/ankalagon/projects/tridata/exports/running.md
-CYCLING=/home/ankalagon/projects/tridata/exports/cycling.md
-SWIMMING=/home/ankalagon/projects/tridata/exports/swimming.md
-GYM=/home/ankalagon/projects/tridata/exports/gym.md
-PMC=/home/ankalagon/projects/tridata/exports/pmc.md
+# Sin entorno, las rutas de siempre. El test de la unidad 015 las cambia (un `tridata`
+# falso, log y exports en una carpeta temporal) para ejecutar este script de verdad.
+TRIDATA="${TRIDATA:-/home/ankalagon/anaconda3/envs/tridata/bin/tridata}"
+LOG="${LOG:-/home/ankalagon/projects/tridata/sync.log}"
+EXPORTS_DIR="${EXPORTS_DIR:-/home/ankalagon/projects/tridata/exports}"
+EXPORT="$EXPORTS_DIR/garmin_export.md"
+METRICS="$EXPORTS_DIR/metrics.md"
+RUNNING="$EXPORTS_DIR/running.md"
+CYCLING="$EXPORTS_DIR/cycling.md"
+SWIMMING="$EXPORTS_DIR/swimming.md"
+GYM="$EXPORTS_DIR/gym.md"
+PMC="$EXPORTS_DIR/pmc.md"
+NUTRICION="$EXPORTS_DIR/nutricion.md"
 
 # --- Barrido amplio automático -------------------------------------------
 # En vez de un segundo script/timer semanal separado, esta misma corrida
@@ -21,7 +25,7 @@ PMC=/home/ankalagon/projects/tridata/exports/pmc.md
 # falta acordarse de nada por separado.
 WIDE_DAYS=45
 WIDE_INTERVAL_DAYS=7
-WIDE_MARKER=/home/ankalagon/.tridata/last_wide_sync
+WIDE_MARKER="${WIDE_MARKER:-/home/ankalagon/.tridata/last_wide_sync}"
 
 # --- Reintentos ante fallos transitorios de login ------------------------
 # El login a Garmin ha fallado varias veces con "Failed to retrieve social
@@ -31,7 +35,7 @@ WIDE_MARKER=/home/ankalagon/.tridata/last_wide_sync
 # hipo pasajero: si falla incluso tras los reintentos, no se actualiza
 # WIDE_MARKER y mañana se vuelve a intentar automáticamente.
 MAX_ATTEMPTS=3
-RETRY_DELAY_SECONDS=60
+RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-60}"
 
 run_step() {
     local label="$1"; shift
@@ -54,6 +58,21 @@ run_step() {
     done
 }
 
+# --- nutricion.md (unidad 015) ------------------------------------------
+# Rehace entero exports/nutricion.md desde la base (no habla con Garmin).
+# Se llama dos veces: tras la copia de seguridad, para que exista aunque
+# Garmin falle, y al final, ya con el gasto real del día cerrado.
+export_nutricion() {
+    if "$TRIDATA" export-nutricion --out "$NUTRICION" >> "$LOG" 2>&1; then
+        echo "export-nutricion OK" >> "$LOG"
+        return 0
+    else
+        local code=$?
+        echo "export-nutricion FAILED (exit $code)" >> "$LOG"
+        return "$code"
+    fi
+}
+
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
 
 # --- Copia de seguridad, antes de tocar nada -----------------------------
@@ -70,6 +89,9 @@ if "$TRIDATA" backup "${BACKUP_EXTRAS[@]}" >> "$LOG" 2>&1; then
 else
     echo "backup FAILED (exit $?) — se sigue con el sync" >> "$LOG"
 fi
+
+# Antes del sync y sin depender de él: si falla, se avisa y se sigue.
+export_nutricion || echo "export-nutricion: se sigue con el sync" >> "$LOG"
 
 # ¿Toca barrido amplio hoy?
 do_wide=false
@@ -160,6 +182,11 @@ if "$TRIDATA" export-pmc --out "$PMC" --chart >> "$LOG" 2>&1; then
     echo "export-pmc OK" >> "$LOG"
 else
     echo "export-pmc FAILED (exit $?)" >> "$LOG"
+    exit 1
+fi
+
+# Otra vez al final, ya con lo que el sync acaba de cerrar.
+if ! export_nutricion; then
     exit 1
 fi
 

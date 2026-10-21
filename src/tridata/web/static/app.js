@@ -10,17 +10,27 @@
 // Unit 006: «Grabar» dictates instead of writing. The recording is kept on the phone (cola.js)
 // until the PC sends back its text and list, which wait as «pendientes de revisar» until they
 // are confirmed or discarded. The service worker (sw.js) lets the page open with the PC off.
+// Unit 010 (presentation only, no rule changes): Hoy, Peso and Recetas are sections of this page
+// chosen by #hoy / #peso / #recetas; the «Te quedan» card shows in big the level being looked at
+// (remembered on this phone) with the others as buttons; everything that adjusts the day lives in
+// the sheet «⚙ Ajustar el día» (<dialog id="hoja">); the day is a list Comido / Planeado. The Peso
+// tab is drawn by peso.js, always for today.
 
 import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
+import { pintarPeso } from "./peso.js";
 
 const $ = (id) => document.getElementById(id);
-const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 });
+// kcal with a thousands point always («1.040»): es-ES does not group 4 digits by default
+const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1, useGrouping: "always" });
 const porPaso = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 3 }); // 0,04 kcal/paso must not read 0
 const kilos = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 }); // 0,25 kg/semana must not read 0,3
 const fechaLarga = new Intl.DateTimeFormat("es-ES", { weekday: "long", day: "numeric", month: "long" });
 const signo = (n) => (n > 0 ? "+" : n < 0 ? "−" : "") + numero.format(Math.abs(n));
 const etiquetaNivel = (n) => (n === 0 ? "Mantenimiento" : `${signo(n)} %`);
+const conSignoKcal = (n) => (n < 0 ? `−${numero.format(-n)}` : numero.format(n));
+const PESTANAS = ["hoy", "peso", "recetas"];
+const CLAVE_NIVEL = "tridata.nivel-que-miras"; // a screen preference of this phone, never the objective
 const PESO_MIN = 30;
 const PESO_MAX = 250;
 
@@ -62,10 +72,10 @@ async function api(ruta, cuerpo) {
     const r = await fetch(ruta, opciones);
     const datos = await r.json().catch(() => ({}));
     ponerConexion(r.ok || Boolean(datos.error)); // a proxy page (PC off behind tailscale) is no PC
-    return { ok: r.ok, datos };
+    return { ok: r.ok, estado: r.status, datos };
   } catch {
     ponerConexion(false);
-    return { ok: false, datos: { error: "No hay conexión con el PC. Inténtalo de nuevo." } };
+    return { ok: false, estado: 0, datos: { error: "No hay conexión con el PC. Inténtalo de nuevo." } };
   }
 }
 
@@ -79,6 +89,46 @@ function ponerConexion(hay) {
 function mensaje(texto, tipo = "") {
   $("mensaje").textContent = texto;
   $("mensaje").className = tipo;
+}
+
+// A day without basal or kcal per step (409): the message of the server and a way to Ajustes.
+function mensajeAjustes(texto) {
+  mensaje(texto, "error");
+  $("mensaje").append(" ", el("a", { href: "/ajustes", className: "enlace", textContent: "Ir a Ajustes ›" }));
+}
+
+// -- the level being looked at (unit 010) ---------------------------------------------
+
+function nivelRecordado() {
+  try {
+    const v = localStorage.getItem(CLAVE_NIVEL);
+    return v === null ? null : Number(v);
+  } catch {
+    return null;
+  }
+}
+
+function recordarNivel(n) {
+  try { localStorage.setItem(CLAVE_NIVEL, String(n)); } catch { /* private mode: only for this visit */ }
+}
+
+let nivelDeLaVisita = null; // if storage fails, the choice still holds until the page is closed
+
+// The remembered one if it is still a level of the day; else the one marked as the objective of
+// the day; else the one equal to today's objective %; else the first.
+function nivelMirado(dia) {
+  const niveles = dia.margenes.map((m) => m.nivel);
+  for (const n of [nivelRecordado(), nivelDeLaVisita]) if (n !== null && niveles.includes(n)) return n;
+  const marcado = dia.margenes.find((m) => m.objetivo);
+  if (marcado) return marcado.nivel;
+  if (niveles.includes(dia.objetivo.porcentaje)) return dia.objetivo.porcentaje;
+  return niveles[0];
+}
+
+function mirar(n) {
+  nivelDeLaVisita = n;
+  recordarNivel(n);
+  if (ultimoDia) { pintarTarjeta(ultimoDia); pintarSegmentado(ultimoDia); pintarConPlaneado(ultimoDia); }
 }
 
 // -- the day --------------------------------------------------------------------
@@ -107,83 +157,92 @@ function pintarDia(dia) {
   ultimoDia = dia;
   const esHoy = dia.fecha === hoyISO;
   $("titulo").textContent = nombreDelDia(dia.fecha);
-  document.title = `TriData · ${nombreDelDia(dia.fecha)}`;
+  if (pestanaActual() === "hoy") document.title = `TriData · ${nombreDelDia(dia.fecha)}`;
   $("fecha").textContent = deFecha(dia.fecha);
-  $("ir-hoy").disabled = esHoy;
-  $("t-comido").firstChild.textContent = esHoy ? "Comido hoy " : `El ${deFecha(dia.fecha)} `;
+  $("ir-hoy").hidden = esHoy;
+  $("t-comido-dia").textContent = esHoy ? "Tu día" : mayuscula(deFecha(dia.fecha));
   $("vacio").textContent = esHoy ? "Aún no has apuntado nada hoy." : `No hay nada apuntado el ${deFecha(dia.fecha)}.`;
-  $("margenes").replaceChildren(...dia.margenes.map((m) => el("div", { className: `margen n${m.nivel}${m.objetivo ? " objetivo" : ""}` },
-    el("span", { className: "etiqueta", textContent: etiquetaNivel(m.nivel) }),
-    el("strong", { textContent: kcal(m.kcal) }),
-    m.objetivo ? el("span", { className: "marca-objetivo", textContent: "objetivo del día" }) : null,
-  )));
-  pintarPeso(dia);
-  const objetivo = textoObjetivo(dia.objetivo_dia, dia.gasto);
-  $("objetivo-dia").textContent = objetivo;
-  $("objetivo-dia").hidden = !objetivo;
-  $("plan").textContent = textoPlan(dia.plan);
-  $("gasto").textContent = `Gasto estimado ${kcal(dia.gasto.kcal)}: ${dia.gasto.explicacion}.`;
+  $("total").textContent = `${numero.format(dia.total_kcal)} kcal comidas`;
+  const previsto = dia.gasto.desglose && dia.gasto.desglose.previsto;
+  $("ajustar-resumen").textContent = `gasto ${numero.format(dia.gasto.kcal)}${previsto ? " · entreno" : ""} ›`;
+  pintarTarjeta(dia);
   pintarBarra(dia);
-  pintarDesglose(dia);
-  pintarControles(dia, esHoy);
-  $("total").textContent = kcal(dia.total_kcal);
+  pintarHoja(dia, esHoy);
+  pintarLista(dia);
+}
 
-  const filas = dia.alimentos.map((a) => {
-    if (a.id === editando) return el("tr", {}, el("td", { colSpan: 3 }, fichaCambio(a)));
-    const marcas = [];
-    if (a.estimado) marcas.push(el("span", { className: "marca", textContent: "estimado" }));
-    if (a.pendiente_cantidad) marcas.push(el("span", { className: "marca alerta", textContent: "pendiente de cantidad" }));
-    if (a.estado === "planeado") marcas.push(el("span", { className: "marca", textContent: "planeado" }));
-    let comido = null;
-    if (a.estado === "planeado" && a.dia <= hoyISO) { // a later day cannot be eaten yet (R3)
-      comido = el("button", { type: "button", className: "comido", textContent: "Comido" });
-      comido.addEventListener("click", (evento) => { evento.stopPropagation(); marcarComido(a, comido); });
-    }
-    const sumado = a.estado === "comido" && !a.pendiente_cantidad;
-    const fila = el("tr", { className: sumado ? "" : "fuera", title: "Toca para cambiarlo" },
-      el("td", {}, a.nombre, ...marcas, comido),
-      el("td", { textContent: cantidad(a) }),
-      el("td", { className: "num", textContent: sumado ? numero.format(a.kcal) : "—" }),
-    );
-    fila.addEventListener("click", () => { editando = a.id; anadiendo = false; mensaje(""); pintarDia(ultimoDia); });
-    return fila;
-  });
-  $("tabla").tBodies[0].replaceChildren(...filas);
-  $("tabla").hidden = filas.length === 0;
-  $("vacio").hidden = filas.length > 0;
+// The «Te quedan» card: the level being looked at in big, the others as buttons (R1).
+function pintarTarjeta(dia) {
+  const n = nivelMirado(dia);
+  const m = dia.margenes.find((x) => x.nivel === n);
+  const pasado = m.kcal < 0;
+  $("queda-texto").textContent = pasado ? "Te has pasado" : "Te quedan para comer";
+  $("queda-cifra").textContent = numero.format(Math.abs(m.kcal));
+  $("queda").classList.toggle("pasado", pasado);
+  $("nivel-activo").textContent = n === 0 ? "Mantenimiento" : `Nivel ${signo(n)} %`;
+  $("queda-objetivo").hidden = !m.objetivo;
+  $("otros").replaceChildren(...dia.margenes.filter((x) => x.nivel !== n).map((x) => {
+    const boton = el("button", { type: "button", className: `otro${x.objetivo ? " objetivo" : ""}`,
+      title: x.objetivo ? "Objetivo del día" : "" },
+    el("span", { textContent: etiquetaNivel(x.nivel) }), el("strong", { className: "num", textContent: conSignoKcal(x.kcal) }));
+    boton.addEventListener("click", () => mirar(x.nivel));
+    return boton;
+  }));
+}
+
+// The day as a list in two groups, Comido and Planeado; tapping a row opens its change card (R4).
+function filaAlimento(a) {
+  if (a.id === editando) return fichaCambio(a);
+  const planeado = a.estado === "planeado";
+  const detalle = el("span", { className: a.cantidad === null ? "sin-cantidad" : "" }, a.cantidad === null ? "" : cantidad(a));
+  if (a.estimado) detalle.append(el("i", { className: "marca", textContent: "estimado" }));
+  if (a.pendiente_cantidad) detalle.append(el("i", { className: "marca alerta", textContent: "falta cantidad" }));
+  const cuenta = !a.pendiente_cantidad && a.kcal !== null;
+  const fila = el("div", { className: `fila${planeado ? " planeada" : ""}`, tabIndex: 0, title: "Toca para cambiarlo" },
+    el("div", { className: "que" }, el("strong", { textContent: a.nombre }), detalle),
+    el("div", { className: "kcal num", textContent: cuenta ? numero.format(a.kcal) : "—" }));
+  fila.setAttribute("data-grupo", planeado ? "planeado" : "comido");
+  if (planeado && a.dia <= hoyISO) { // a later day cannot be eaten yet (R3 of 004)
+    const comido = el("button", { type: "button", className: "btn-comido", textContent: "Comido" });
+    comido.addEventListener("click", (evento) => { evento.stopPropagation(); marcarComido(a, comido); });
+    fila.append(comido);
+  }
+  const abrir = () => { editando = a.id; anadiendo = false; mensaje(""); pintarDia(ultimoDia); };
+  fila.addEventListener("click", abrir);
+  fila.addEventListener("keydown", (evento) => { if (evento.key === "Enter") abrir(); });
+  return fila;
+}
+
+function pintarLista(dia) {
+  const comidos = dia.alimentos.filter((a) => a.estado !== "planeado");
+  const planeados = dia.alimentos.filter((a) => a.estado === "planeado");
+  const nodos = [];
+  if (comidos.length) nodos.push(el("div", { className: "subtitulo", textContent: "Comido" }), ...comidos.map(filaAlimento));
+  if (planeados.length) nodos.push(el("div", { className: "subtitulo", textContent: "Planeado" }), ...planeados.map(filaAlimento));
+  nodos.push(el("div", { id: "con-planeado", className: "total", hidden: true }));
+  $("lista-dia").replaceChildren(...nodos);
+  $("lista-dia").hidden = dia.alimentos.length === 0;
+  $("vacio").hidden = dia.alimentos.length > 0;
+  pintarConPlaneado(dia);
   $("anadir-ficha").replaceChildren(...(anadiendo ? [fichaAnadir(dia.fecha)] : []));
   $("anadir").hidden = anadiendo;
-
   $("avisos").replaceChildren(...(dia.pendientes.length ? [el("p", {
     className: "aviso",
     textContent: `Falta la cantidad de: ${dia.pendientes.map((p) => p.nombre).join(", ")}. No suma hasta que la pongas.`,
   })] : []));
 }
 
-// The weight line of the day being looked at: weight, 7-day mean, basal and projection (unit 007).
-function pintarPeso(dia) {
-  const p = dia.peso;
-  if (!p) { $("peso-dia").textContent = ""; $("peso-media").textContent = ""; $("peso-proyeccion").textContent = ""; return; }
-  const quien = dia.fecha === hoyISO ? "Peso de hoy" : `Peso del ${deFecha(dia.fecha)}`;
-  const nota = p.del_dia && p.del_dia.nota ? ` (${p.del_dia.nota})` : "";
-  $("peso-dia").textContent = p.del_dia ? `${quien} ${kilos.format(p.del_dia.kg)} kg${nota}` : `${quien}: sin apuntar`;
-  const media = p.media_7_dias
-    ? `Media de 7 días ${kilos.format(p.media_7_dias.kg)} kg (${p.media_7_dias.dias_con_peso} ${p.media_7_dias.dias_con_peso === 1 ? "día" : "días"} con peso)`
-    : `Media de 7 días: ${p.media_texto}`;
-  const b = p.basal;
-  const basal = b.kcal === null ? "basal: sin dato" : `basal ${kcal(b.kcal)} (${b.origen === "peso" ? "con tu peso" : "el de Ajustes"})`;
-  $("peso-media").textContent = `${media} · ${basal}.`;
-  const y = p.proyeccion;
-  let proyeccion = `Proyección: ${p.proyeccion_texto ?? ""}.`;
-  if (y && y.faltan_kg !== null) {
-    const ritmo = y.kg_por_semana === null ? "la fecha ya ha pasado"
-      : `hace falta ${kilos.format(Math.abs(y.kg_por_semana))} kg por semana`;
-    const verbo = y.faltan_kg >= 0 ? "faltan" : "sobran";
-    proyeccion = `Objetivo ${kilos.format(y.objetivo_kg)} kg el ${deFecha(y.fecha)}: ${verbo} ${kilos.format(Math.abs(y.faltan_kg))} kg, ${ritmo}.`;
-  } else if (y) {
-    proyeccion = `Objetivo ${numero.format(y.objetivo_kg)} kg el ${deFecha(y.fecha)}: ${p.proyeccion_texto}.`;
-  }
-  $("peso-proyeccion").textContent = proyeccion;
+// «Con lo planeado te quedarían …» for the level being looked at; only with something planned that counts.
+function pintarConPlaneado(dia) {
+  const linea = $("con-planeado");
+  if (!linea) return;
+  linea.hidden = !(dia.planeado_kcal > 0);
+  if (linea.hidden) { linea.replaceChildren(); return; }
+  const n = nivelMirado(dia);
+  const m = dia.con_planeado.margenes.find((x) => x.nivel === n);
+  linea.replaceChildren(
+    el("span", { textContent: m.kcal < 0 ? "Con lo planeado te pasarías" : "Con lo planeado te quedarían" }), " ",
+    el("strong", { className: "num", textContent: `${numero.format(Math.abs(m.kcal))} kcal` }));
 }
 
 // The objective of the day in one line; "" when the day has none.
@@ -198,17 +257,22 @@ function textoObjetivo(o, gasto) {
 
 // -- unit 008: bar, breakdown, Garmin and today's controls -----------------------
 
-function pintarBarra(dia, b = dia.barra, titulo = null) {
-  if (!b) { $("barra").hidden = true; return; }
-  $("barra").hidden = false;
+function pintarBarra(dia) {
+  const b = dia.barra;
   $("barra").classList.toggle("pasada", b.pasado_kcal > 0);
   const lim = b.limite;
   // the scale reaches the objective and, if further, the healthy-limit mark (R-23, C-39)
   const escala = Math.max(b.objetivo_kcal, lim ? lim.kcal : 0, 1);
-  $("barra-relleno").style.width = `${Math.min(b.comido_kcal / escala * 100, 100)}%`;
+  const comido = Math.min(b.comido_kcal / escala * 100, 100);
+  $("barra-relleno").style.width = `${comido}%`;
+  const planeado = dia.planeado_kcal > 0 ? Math.min(dia.planeado_kcal / escala * 100, 100 - comido) : 0;
+  $("barra-planeado").hidden = !(planeado > 0);
+  $("barra-planeado").style.left = `${comido}%`;
+  $("barra-planeado").style.width = `${planeado}%`;
+  $("barra-leyenda-planeado").hidden = !(dia.planeado_kcal > 0);
   $("barra-pct").textContent = `${b.pct} %`;
-  $("barra-quedan").textContent = `del objetivo · ${b.texto}`;
-  $("barra-objetivo").textContent = titulo ?? `${dia.objetivo.texto} Objetivo ${kcal(b.objetivo_kcal)} de ${kcal(dia.gasto.kcal)} de gasto.`;
+  $("barra-quedan").textContent = `comido · ${numero.format(b.comido_kcal)} de ${numero.format(b.objetivo_kcal)}`;
+  $("barra").title = `${dia.objetivo.texto} ${mayuscula(b.texto)}.`;
   $("barra-limite").hidden = !lim;
   if (lim) {
     $("barra-limite").style.left = `calc(${lim.kcal / escala * 100}% - 2px)`;
@@ -227,13 +291,17 @@ function pintarDesglose(dia) {
   const g = dia.gasto;
   const d = g.desglose;
   if (!d) { $("desglose").replaceChildren(); return; }
-  const lineas = [linea("Basal", kcal(d.basal_kcal))];
+  const deBasal = dia.peso && dia.peso.basal && dia.peso.basal.origen === "peso" ? "Basal (con tu peso)" : "Basal";
+  const lineas = [linea(deBasal, numero.format(d.basal_kcal))];
   const pasos = d.pasos_hechos === null
     ? `${numero.format(g.pasos)} pasos supuestos`
     : `${numero.format(d.pasos_hechos)} hechos + ${numero.format(d.pasos_supuestos)} supuestos`;
-  lineas.push(linea(`Pasos: ${pasos} × ${porPaso.format(d.kcal_por_paso)} kcal`, kcal(d.pasos_kcal)));
-  for (const h of d.entreno_hecho) lineas.push(linea(`Hecho: ${h.nombre} (${numero.format(h.minutos)} min)${h.sin_kcal ? " · sin kcal" : ""}`, kcal(h.kcal)));
-  if (d.previsto) lineas.push(linea(`Previsto: ${d.previsto.nombre ?? "entreno"} (${numero.format(d.previsto.minutos)} min)`, kcal(d.previsto_kcal)));
+  lineas.push(linea(`Pasos: ${pasos} × ${porPaso.format(d.kcal_por_paso)} kcal`, numero.format(d.pasos_kcal)));
+  for (const h of d.entreno_hecho) lineas.push(linea(`Hecho: ${h.nombre} (${numero.format(h.minutos)} min)${h.sin_kcal ? " · sin kcal" : ""}`, numero.format(h.kcal)));
+  if (d.previsto) lineas.push(linea(`Previsto: ${d.previsto.nombre ?? "entreno"} (${numero.format(d.previsto.minutos)} min)`, numero.format(d.previsto_kcal)));
+  const total = linea("Total", numero.format(g.kcal));
+  total.classList.add("suma");
+  lineas.push(total);
   lineas.push(el("p", { className: "suave", textContent: mayuscula(g.garmin.texto) }));
   for (const a of g.avisos) lineas.push(el("p", { className: "aviso", textContent: a }));
   $("desglose").replaceChildren(...lineas);
@@ -241,23 +309,49 @@ function pintarDesglose(dia) {
 
 const avisar = (id, texto) => { $(id).textContent = texto; $(id).hidden = !texto; };
 
-function pintarControles(dia, esHoy) {
-  $("controles-hoy").hidden = !esHoy;
-  $("actualizar-garmin").hidden = !esHoy;
-  if (!esHoy) { $("garmin-estado").textContent = ""; return; }
+// The sheet «Ajustes de hoy»: on another day only the level being looked at and the expenditure (R5).
+function pintarHoja(dia, esHoy) {
+  $("hoja-titulo").textContent = esHoy ? "Ajustes de hoy" : `Ajustes del ${deFecha(dia.fecha)}`;
+  $("gasto-titulo").textContent = esHoy ? "Gasto de hoy" : "Gasto del día";
+  $("gasto-total").textContent = `${numero.format(dia.gasto.kcal)} kcal`;
+  $("gasto").textContent = `Gasto estimado ${kcal(dia.gasto.kcal)}: ${dia.gasto.explicacion}.`;
+  pintarDesglose(dia);
+  pintarSegmentado(dia);
+  for (const id of ["abrir-niveles", "objetivo-hoy", "previsto", "bloque-garmin"]) $(id).hidden = !esHoy;
+  if (!esHoy) { $("niveles").hidden = true; $("garmin-estado").textContent = ""; return; }
   const o = dia.objetivo;
+  const cual = o.porcentaje === 0 ? "Mantenimiento" : `${signo(o.porcentaje)} %`;
+  $("objetivo-valor").textContent = `${cual} · ${o.origen === "dia" ? "hoy" : o.origen === "plan" ? "plan" : "sin plan"}`;
+  $("objetivo-kcal").textContent = `${numero.format(o.kcal)} kcal de ${numero.format(dia.gasto.kcal)} de gasto.`;
   $("objetivo-actual").textContent = o.texto;
-  if (document.activeElement !== $("objetivo-pct")) $("objetivo-pct").value = numero.format(o.porcentaje);
+  const dicho = textoObjetivo(dia.objetivo_dia, dia.gasto);
+  $("objetivo-dia").textContent = dicho;
+  $("objetivo-dia").hidden = !dicho;
+  $("plan").textContent = textoPlan(dia.plan);
+  if (document.activeElement !== $("objetivo-pct")) $("objetivo-pct").value = numero.format(o.porcentaje).replace("−", "-");
   $("objetivo-plan").hidden = o.origen !== "dia";
   $("retraso").textContent = o.retraso ? `${mayuscula(o.retraso.texto)}.` : "";
   $("retraso").hidden = !o.retraso;
   if (document.activeElement !== $("niveles-texto")) $("niveles-texto").value = textoNiveles(dia.margenes.map((m) => m.nivel));
   $("niveles-defecto").hidden = !dia.niveles_elegidos;
   const p = dia.gasto.desglose && dia.gasto.desglose.previsto;
+  $("previsto-valor").textContent = p ? `${numero.format(p.minutos)} min` : "—";
   $("previsto-actual").textContent = p
     ? `Previsto: ${p.nombre ?? "entreno"}, ${numero.format(p.minutos)} min (${kcal(p.kcal)}). Quítalo cuando ya esté hecho.`
     : "Sin entreno previsto.";
   $("previsto-quitar").hidden = !p;
+}
+
+// «Nivel que miras» in the sheet: the levels as a selector, the same effect as the card buttons.
+function pintarSegmentado(dia) {
+  const n = nivelMirado(dia);
+  $("segmentado").replaceChildren(...dia.margenes.map((m) => {
+    const boton = el("button", { type: "button", className: m.objetivo ? "objetivo" : "",
+      textContent: m.nivel === 0 ? "Mant." : `${signo(m.nivel)} %`, title: m.objetivo ? "Objetivo del día" : "" });
+    boton.setAttribute("aria-pressed", String(m.nivel === n));
+    boton.addEventListener("click", () => mirar(m.nivel));
+    return boton;
+  }));
 }
 
 async function cambiarObjetivo(cuerpo, idError) {
@@ -277,7 +371,7 @@ async function actualizarGarmin() {
   $("garmin-estado").className = "suave";
   const { ok, datos } = await api("/api/garmin/actualizar", {});
   boton.disabled = false;
-  boton.textContent = "Actualizar Garmin";
+  boton.textContent = "↻ Actualizar Garmin";
   if (!ok) { // the data that were there stay as they were
     $("garmin-estado").textContent = datos.error ?? "No se ha podido conectar con Garmin.";
     $("garmin-estado").className = "suave error";
@@ -314,7 +408,10 @@ function enlazarControles() {
     cambiarObjetivo({ niveles }, "niveles-error");
   });
   $("niveles-defecto").addEventListener("click", () => cambiarObjetivo({ niveles: null }, "niveles-error"));
-  $("previsto").addEventListener("toggle", () => { if ($("previsto").open) cargarRecientes(); });
+  const desplegar = (id, alAbrir) => () => { $(id).hidden = !$(id).hidden; if (!$(id).hidden && alAbrir) alAbrir(); };
+  $("abrir-niveles").addEventListener("click", desplegar("niveles", () => $("niveles-texto").focus()));
+  $("abrir-pct").addEventListener("click", desplegar("caja-pct", () => $("objetivo-pct").focus()));
+  $("abrir-previsto").addEventListener("click", desplegar("caja-previsto", cargarRecientes));
   $("previsto-guardar").addEventListener("click", () => {
     const actividad = $("previsto-actividad").value;
     const minutos = comoNumero($("previsto-minutos").value);
@@ -487,10 +584,13 @@ async function marcarComido(a, boton) {
 
 async function cargarDia(fecha) {
   const turno = ++peticionDia;
-  const { ok, datos } = await api(fecha ? `/api/dia?fecha=${encodeURIComponent(fecha)}` : "/api/dia");
+  const respuesta = await api(fecha ? `/api/dia?fecha=${encodeURIComponent(fecha)}` : "/api/dia");
+  const { ok, datos } = respuesta;
   if (turno !== peticionDia) return;
+  const { estado } = respuesta;
   if (ok) pintarDia(datos);
   else if (conectado === false) mensaje(""); // the «Sin conexión con el PC» notice says it already
+  else if (estado === 409) mensajeAjustes(datos.error ?? "Faltan datos en Ajustes.");
   else mensaje(datos.error ?? "No he podido cargar el día.", "error");
 }
 
@@ -698,7 +798,9 @@ function pintarBloqueo() {
   $("bloqueo").textContent = motivo;
   $("bloqueo").hidden = !motivo;
   $("confirmar").classList.toggle("bloqueado", Boolean(motivo));
-  $("confirmar").setAttribute("aria-disabled", String(Boolean(motivo)));
+  // it stays operable (a tap reads the cards and says what is missing): the reason describes it
+  if (motivo) $("confirmar").setAttribute("aria-describedby", "bloqueo");
+  else $("confirmar").removeAttribute("aria-describedby");
 }
 
 function anadirTarjeta() {
@@ -712,6 +814,7 @@ async function interpretar(evento) {
   evento.preventDefault();
   const texto = $("texto").value;
   if (!texto.trim()) return;
+  irAPestanaHoy(); // the review lives in Hoy
   $("enviar").disabled = true;
   mensaje("Interpretando…");
   const { ok, datos } = await api("/api/interpretar", { texto });
@@ -733,6 +836,11 @@ async function interpretar(evento) {
   revision.original = huella(revision);
   $("confirmar").disabled = false; // a new review starts usable, also after an earlier confirmation
   pintarRevision();
+  verRevision();
+}
+
+// The review sits in Hoy between the card and the list; the screen scrolls to it.
+function verRevision() {
   $("revision").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -791,11 +899,56 @@ $("anterior").addEventListener("click", () => irA(sumarDias(diaVisto, -1)));
 $("siguiente").addEventListener("click", () => irA(sumarDias(diaVisto, 1)));
 $("ir-hoy").addEventListener("click", () => irA(hoyISO));
 enlazarControles();
+enlazarHoja();
+enlazarPestanas();
 vigilarAltoEntrada();
 $("fecha").textContent = deFecha(cola.fechaLocal()); // before the PC answers, or if it never does
 cargarDia();
 cola.iniciar(alCambiarCola);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+// -- unit 010: the sheet and the tabs ----------------------------------------------------
+
+function enlazarHoja() {
+  const hoja = $("hoja");
+  $("abrir-hoja").addEventListener("click", () => { if (!hoja.open) hoja.showModal(); });
+  $("cerrar-hoja").addEventListener("click", () => hoja.close());
+  // a tap outside the sheet lands on the <dialog> itself (its backdrop): it closes
+  hoja.addEventListener("click", (evento) => { if (evento.target === hoja) hoja.close(); });
+}
+
+function pestanaActual() {
+  const h = location.hash.slice(1);
+  return PESTANAS.includes(h) ? h : "hoy";
+}
+
+function irAPestanaHoy() {
+  if (pestanaActual() !== "hoy") location.hash = "hoy";
+}
+
+function mostrarPestana() {
+  const actual = pestanaActual();
+  for (const p of PESTANAS) $(p).hidden = p !== actual;
+  for (const a of document.querySelectorAll(".pestana")) {
+    if (a.dataset.ir === actual) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  }
+  $("entrada").hidden = actual === "recetas"; // the box is for Hoy and Peso
+  if ($("hoja").open) $("hoja").close();
+  if (actual === "hoy") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
+  else document.title = `TriData · ${mayuscula(actual)}`;
+  if (actual === "peso") pintarPeso($("peso-contenido"));
+  window.scrollTo(0, 0);
+}
+
+function enlazarPestanas() {
+  // tapping Hoy while already in Hoy goes back to today (the «Hoy» button that was next to ▶)
+  document.querySelector('.pestana[data-ir="hoy"]').addEventListener("click", () => {
+    if (pestanaActual() === "hoy" && hoyISO && diaVisto !== hoyISO) irA(hoyISO);
+  });
+  window.addEventListener("hashchange", mostrarPestana);
+  mostrarPestana();
+}
 
 // -- unit 006: dictation and the recordings queue ---------------------------------
 
@@ -807,12 +960,14 @@ async function alternarGrabacion() {
   if (grabacion) { grabacion.parar(); return; }
   if (!puedeGrabar()) { mensaje("Este navegador no puede grabar audio.", "error"); return; }
   const boton = $("grabar");
+  const tiempo = $("grabar-tiempo");
   try {
     grabacion = await grabar({
-      alSegundo: (s) => { boton.textContent = `Parar ${reloj(s)}`; },
+      alSegundo: (s) => { tiempo.textContent = reloj(s); tiempo.hidden = false; },
       alTerminar: async ({ audio, tipo, segundos }) => {
         grabacion = null;
-        boton.textContent = "Grabar";
+        tiempo.hidden = true;
+        boton.setAttribute("aria-label", "Grabar lo que has comido");
         boton.classList.remove("grabando");
         if (segundos >= MAX_SEGUNDOS) mensaje("La grabación ha llegado a 2 minutos y ha parado sola.");
         try {
@@ -824,7 +979,8 @@ async function alternarGrabacion() {
       },
     });
     boton.classList.add("grabando");
-    mensaje("Grabando… toca «Parar» al acabar (como mucho 2 minutos).");
+    boton.setAttribute("aria-label", "Parar la grabación");
+    mensaje("Grabando… toca el micrófono otra vez al acabar (como mucho 2 minutos).");
   } catch (error) {
     grabacion = null;
     const sinPermiso = error && (error.name === "NotAllowedError" || error.name === "SecurityError");
@@ -883,6 +1039,7 @@ async function abrirLista(id) {
   if (revision && revision.origen === id) return;
   if (!lista.interpretacion) {
     textoDeLista = { id: lista.id, texto: lista.texto };
+    irAPestanaHoy();
     revision = null;
     pintarRevision();
     $("texto").value = lista.texto;
@@ -898,9 +1055,10 @@ async function abrirLista(id) {
   };
   revision.original = huella(revision);
   $("confirmar").disabled = false;
+  irAPestanaHoy();
   pintarRevision();
   await alCambiarCola({ conexion: null });
-  $("revision").scrollIntoView({ behavior: "smooth", block: "start" });
+  verRevision();
 }
 
 function preguntarDescarte(abierta) {
@@ -909,15 +1067,16 @@ function preguntarDescarte(abierta) {
 }
 
 function descartar() {
-  if (revision && revision.origen) { preguntarDescarte(true); $("descarte-si").focus(); return; } // a dictated list asks first
-  revision = null;
-  pintarRevision();
-  mensaje("");
+  if (!revision) return;
+  $("confirmar-descarte").querySelector("p").textContent = revision.origen
+    ? "¿Descartar esta lista? Lo que dijiste no se guardará." : "¿Descartar esta lista? No se guardará nada.";
+  preguntarDescarte(true);
+  $("descarte-si").focus();
 }
 
-// The fixed box at the bottom never covers the end of the page: <main> leaves its height free.
+// The fixed box and tabs at the bottom never cover the end of the page: <main> leaves their height free.
 function vigilarAltoEntrada() {
-  const poner = () => document.documentElement.style.setProperty("--alto-entrada", `${$("entrada").offsetHeight}px`);
+  const poner = () => document.documentElement.style.setProperty("--alto-abajo", `${$("abajo").offsetHeight}px`);
   poner();
-  if (window.ResizeObserver) new ResizeObserver(poner).observe($("entrada"));
+  if (window.ResizeObserver) new ResizeObserver(poner).observe($("abajo"));
 }

@@ -19,7 +19,12 @@
                                   7-day mean, basal and projection) and the objective of the day.
                                   Unit 008: the expenditure with Garmin of that day and the planned
                                   training, with its breakdown and warnings; the objective (% of the
-                                  day or of the plan, days of delay) and the bar with the healthy limit
+                                  day or of the plan, days of delay) and the bar with the healthy limit.
+                                  Unit 010: `planeado_kcal` (planned foods with quantity and kcal) and
+                                  `con_planeado`, the margins and bar if they were eaten (`simular`)
+    GET  /api/peso                the weights of the 30 days up to ?hasta=AAAA-MM-DD (default today), the
+                                  7-day mean of each of those days that has one and the weight goal
+                                  (unit 010); writes nothing
     POST /api/dia/objetivo        today only: {"porcentaje"?, "niveles"?, "previsto"?: {"actividad_id",
                                   "minutos"} | null}; changes `objetivo_dia`, never the plan (R-16, R-18)
     GET  /api/actividades-recientes  activities of the last 14 days, to choose the planned training
@@ -64,7 +69,7 @@ from ..ia import ErrorInterpretacion, ErrorTranscripcion
 from ..nutricion import (
     Ajustes, Alimento, ConfigGasto, ObjetivosDia, RegistroComidas, RegistroPeso, basal_del_dia, config_del_dia,
     dias_de_retraso, estimar_gasto, gramos_que_caben, kcal_previstas, objetivo_valido, peso_valido,
-    resumen_del_dia, resumen_peso, simular, texto_retraso,
+    media_7_dias, resumen_del_dia, resumen_peso, simular, texto_retraso,
 )
 from ..nutricion.margen import PASOS_POR_DEFECTO
 from ..storage import DataStore
@@ -76,6 +81,7 @@ NO_ESTA = "Ese alimento ya no está apuntado."
 NO_ESTA_CARRERA = "Esa carrera ya no está en tus ajustes."
 DIAS_RECIENTES = 14  # the planned training is chosen among the activities of the last 14 days (R-15)
 DIAS_RETRASO_MAX = 730  # the days of delay look at most two years ahead
+DIAS_GRAFICA_PESO = 30  # the weight chart of the Peso tab (unit 010, R10)
 FALTA_GARMIN = "Faltan GARMIN_EMAIL / GARMIN_PASSWORD en .env: no puedo traer Garmin."
 AUDIO_MAX_BYTES = 10 * 1024 * 1024  # a 2-minute recording is far below this (R4)
 TIPOS_AUDIO = frozenset({"audio/mp4", "audio/x-m4a", "audio/aac", "audio/webm", "audio/ogg", "audio/wav", "audio/mpeg"})
@@ -186,7 +192,10 @@ def crear_app(
                                   gasto_estimado=gasto, plan=plan)
         if resumen["objetivo"]["origen"] == "dia":
             resumen["objetivo"]["retraso"] = _retraso(fecha, vigentes, resumen["objetivo"]["porcentaje"])
-        return {**resumen, "plan": plan}
+        # unit 010: what is planned is only shown apart, it never subtracts from the margin (rule of 004)
+        planeado = round(sum(a["kcal"] for a in resumen["alimentos"] if a["estado"] == "planeado"
+                             and a["kcal"] is not None and not a["pendiente_cantidad"]), 1)
+        return {**resumen, "plan": plan, "planeado_kcal": planeado, "con_planeado": simular(resumen, planeado)}
 
     def _vista_ajustes(fecha: date) -> dict:
         vigentes = ajustes.vigentes(fecha)
@@ -262,6 +271,29 @@ def crear_app(
         except ValueError:
             return _error(f"Fecha no válida: {texto!r}", 400)
         return JSONResponse(_dia(fecha))
+
+    async def peso(request: Request) -> Response:
+        texto = request.query_params.get("hasta")
+        try:
+            hasta = date.fromisoformat(texto) if texto else hoy()
+        except ValueError:
+            return _error(f"Fecha no válida: {texto!r}", 400)
+        desde = hasta - timedelta(days=DIAS_GRAFICA_PESO - 1)
+        # the 6 days before the window too, so its first days have their 7-day mean
+        todos = pesos.entre(desde - timedelta(days=6), hasta)
+        medias = []
+        for i in range(DIAS_GRAFICA_PESO):
+            dia_i = desde + timedelta(days=i)
+            media = media_7_dias(todos, dia_i)
+            if media is not None:
+                medias.append({"dia": dia_i.isoformat(), **media.como_dict()})
+        meta = ajustes.vigentes(hasta).objetivo_peso
+        return JSONResponse({
+            "hasta": hasta.isoformat(), "dias": DIAS_GRAFICA_PESO,
+            "pesos": [{"dia": p["dia"], "kg": p["kg"], "nota": p["nota"]} for p in todos if p["dia"] >= desde.isoformat()],
+            "medias": medias,
+            "objetivo": {"kg": meta.kg, "fecha": meta.fecha.isoformat()} if meta is not None else None,
+        })
 
     async def _interpretacion(texto: str, dia: date) -> dict:
         """What /api/interpretar answers for `texto` with «hoy» = `dia`. Raises ErrorInterpretacion."""
@@ -505,6 +537,7 @@ def crear_app(
         Route("/ajustes", pagina_ajustes),
         Route("/api/dia", dia),
         Route("/api/dia/objetivo", cambiar_objetivo, methods=["POST"]),
+        Route("/api/peso", peso),
         Route("/api/actividades-recientes", actividades_recientes),
         Route("/api/simular", simular_lista, methods=["POST"]),
         Route("/api/garmin/actualizar", actualizar, methods=["POST"]),

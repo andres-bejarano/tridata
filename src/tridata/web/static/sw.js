@@ -1,11 +1,16 @@
 // Service worker (unit 006, R7): the app opens with the PC off. Plain script, no build step.
-// It only keeps the «shell» (the page, its JS and CSS) and always asks the network first, so with
+// It only keeps the «shell» (the pages, their JS and CSS, the icon) and always asks the network first, so with
 // the PC on the newest version arrives; the cache is only the fallback. Data (/api/*) never come
 // from a cache and nothing that is not a GET is touched. Served from the root (/sw.js) so its
 // scope is the whole app.
 
-const VERSION = "tridata-cascaron-v1"; // change it when the list below changes
-const CASCARON = ["/", "/static/app.js", "/static/cola.js", "/static/dictado.js", "/static/estilos.css"];
+const VERSION = "tridata-cascaron-v2"; // change it when the list below changes
+const CASCARON = [
+  "/", "/static/app.js", "/static/cola.js", "/static/dictado.js", "/static/estilos.css",
+  // unit 010: the Peso tab, the settings page and the home-screen icon
+  "/static/peso.js", "/ajustes", "/static/ajustes.js", "/static/manifest.json",
+  "/static/icono.svg", "/static/icono-32.png", "/static/icono-180.png", "/static/icono-512.png",
+];
 const ESPERA_RED_MS = 4000; // a PC that is off over Tailscale may hang instead of failing
 
 self.addEventListener("install", (evento) => {

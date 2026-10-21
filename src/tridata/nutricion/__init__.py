@@ -6,8 +6,14 @@ Profile and plan settings, each with the date from which it applies: `Ajustes.vi
 Weight of the day and its basal: `RegistroPeso`, `basal_del_dia`; objective of the day: `ObjetivosDia`.
 Full expenditure with Garmin and the planned training: `estimar_gasto` (unit 008).
 Recipes, fixed foods and pots, and resolving what is dictated with them: `Recetario` (unit 011).
+Closing the day (the food, then the expenditure with Garmin), its trail and the kcal per step calibrated
+with Garmin: `Cierres`; the estimated expenditure of any day: `gasto_estimado_del_dia` (unit 014).
 """
 from .ajustes import DESDE_SIEMPRE, Ajustes, AjustesDelDia, Carrera, ObjetivoPeso
+from .cierre import (
+    Cierres, balance, calibrar, config_gasto_del_dia, es_relevante, garmin_incompleto, gasto_estimado_del_dia,
+    media_semana,
+)
 from .gasto import estimar_gasto, kcal_previstas
 from .margen import (
     NIVELES_POR_DEFECTO, ConfigGasto, barra, config_del_dia, dias_de_retraso, gasto_simple, gramos_que_caben,
@@ -22,10 +28,11 @@ from .recetas import Recetario
 from .registro import Alimento, RegistroComidas
 
 __all__ = [
-    "DESDE_SIEMPRE", "NIVELES_POR_DEFECTO", "Ajustes", "AjustesDelDia", "Alimento", "BasalDelDia", "Carrera",
-    "ConfigGasto", "MediaPeso", "ObjetivoPeso", "ObjetivosDia", "Recetario", "RegistroComidas", "RegistroPeso", "barra",
-    "basal_del_dia", "basal_mifflin", "config_del_dia", "dias_de_retraso", "estimar_gasto", "gasto_simple",
-    "gramos_que_caben", "kcal_previstas", "limite_saludable", "margenes", "media_7_dias", "niveles_del_dia",
+    "DESDE_SIEMPRE", "NIVELES_POR_DEFECTO", "Ajustes", "AjustesDelDia", "Alimento", "BasalDelDia", "Carrera", "Cierres",
+    "ConfigGasto", "MediaPeso", "ObjetivoPeso", "ObjetivosDia", "Recetario", "RegistroComidas", "RegistroPeso", "balance",
+    "barra", "basal_del_dia", "basal_mifflin", "calibrar", "config_del_dia", "config_gasto_del_dia", "dias_de_retraso",
+    "es_relevante", "estimar_gasto", "garmin_incompleto", "gasto_estimado_del_dia", "gasto_simple", "gramos_que_caben",
+    "kcal_previstas", "limite_saludable", "margenes", "media_7_dias", "media_semana", "niveles_del_dia",
     "objetivo_valido", "peso_valido", "proyeccion", "resumen_del_dia", "resumen_peso", "simular", "texto_retraso",
     "total_del_dia",
 ]

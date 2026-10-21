@@ -92,10 +92,18 @@
 
       <h2 id="t-comido"><span id="t-comido-dia">Tu día</span> <small id="total" class="num"></small></h2>
       <div id="avisos"></div>
+      <!-- unit 014: the state of the day, its balance and the week (and «Cerrar el día» under the list) -->
+      <section id="cierre" class="tarjeta cierre" aria-label="Cierre del día" hidden>
+        <p class="cierre-cab"><span id="cierre-marca" class="cierre-marca" aria-hidden="true"></span><strong id="cierre-estado"></strong></p>
+        <p id="cierre-balance" class="cierre-balance num"></p>
+        <p id="cierre-semana" class="suave"></p>
+        <div id="cierre-rastro" class="cierre-rastro" hidden></div>
+      </section>
       <article id="lista-dia" class="tarjeta lista" hidden></article>
       <p id="vacio" class="suave vacio-dia">Aún no has apuntado nada hoy.</p>
       <div id="anadir-ficha"></div>
       <button id="anadir" type="button" class="anadir">Añadir</button>
+      <button id="cerrar-dia" type="button" class="principal grande cerrar-dia" hidden>Cerrar el día</button>
     </section>
 
     <!-- ================= PESO (peso.js) ================= -->

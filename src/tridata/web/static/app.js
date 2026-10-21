@@ -18,6 +18,10 @@
 // Unit 011: the Recetas tab is drawn by recetas.js. A food that comes from a saved recipe or fixed
 // food says so («de tu receta …», «provisional») in the review and in the day list; one that is only
 // alike comes as a visible proposal with «Usar estimación», which puts Claude's estimate back.
+// Unit 014: under the day list, the state of the day (open, food closed, waiting for Garmin, closed with
+// Garmin) with its balance and the week, the trail of Garmin's corrections, and «Cerrar el día» while it is
+// open (never on a later day). Today shows the relevant corrections in #avisos until «Entendido». The
+// breakdown says when the kcal per step were calibrated with Garmin (or why that was discarded).
 
 import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
@@ -175,6 +179,61 @@ function pintarDia(dia) {
   pintarBarra(dia);
   pintarHoja(dia, esHoy);
   pintarLista(dia);
+  pintarCierre(dia, esHoy);
+}
+
+// -- unit 014: the close of the day -------------------------------------------------
+
+function pintarCierre(dia, esHoy) {
+  const c = dia.cierre;
+  const futuro = dia.fecha > hoyISO;
+  $("cierre").hidden = futuro || !c;
+  $("cerrar-dia").hidden = futuro || !c || c.estado !== "abierto" || dia.alimentos.length === 0;
+  if (futuro || !c) return;
+  $("cierre").dataset.estado = c.espera_motivo ? "espera" : c.estado;
+  $("cierre-estado").textContent = c.texto;
+  $("cierre-balance").textContent = c.balance_texto;
+  $("cierre-balance").hidden = c.estado === "abierto" && dia.alimentos.length === 0; // nothing yet: no balance
+  $("cierre-balance").title = c.espera_motivo ?? "";
+  $("cierre-semana").textContent = c.semana.dias ? c.semana.texto : "";
+  $("cierre-semana").hidden = !c.semana.dias;
+  $("cierre-rastro").replaceChildren(...c.rastro.map((r) => el("p", {
+    textContent: `Garmin lo corrigió el ${r.fecha.slice(0, 10)}: gasto ${numero.format(r.gasto_antes)} → `
+      + `${numero.format(r.gasto_despues)} kcal; balance ${signo(r.balance_antes)} → ${signo(r.balance_despues)}`,
+  })));
+  $("cierre-rastro").hidden = c.rastro.length === 0;
+  if (esHoy) pintarAvisosCierre(dia.avisos_cierre ?? []);
+}
+
+function pintarAvisosCierre(avisos) {
+  for (const viejo of $("avisos").querySelectorAll(".aviso-cierre")) viejo.remove();
+  for (const a of avisos) {
+    const boton = el("button", { type: "button", className: "boton", textContent: "Entendido" });
+    boton.addEventListener("click", () => avisoVisto(a.id, boton));
+    $("avisos").append(el("div", { className: "aviso-cierre", role: "status" }, el("p", { textContent: a.texto }), boton));
+  }
+}
+
+async function avisoVisto(id, boton) {
+  boton.disabled = true;
+  const { ok, datos } = await api(`/api/aviso-cierre/${id}/visto`, {});
+  if (!ok) {
+    boton.disabled = false;
+    mensaje(datos.error ?? "No se ha podido marcar el aviso.", "error");
+    return;
+  }
+  if (ultimoDia) ultimoDia.avisos_cierre = datos.avisos_cierre;
+  pintarAvisosCierre(datos.avisos_cierre);
+}
+
+async function cerrarDia() {
+  const boton = $("cerrar-dia");
+  boton.disabled = true;
+  const { ok, datos } = await api("/api/dia/cerrar", { fecha: diaVisto });
+  boton.disabled = false;
+  if (!ok) { mensaje(datos.error ?? "No se ha podido cerrar el día.", "error"); return; }
+  mensaje("Día cerrado: lo planeado cuenta como comido. Puedes seguir corrigiendo olvidos.", "bien");
+  pintarDia(datos.dia);
 }
 
 // The «Te quedan» card: the level being looked at in big, the others as buttons (R1).
@@ -346,11 +405,22 @@ function pintarDesglose(dia) {
   lineas.push(linea(`Pasos: ${pasos} × ${porPaso.format(d.kcal_por_paso)} kcal`, numero.format(d.pasos_kcal)));
   for (const h of d.entreno_hecho) lineas.push(linea(`Hecho: ${h.nombre} (${numero.format(h.minutos)} min)${h.sin_kcal ? " · sin kcal" : ""}`, numero.format(h.kcal)));
   if (d.previsto) lineas.push(linea(`Previsto: ${d.previsto.nombre ?? "entreno"} (${numero.format(d.previsto.minutos)} min)`, numero.format(d.previsto_kcal)));
-  const total = linea("Total", numero.format(g.kcal));
-  total.classList.add("suma");
-  lineas.push(total);
+  if (g.origen === "garmin") { // unit 014: the day closed with Garmin counts the real one
+    lineas.push(linea("Estimado", numero.format(g.estimado_kcal)));
+    const real = linea("Real de Garmin", numero.format(g.real_kcal));
+    real.classList.add("suma");
+    lineas.push(real);
+  } else {
+    const total = linea("Total", numero.format(g.kcal));
+    total.classList.add("suma");
+    lineas.push(total);
+  }
   lineas.push(el("p", { className: "suave", textContent: mayuscula(g.garmin.texto) }));
   for (const a of g.avisos) lineas.push(el("p", { className: "aviso", textContent: a }));
+  if (g.calibracion) {
+    lineas.push(el("p", { className: g.calibracion.descartada_motivo ? "aviso" : "calibracion" },
+      el("strong", { textContent: "Kcal por paso: " }), g.calibracion.texto));
+  }
   $("desglose").replaceChildren(...lineas);
 }
 
@@ -361,7 +431,7 @@ function pintarHoja(dia, esHoy) {
   $("hoja-titulo").textContent = esHoy ? "Ajustes de hoy" : `Ajustes del ${deFecha(dia.fecha)}`;
   $("gasto-titulo").textContent = esHoy ? "Gasto de hoy" : "Gasto del día";
   $("gasto-total").textContent = `${numero.format(dia.gasto.kcal)} kcal`;
-  $("gasto").textContent = `Gasto estimado ${kcal(dia.gasto.kcal)}: ${dia.gasto.explicacion}.`;
+  $("gasto").textContent = `${dia.gasto.origen === "garmin" ? "Gasto" : "Gasto estimado"} ${kcal(dia.gasto.kcal)}: ${dia.gasto.explicacion}.`;
   pintarDesglose(dia);
   pintarSegmentado(dia);
   for (const id of ["abrir-niveles", "objetivo-hoy", "previsto", "bloque-garmin"]) $(id).hidden = !esHoy;
@@ -991,6 +1061,7 @@ $("descarte-si").addEventListener("click", async () => {
 $("revisar").addEventListener("click", () => abrirSiguienteLista());
 $("grabar").addEventListener("click", alternarGrabacion);
 $("anadir-revision").addEventListener("click", anadirTarjeta);
+$("cerrar-dia").addEventListener("click", cerrarDia);
 $("anadir").addEventListener("click", () => { anadiendo = true; editando = null; mensaje(""); pintarDia(ultimoDia); });
 $("anterior").addEventListener("click", () => irA(sumarDias(diaVisto, -1)));
 $("siguiente").addEventListener("click", () => irA(sumarDias(diaVisto, 1)));

@@ -242,6 +242,19 @@ class RegistroComidas:
             conn.execute("UPDATE alimento_apuntado SET estado = 'comido' WHERE id = ?", (alimento_id,))
             return self._fila(self._leer(conn, alimento_id))
 
+    def cerrar_planeados(self, dia: date, conn: sqlite3.Connection | None = None) -> int:
+        """Unit 014 (R-24): what is still planned for `dia` counts as eaten when its food is closed.
+
+        With `conn`, inside the caller's transaction (the close of the day, `Cierres.cerrar_comida`);
+        without it, in one of its own. Returns how many foods changed.
+        """
+        if conn is None:
+            with self._connect() as propia:
+                return self.cerrar_planeados(dia, propia)
+        cursor = conn.execute("UPDATE alimento_apuntado SET estado = 'comido' WHERE dia = ? AND estado = 'planeado'",
+                              (dia.isoformat(),))
+        return cursor.rowcount
+
     def anadir(self, alimento: Alimento, hoy: date) -> dict:
         """Add a food by hand, without the AI: no interpretation, not estimated, no assumptions."""
         if alimento.cantidad is not None and alimento.kcal is None:

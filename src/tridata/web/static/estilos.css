@@ -371,3 +371,22 @@ button.grande { width: 100%; min-height: 56px; font-size: 1.0625rem; }
 .kcal-100g { display: grid; gap: 6px; }
 button.por100 { justify-self: start; min-height: 44px; font-size: .9rem; color: var(--acento); }
 .solo-gramos { margin: 0; font-size: .85rem; color: var(--alerta); }
+
+/* unit 014: the close of the day (state, balance, week, trail), the warnings of a Garmin correction */
+.cierre { gap: 4px; }
+.cierre p { margin: 0; }
+.cierre-cab { display: flex; align-items: center; gap: 8px; }
+.cierre-marca { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: var(--suave); }
+.cierre[data-estado="comida_cerrada"] .cierre-marca { background: var(--acento); }
+.cierre[data-estado="espera"] { border-color: var(--alerta); }
+.cierre[data-estado="espera"] .cierre-marca { background: var(--alerta); }
+.cierre[data-estado="cerrado_garmin"] .cierre-marca { background: var(--bien); }
+.cierre-balance { font-weight: 600; font-size: .95rem; }
+.cierre-rastro { display: grid; gap: 2px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--borde); font-size: .9rem; }
+.cierre-rastro p { color: var(--suave); }
+button.cerrar-dia { margin-top: 10px; }
+.aviso-cierre { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; padding: 10px 12px;
+  border-radius: 12px; border: 1px solid var(--alerta); background: var(--alerta-fondo); color: var(--texto); }
+.aviso-cierre p { flex: 1 1 14em; margin: 0; font-size: .95rem; }
+.aviso-cierre button { min-height: 44px; flex-shrink: 0; }
+.desglose .calibracion { margin: 6px 0 0; color: var(--suave); }

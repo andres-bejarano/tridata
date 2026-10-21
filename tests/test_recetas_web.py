@@ -2,6 +2,7 @@
 and `tridata importar-recetas`. Starlette TestClient over a temporary SQLite; the Claude interpreter
 and the Whisper transcriber are unittest.mock doubles (no API, no GPU). Every value is invented.
 """
+import re
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -347,3 +348,20 @@ def test_la_orden_importar_recetas(monkeypatch):
     assert cli.main(["importar-recetas", "--md", "a.md", "--simular"]) == 0
     assert cli.main(["importar-recetas", "--md", "a.md"]) == 0
     assert llamadas == [(Path("a.md"), True), (Path("a.md"), False)]
+
+
+def test_importar_recetas_simular_formatos_de_deficit(carga, capsys):  # bug 012 · R6
+    carga["md"] = Path(__file__).parent / "fixtures" / "recetas_formatos_inventado.md"
+    assert _importar(carga, simular=True) == 0
+    lineas = capsys.readouterr().out.splitlines()
+    for esperada in ("alimento fijo «Mermelada de prueba» · 250 kcal/100 g",
+                     "receta «Garbanzos de la tía» · definitiva · 123.4 kcal/100 g",
+                     "receta «Flan de prueba» · provisional · 1000 kcal la receta entera",
+                     "alimento fijo «Galletas de prueba rellenas» · 60 kcal/unidad"):
+        assert any(esperada in linea for linea in lineas), esperada
+    assert sum("sin kcal" in linea for linea in lineas) == 1
+    assert any("«Guiso de prueba sin datos»" in linea and "sin kcal" in linea for linea in lineas)
+    for nombre in re.findall(r"«([^»]*)»", "\n".join(lineas)):
+        assert "(" not in nombre, nombre
+    assert Recetario(carga["db"]).listado() == {"recetas": [], "fijos": [], "ollas": []}
+    assert carga["copias"] == []

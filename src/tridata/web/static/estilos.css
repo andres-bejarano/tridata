@@ -195,3 +195,8 @@ select {
   border: 2px solid var(--acento); border-radius: 14px; padding: 0 12px;
 }
 #entrada button.grabar.grabando { background: var(--peligro); border-color: var(--peligro); color: var(--acento-texto); }
+
+/* ± next to signed % fields (the iPhone decimal keypad has no minus key) */
+.con-signo { display: flex; gap: 0.4rem; }
+.con-signo input { flex: 1; min-width: 0; }
+button.signo { min-width: 44px; font-size: 1.1rem; }

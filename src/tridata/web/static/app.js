@@ -300,6 +300,7 @@ async function cargarRecientes() {
 
 function enlazarControles() {
   $("actualizar-garmin").addEventListener("click", actualizarGarmin);
+  conSigno($("objetivo-pct"));
   $("objetivo-guardar").addEventListener("click", () => {
     const n = comoNumero($("objetivo-pct").value.replace("−", "-"));
     if (n === null || Number.isNaN(n)) { avisar("objetivo-error", "Escribe el % de hoy (por ejemplo −20, 0 o 10)."); return; }
@@ -508,6 +509,21 @@ function campo(etiqueta, valor, tipo, alCambiar = null, extra = {}) {
   return etiquetado;
 }
 
+// iPhone's decimal keypad has no minus key: a ± button next to every signed % field flips the sign.
+function conSigno(entrada) {
+  const boton = el("button", { type: "button", className: "signo", textContent: "±", title: "Cambiar el signo (déficit / superávit)" });
+  boton.addEventListener("click", () => {
+    const v = entrada.value.trim();
+    entrada.value = /^[-−]/.test(v) ? v.replace(/^[-−]\s*/, "") : `-${v}`;
+    entrada.dispatchEvent(new Event("change"));
+    entrada.focus();
+  });
+  const caja = el("div", { className: "con-signo" });
+  entrada.replaceWith(caja);
+  caja.append(entrada, boton);
+  return entrada;
+}
+
 const comoNumero = (v) => (v.trim() === "" ? null : Number(v.replace(",", ".")));
 
 const tarjetaVacia = () => ({
@@ -636,6 +652,7 @@ function tarjetasPiezas() {
       pasos: campo("Pasos previstos", o.pasos, "number", null, { inputMode: "numeric", min: "0", step: "1" }),
       entreno: campo("Entreno previsto (aún no suma kcal)", o.entreno, "text"),
     };
+    conSigno(campos.porcentaje.entrada);
     enlazar(o, campos, { tipo: comoTexto, porcentaje: (v) => comoNumero(v.replace("−", "-")), niveles: comoNiveles, pasos: comoNumero, entreno: comoTexto });
     tarjetas.push(tarjetaPieza("Objetivo del día", "pieza objetivo",
       el("div", { className: "fila dos" }, campos.tipo, campos.porcentaje),

@@ -196,7 +196,7 @@ class RegistroComidas:
 
         Moving to another day sets the state by the same rule as `guardar` (needs `hoy`); without
         a day, or with the same one, day and state stay as they were. New kcal stop being
-        `estimado`. KeyError if the id does not exist, ValueError if invalid.
+        `estimado`, and lose `origen` and `provisional` (unit 016). KeyError if the id does not exist, ValueError if invalid.
         """
         with self._connect() as conn:
             fila = self._leer(conn, alimento_id)
@@ -209,12 +209,16 @@ class RegistroComidas:
                 if hoy is None:
                     raise ValueError("para pasar un alimento a otro día hace falta saber qué día es hoy")
                 estado = _estado(nuevo.dia, hoy)
-            estimado = bool(fila["estimado"]) and nuevo.kcal == fila["kcal"]
+            mismas_kcal = nuevo.kcal == fila["kcal"]
+            estimado = bool(fila["estimado"]) and mismas_kcal
+            # unit 016 (R7): kcal written by hand no longer come from the recipe, nor are provisional
+            origen = fila["origen"] if mismas_kcal else None
+            provisional = bool(fila["provisional"]) and mismas_kcal
             conn.execute(
                 "UPDATE alimento_apuntado SET nombre = ?, cantidad = ?, unidad = ?, kcal = ?, estimado = ?, "
-                "pendiente_cantidad = ?, dia = ?, estado = ? WHERE id = ?",
+                "pendiente_cantidad = ?, dia = ?, estado = ?, origen = ?, provisional = ? WHERE id = ?",
                 (nuevo.nombre, nuevo.cantidad, nuevo.unidad, nuevo.kcal, int(estimado),
-                 int(nuevo.pendiente_cantidad), nuevo.dia.isoformat(), estado, alimento_id),
+                 int(nuevo.pendiente_cantidad), nuevo.dia.isoformat(), estado, origen, int(provisional), alimento_id),
             )
             return self._fila(self._leer(conn, alimento_id))
 

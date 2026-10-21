@@ -22,6 +22,10 @@
 // Garmin) with its balance and the week, the trail of Garmin's corrections, and «Cerrar el día» while it is
 // open (never on a later day). Today shows the relevant corrections in #avisos until «Entendido». The
 // breakdown says when the kcal per step were calibrated with Garmin (or why that was discarded).
+// Unit 016: every kcal on screen in whole numbers (the server keeps them exact; the kcal inputs too); the
+// page asks the day again when it comes back to the front and every minute in sight, and past midnight it
+// moves from the old today to the new one; an open card survives a repaint; confirming sends the day of the
+// list and reinterpreting a list of the queue sends the day it was recorded.
 
 import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
@@ -31,29 +35,35 @@ import { pintarRecetas } from "./recetas.js";
 const $ = (id) => document.getElementById(id);
 // kcal with a thousands point always («1.040»): es-ES does not group 4 digits by default
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1, useGrouping: "always" });
+// unit 016 (R8): kcal are shown whole («1.790», «17»); only shown: what is saved and the inputs stay exact
+const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
+const kcalEnteras = (n) => enteras.format(Math.round(n) === 0 ? 0 : n); // never «−0»
 const porPaso = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 3 }); // 0,04 kcal/paso must not read 0
 const kilos = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 }); // 0,25 kg/semana must not read 0,3
 const fechaLarga = new Intl.DateTimeFormat("es-ES", { weekday: "long", day: "numeric", month: "long" });
 const signo = (n) => (n > 0 ? "+" : n < 0 ? "−" : "") + numero.format(Math.abs(n));
 const etiquetaNivel = (n) => (n === 0 ? "Mantenimiento" : `${signo(n)} %`);
-const conSignoKcal = (n) => (n < 0 ? `−${numero.format(-n)}` : numero.format(n));
+const conSignoKcal = (n) => (Math.round(n) < 0 ? `−${kcalEnteras(-n)}` : kcalEnteras(Math.max(n, 0)));
+const signoKcal = (n) => (Math.round(n) > 0 ? "+" : Math.round(n) < 0 ? "−" : "") + kcalEnteras(Math.abs(n));
+const MINUTO_MS = 60_000; // unit 016 (R3): how often the day is asked again while it is in sight
 const PESTANAS = ["hoy", "peso", "recetas"];
 const CLAVE_NIVEL = "tridata.nivel-que-miras"; // a screen preference of this phone, never the objective
 const PESO_MIN = 30;
 const PESO_MAX = 250;
 
 let revision = null; // { texto, hoy, original, alimentos, peso, objetivo, dudosas, origen?, dicho? }
-let hoyISO = null; // today, as the server says on the first load
+let hoyISO = null; // today, as the server says in every day it sends (unit 016: it moves at midnight)
 let diaVisto = null; // the day on screen (ISO)
 let ultimoDia = null;
 let editando = null; // id of the saved food whose row is open for change
 let anadiendo = false; // the "add by hand" card under the table is open
+let fichaAbierta = null; // unit 016 (R4): { clave, nodo } of the open card, kept between repaints
 let lectores = []; // one per review card: copies what is typed into the model
 let peticionDia = 0; // drops a late answer when ◀ ▶ are tapped fast
 let conectado = null; // whether the PC answered the last request (null: not known yet)
 let grabacion = null; // { parar } while recording
 let esperada = null; // id of the recording just made: its list opens by itself when it comes back
-let textoDeLista = null; // a list whose interpretation failed (502), its text put in the box
+let textoDeLista = null; // a list whose interpretation failed (502), its text put in the box, and its day
 const porCien = new WeakMap(); // unit 013: the kcal/100 g typed on a review card, by food (never saved)
 let pestanaVista = null; // the tab on screen, to reload the day when coming back to Hoy (unit 013)
 
@@ -64,7 +74,7 @@ function el(etiqueta, props = {}, ...hijos) {
   return nodo;
 }
 
-const kcal = (n) => (n === null || n === undefined ? "—" : `${numero.format(n)} kcal`);
+const kcal = (n) => (n === null || n === undefined ? "—" : `${kcalEnteras(n)} kcal`);
 const cantidad = (a) => (a.cantidad === null ? "sin cantidad" : `${numero.format(a.cantidad)} ${a.unidad ?? ""}`.trim());
 const deFecha = (iso) => fechaLarga.format(new Date(`${iso}T12:00:00`)).replace(",", "");
 const sumarDias = (iso, n) => {
@@ -161,7 +171,13 @@ function textoPlan(plan) {
 }
 
 function pintarDia(dia) {
-  if (hoyISO === null) hoyISO = dia.fecha;
+  const anterior = hoyISO;
+  hoyISO = dia.hoy ?? hoyISO ?? dia.fecha;
+  // unit 016 (R3): midnight passed while looking at today: go to the new today (another day stays)
+  if (anterior !== null && anterior !== hoyISO && dia.fecha === anterior && diaVisto === anterior) {
+    cargarDia(hoyISO);
+    return;
+  }
   if (dia.fecha !== diaVisto) { editando = null; anadiendo = false; }
   diaVisto = dia.fecha;
   ultimoDia = dia;
@@ -172,9 +188,9 @@ function pintarDia(dia) {
   $("ir-hoy").hidden = esHoy;
   $("t-comido-dia").textContent = esHoy ? "Tu día" : mayuscula(deFecha(dia.fecha));
   $("vacio").textContent = esHoy ? "Aún no has apuntado nada hoy." : `No hay nada apuntado el ${deFecha(dia.fecha)}.`;
-  $("total").textContent = `${numero.format(dia.total_kcal)} kcal comidas`;
+  $("total").textContent = `${kcalEnteras(dia.total_kcal)} kcal comidas`;
   const previsto = dia.gasto.desglose && dia.gasto.desglose.previsto;
-  $("ajustar-resumen").textContent = `gasto ${numero.format(dia.gasto.kcal)}${previsto ? " · entreno" : ""} ›`;
+  $("ajustar-resumen").textContent = `gasto ${kcalEnteras(dia.gasto.kcal)}${previsto ? " · entreno" : ""} ›`;
   pintarTarjeta(dia);
   pintarBarra(dia);
   pintarHoja(dia, esHoy);
@@ -198,8 +214,8 @@ function pintarCierre(dia, esHoy) {
   $("cierre-semana").textContent = c.semana.dias ? c.semana.texto : "";
   $("cierre-semana").hidden = !c.semana.dias;
   $("cierre-rastro").replaceChildren(...c.rastro.map((r) => el("p", {
-    textContent: `Garmin lo corrigió el ${r.fecha.slice(0, 10)}: gasto ${numero.format(r.gasto_antes)} → `
-      + `${numero.format(r.gasto_despues)} kcal; balance ${signo(r.balance_antes)} → ${signo(r.balance_despues)}`,
+    textContent: `Garmin lo corrigió el ${r.fecha.slice(0, 10)}: gasto ${kcalEnteras(r.gasto_antes)} → `
+      + `${kcalEnteras(r.gasto_despues)} kcal; balance ${signoKcal(r.balance_antes)} → ${signoKcal(r.balance_despues)}`,
   })));
   $("cierre-rastro").hidden = c.rastro.length === 0;
   if (esHoy) pintarAvisosCierre(dia.avisos_cierre ?? []);
@@ -242,7 +258,7 @@ function pintarTarjeta(dia) {
   const m = dia.margenes.find((x) => x.nivel === n);
   const pasado = m.kcal < 0;
   $("queda-texto").textContent = pasado ? "Te has pasado" : "Te quedan para comer";
-  $("queda-cifra").textContent = numero.format(Math.abs(m.kcal));
+  $("queda-cifra").textContent = kcalEnteras(Math.abs(m.kcal));
   $("queda").classList.toggle("pasado", pasado);
   $("nivel-activo").textContent = n === 0 ? "Mantenimiento" : `Nivel ${signo(n)} %`;
   $("queda-objetivo").hidden = !m.objetivo;
@@ -295,7 +311,7 @@ function kcalPor100(inicial, alCalcular, alEscribir = () => {}) {
 
 // The day as a list in two groups, Comido and Planeado; tapping a row opens its change card (R4).
 function filaAlimento(a) {
-  if (a.id === editando) return fichaCambio(a);
+  if (a.id === editando) return fichaConservada(`cambio:${a.id}`, () => fichaCambio(a));
   const planeado = a.estado === "planeado";
   const detalle = el("span", { className: a.cantidad === null ? "sin-cantidad" : "" }, a.cantidad === null ? "" : cantidad(a));
   if (a.estimado) detalle.append(el("i", { className: "marca", textContent: "estimado" }));
@@ -306,7 +322,7 @@ function filaAlimento(a) {
   const cuenta = !a.pendiente_cantidad && a.kcal !== null;
   const fila = el("div", { className: `fila${planeado ? " planeada" : ""}`, tabIndex: 0, title: "Toca para cambiarlo" },
     el("div", { className: "que" }, el("strong", { textContent: a.nombre }), detalle),
-    el("div", { className: "kcal num", textContent: cuenta ? numero.format(a.kcal) : "—" }));
+    el("div", { className: "kcal num", textContent: cuenta ? kcalEnteras(a.kcal) : "—" }));
   fila.setAttribute("data-grupo", planeado ? "planeado" : "comido");
   if (planeado && a.dia <= hoyISO) { // a later day cannot be eaten yet (R3 of 004)
     const comido = el("button", { type: "button", className: "btn-comido", textContent: "Comido" });
@@ -319,7 +335,16 @@ function filaAlimento(a) {
   return fila;
 }
 
+// Unit 016 (R4): a repaint does not rebuild the open card: the same node (what is typed in it) comes back,
+// with the focus where it was. Only while its food is still in the day; otherwise it closes.
+function fichaConservada(clave, crear) {
+  if (!fichaAbierta || fichaAbierta.clave !== clave) fichaAbierta = { clave, nodo: crear() };
+  return fichaAbierta.nodo;
+}
+
 function pintarLista(dia) {
+  if (editando !== null && !dia.alimentos.some((a) => a.id === editando)) editando = null; // deleted elsewhere
+  const foco = fichaAbierta && fichaAbierta.nodo.contains(document.activeElement) ? document.activeElement : null;
   const comidos = dia.alimentos.filter((a) => a.estado !== "planeado");
   const planeados = dia.alimentos.filter((a) => a.estado === "planeado");
   const nodos = [];
@@ -330,7 +355,10 @@ function pintarLista(dia) {
   $("lista-dia").hidden = dia.alimentos.length === 0;
   $("vacio").hidden = dia.alimentos.length > 0;
   pintarConPlaneado(dia);
-  $("anadir-ficha").replaceChildren(...(anadiendo ? [fichaAnadir(dia.fecha)] : []));
+  $("anadir-ficha").replaceChildren(...(anadiendo ? [fichaConservada(`anadir:${dia.fecha}`, () => fichaAnadir(dia.fecha))] : []));
+  const abierta = editando !== null ? `cambio:${editando}` : anadiendo ? `anadir:${dia.fecha}` : null;
+  if (!fichaAbierta || fichaAbierta.clave !== abierta) fichaAbierta = null;
+  if (foco && foco.isConnected && document.activeElement !== foco) foco.focus({ preventScroll: true });
   $("anadir").hidden = anadiendo;
   $("avisos").replaceChildren(...(dia.pendientes.length ? [el("p", {
     className: "aviso",
@@ -348,7 +376,7 @@ function pintarConPlaneado(dia) {
   const m = dia.con_planeado.margenes.find((x) => x.nivel === n);
   linea.replaceChildren(
     el("span", { textContent: m.kcal < 0 ? "Con lo planeado te pasarías" : "Con lo planeado te quedarían" }), " ",
-    el("strong", { className: "num", textContent: `${numero.format(Math.abs(m.kcal))} kcal` }));
+    el("strong", { className: "num", textContent: `${kcalEnteras(Math.abs(m.kcal))} kcal` }));
 }
 
 // The objective of the day in one line; "" when the day has none.
@@ -377,7 +405,7 @@ function pintarBarra(dia) {
   $("barra-planeado").style.width = `${planeado}%`;
   $("barra-leyenda-planeado").hidden = !(dia.planeado_kcal > 0);
   $("barra-pct").textContent = `${b.pct} %`;
-  $("barra-quedan").textContent = `comido · ${numero.format(b.comido_kcal)} de ${numero.format(b.objetivo_kcal)}`;
+  $("barra-quedan").textContent = `comido · ${kcalEnteras(b.comido_kcal)} de ${kcalEnteras(b.objetivo_kcal)}`;
   $("barra").title = `${dia.objetivo.texto} ${mayuscula(b.texto)}.`;
   $("barra-limite").hidden = !lim;
   if (lim) {
@@ -398,20 +426,20 @@ function pintarDesglose(dia) {
   const d = g.desglose;
   if (!d) { $("desglose").replaceChildren(); return; }
   const deBasal = dia.peso && dia.peso.basal && dia.peso.basal.origen === "peso" ? "Basal (con tu peso)" : "Basal";
-  const lineas = [linea(deBasal, numero.format(d.basal_kcal))];
+  const lineas = [linea(deBasal, kcalEnteras(d.basal_kcal))];
   const pasos = d.pasos_hechos === null
     ? `${numero.format(g.pasos)} pasos supuestos`
     : `${numero.format(d.pasos_hechos)} hechos + ${numero.format(d.pasos_supuestos)} supuestos`;
-  lineas.push(linea(`Pasos: ${pasos} × ${porPaso.format(d.kcal_por_paso)} kcal`, numero.format(d.pasos_kcal)));
-  for (const h of d.entreno_hecho) lineas.push(linea(`Hecho: ${h.nombre} (${numero.format(h.minutos)} min)${h.sin_kcal ? " · sin kcal" : ""}`, numero.format(h.kcal)));
-  if (d.previsto) lineas.push(linea(`Previsto: ${d.previsto.nombre ?? "entreno"} (${numero.format(d.previsto.minutos)} min)`, numero.format(d.previsto_kcal)));
+  lineas.push(linea(`Pasos: ${pasos} × ${porPaso.format(d.kcal_por_paso)} kcal`, kcalEnteras(d.pasos_kcal)));
+  for (const h of d.entreno_hecho) lineas.push(linea(`Hecho: ${h.nombre} (${numero.format(h.minutos)} min)${h.sin_kcal ? " · sin kcal" : ""}`, kcalEnteras(h.kcal)));
+  if (d.previsto) lineas.push(linea(`Previsto: ${d.previsto.nombre ?? "entreno"} (${numero.format(d.previsto.minutos)} min)`, kcalEnteras(d.previsto_kcal)));
   if (g.origen === "garmin") { // unit 014: the day closed with Garmin counts the real one
-    lineas.push(linea("Estimado", numero.format(g.estimado_kcal)));
-    const real = linea("Real de Garmin", numero.format(g.real_kcal));
+    lineas.push(linea("Estimado", kcalEnteras(g.estimado_kcal)));
+    const real = linea("Real de Garmin", kcalEnteras(g.real_kcal));
     real.classList.add("suma");
     lineas.push(real);
   } else {
-    const total = linea("Total", numero.format(g.kcal));
+    const total = linea("Total", kcalEnteras(g.kcal));
     total.classList.add("suma");
     lineas.push(total);
   }
@@ -430,7 +458,7 @@ const avisar = (id, texto) => { $(id).textContent = texto; $(id).hidden = !texto
 function pintarHoja(dia, esHoy) {
   $("hoja-titulo").textContent = esHoy ? "Ajustes de hoy" : `Ajustes del ${deFecha(dia.fecha)}`;
   $("gasto-titulo").textContent = esHoy ? "Gasto de hoy" : "Gasto del día";
-  $("gasto-total").textContent = `${numero.format(dia.gasto.kcal)} kcal`;
+  $("gasto-total").textContent = `${kcalEnteras(dia.gasto.kcal)} kcal`;
   $("gasto").textContent = `${dia.gasto.origen === "garmin" ? "Gasto" : "Gasto estimado"} ${kcal(dia.gasto.kcal)}: ${dia.gasto.explicacion}.`;
   pintarDesglose(dia);
   pintarSegmentado(dia);
@@ -439,7 +467,7 @@ function pintarHoja(dia, esHoy) {
   const o = dia.objetivo;
   const cual = o.porcentaje === 0 ? "Mantenimiento" : `${signo(o.porcentaje)} %`;
   $("objetivo-valor").textContent = `${cual} · ${o.origen === "dia" ? "hoy" : o.origen === "plan" ? "plan" : "sin plan"}`;
-  $("objetivo-kcal").textContent = `${numero.format(o.kcal)} kcal de ${numero.format(dia.gasto.kcal)} de gasto.`;
+  $("objetivo-kcal").textContent = `${kcalEnteras(o.kcal)} kcal de ${kcalEnteras(dia.gasto.kcal)} de gasto.`;
   $("objetivo-actual").textContent = o.texto;
   const dicho = textoObjetivo(dia.objetivo_dia, dia.gasto);
   $("objetivo-dia").textContent = dicho;
@@ -704,13 +732,14 @@ async function marcarComido(a, boton) {
   pintarDia(datos.dia);
 }
 
-async function cargarDia(fecha) {
+async function cargarDia(fecha, { callado = false } = {}) {
   const turno = ++peticionDia;
   const respuesta = await api(fecha ? `/api/dia?fecha=${encodeURIComponent(fecha)}` : "/api/dia");
   const { ok, datos } = respuesta;
   if (turno !== peticionDia) return;
   const { estado } = respuesta;
   if (ok) pintarDia(datos);
+  else if (callado) return; // a look of its own (R3 of unit 016): a failure says nothing, the day stays
   else if (conectado === false) mensaje(""); // the «Sin conexión con el PC» notice says it already
   else if (estado === 409) mensajeAjustes(datos.error ?? "Faltan datos en Ajustes.");
   else mensaje(datos.error ?? "No he podido cargar el día.", "error");
@@ -719,6 +748,13 @@ async function cargarDia(fecha) {
 function irA(fecha) {
   mensaje("");
   cargarDia(fecha);
+}
+
+// Unit 016 (R3): back to the front, and every minute while in sight, the day is asked again; its `hoy`
+// says whether midnight has passed (pintarDia moves from the old today to the new one).
+function mirarElDia() {
+  if (document.visibilityState !== "visible" || pestanaActual() !== "hoy" || !diaVisto) return;
+  cargarDia(diaVisto, { callado: true });
 }
 
 // -- review of the interpreted list ---------------------------------------------
@@ -788,7 +824,9 @@ function pintarRevision() {
       // unit 013 (R-8): pending only without a quantity and without kcal; kcal by hand count
       if (a.cantidad === null && a.kcal === null && !a.dudoso) m.push(el("span", { className: "marca alerta", textContent: "pendiente de cantidad" }));
       if (kcalAMano(a) && !a.dudoso) m.push(el("span", { className: "marca", textContent: "kcal a mano" }));
-      if (a.dia !== revision.hoy) m.push(el("span", { className: "marca", textContent: `planeado: ${deFecha(a.dia)}` }));
+      // unit 016 (R5): a later day is planned; an earlier one is eaten that day, only its date
+      if (a.dia > revision.hoy) m.push(el("span", { className: "marca", textContent: `planeado: ${deFecha(a.dia)}` }));
+      else if (a.dia && a.dia < revision.hoy) m.push(el("span", { className: "marca", textContent: deFecha(a.dia) }));
       if (a.anadida) m.push(el("span", { className: "marca", textContent: "añadido a mano" }));
       if (a.origen) m.push(el("span", { className: "marca origen", textContent: a.origen }));
       if (a.provisional) m.push(el("span", { className: "marca", textContent: "provisional" }));
@@ -984,7 +1022,9 @@ async function interpretar(evento) {
   irAPestanaHoy(); // the review lives in Hoy
   $("enviar").disabled = true;
   mensaje("Interpretando…");
-  const { ok, datos } = await api("/api/interpretar", { texto });
+  // unit 016 (R2): the text of a list of the queue is interpreted with the day it was recorded
+  const fecha = textoDeLista ? textoDeLista.fecha : null;
+  const { ok, datos } = await api("/api/interpretar", fecha ? { texto, fecha } : { texto });
   $("enviar").disabled = false;
   if (!ok) { // the written text stays in the box (R10)
     mensaje(datos.error ?? "No he podido interpretar lo que has escrito. Inténtalo de nuevo.", "error");
@@ -992,7 +1032,7 @@ async function interpretar(evento) {
   }
   mensaje("");
   revision = {
-    texto, hoy: hoyISO, alimentos: datos.alimentos, peso: datos.peso ?? null,
+    texto, hoy: fecha ?? hoyISO, alimentos: datos.alimentos, peso: datos.peso ?? null,
     objetivo: datos.objetivo_dia ?? null, dudosas: datos.dudosas ?? [],
   };
   if (textoDeLista) { // a dictated list Claude could not interpret: it is closed with this review
@@ -1020,7 +1060,7 @@ async function confirmar() {
   $("confirmar").disabled = true;
   const alimentos = revision.alimentos.map(({ anadida, ...a }) => a);
   const { ok, datos } = await api("/api/confirmar", {
-    texto: revision.texto, alimentos, peso: revision.peso, objetivo_dia: revision.objetivo,
+    texto: revision.texto, dia: revision.hoy, alimentos, peso: revision.peso, objetivo_dia: revision.objetivo,
     dudosas: revision.dudosas, sin_cambios: huella(revision) === revision.original,
   });
   if (!ok) {
@@ -1072,6 +1112,8 @@ enlazarPestanas();
 vigilarAltoEntrada();
 $("fecha").textContent = deFecha(cola.fechaLocal()); // before the PC answers, or if it never does
 cargarDia();
+document.addEventListener("visibilitychange", mirarElDia);
+setInterval(mirarElDia, MINUTO_MS);
 cola.iniciar(alCambiarCola);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 
@@ -1210,7 +1252,7 @@ async function abrirLista(id) {
   if (esperada === id) esperada = null;
   if (revision && revision.origen === id) return;
   if (!lista.interpretacion) {
-    textoDeLista = { id: lista.id, texto: lista.texto };
+    textoDeLista = { id: lista.id, texto: lista.texto, fecha: lista.fecha };
     irAPestanaHoy();
     revision = null;
     pintarRevision();

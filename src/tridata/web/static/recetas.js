@@ -9,11 +9,15 @@
 // here with what /api/recetas brought, only to show them) and «Apuntar en hoy», which sends just the
 // quantity: the server works the kcal out again with what is saved. A recipe not weighed yet shows its
 // kcal of the whole recipe on top and a big «Pesar ahora», which weighs the batch in use whenever.
+// Unit 016: kcal are shown whole (calculator, «Apuntado en hoy», the whole recipe); kcal/100 g, kcal of a fixed
+// food and every input keep their decimal (Q-9, C-65).
 
 import { fechaLocal } from "./cola.js";
 import { grabar, puedeGrabar } from "./dictado.js";
 
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1, useGrouping: "always" });
+const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
+const kcalEnteras = (n) => enteras.format(Math.round(n) === 0 ? 0 : n); // unit 016 (R8): only shown
 const fechaCorta = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", year: "numeric" });
 const SIN_PC = "No hay conexión con el PC: no se ha guardado nada.";
 
@@ -141,7 +145,7 @@ function textoEstado(v) {
   if (v.estado === "definitiva") return `${numero.format(v.kcal_100g)} kcal/100 g · definitiva`;
   if (v.estado === "provisional") {
     const aprox = v.kcal_100g_aprox !== null ? ` · ~${numero.format(v.kcal_100g_aprox)} kcal/100 g` : "";
-    return `provisional · ${numero.format(v.kcal_total)} kcal la receta entera${aprox}`;
+    return `provisional · ${kcalEnteras(v.kcal_total)} kcal la receta entera${aprox}`;
   }
   return "sin kcal/100 g: corrige la receta";
 }
@@ -302,10 +306,10 @@ function fichaReceta(r) {
   function pintarTotal() {
     const estimados = modelo.ingredientes.filter((i) => i.estado === "estimado").length;
     const dudosos = modelo.ingredientes.filter((i) => i.estado === "dudoso").length;
-    const partes = [`Total: ${numero.format(Math.round(sumar() * 10) / 10)} kcal la receta entera`];
+    const partes = [`Total: ${kcalEnteras(sumar())} kcal la receta entera`];
     if (estimados) partes.push(plural(estimados, "ingrediente estimado", "ingredientes estimados"));
     if (dudosos) partes.push(`${plural(dudosos, "dudoso", "dudosos")}: sin kcal/100 g hasta corregirlo`);
-    total.textContent = modelo.ingredientes.length || !v ? partes.join(" · ") : `Total: ${numero.format(v.kcal_total ?? 0)} kcal la receta entera (de deficit.md)`;
+    total.textContent = modelo.ingredientes.length || !v ? partes.join(" · ") : `Total: ${kcalEnteras(v.kcal_total ?? 0)} kcal la receta entera (de deficit.md)`;
     total.hidden = !modelo.ingredientes.length && !v;
     pintarCalculo();
   }
@@ -510,7 +514,7 @@ function calculadora(tipo, cosa) {
   };
   const pintarResultado = () => {
     const c = leer();
-    resultado.textContent = c.problema ? "— kcal" : `${numero.format(c.kcal)} kcal${c.provisional ? " · provisional" : ""}`;
+    resultado.textContent = c.problema ? "— kcal" : `${kcalEnteras(c.kcal)} kcal${c.provisional ? " · provisional" : ""}`;
     avisar(c.problema && !c.vacio ? c.problema : "");
   };
   cuanto.entrada.addEventListener("input", pintarResultado);
@@ -525,7 +529,7 @@ function calculadora(tipo, cosa) {
     if (!ok) { avisar(r.error ?? "No se ha podido apuntar: no se ha guardado nada."); return; }
     const a = r.alimento;
     const unidad = a.unidad === "unidad" ? (a.cantidad === 1 ? "unidad" : "unidades") : a.unidad;
-    cerrar(`Apuntado en hoy: ${a.nombre}, ${numero.format(a.cantidad)} ${unidad}, ${numero.format(a.kcal)} kcal${a.provisional ? " (provisional)" : ""}.`);
+    cerrar(`Apuntado en hoy: ${a.nombre}, ${numero.format(a.cantidad)} ${unidad}, ${kcalEnteras(a.kcal)} kcal${a.provisional ? " (provisional)" : ""}.`);
   });
   const caja = el("div", { className: "calculadora" });
   if (tipo === "receta" && cosa.en_uso && cosa.en_uso.estado === "definitiva") {
@@ -580,6 +584,6 @@ function pesarAhora(r) {
     mensaje(`Pesada: ${r.nombre}, ${textoEstado(ahora)}.`, "bien");
   });
   return el("div", { className: "pesar-ahora" },
-    el("p", { className: "entera num", textContent: `${numero.format(v.kcal_total)} kcal la receta entera · sin pesar` }),
+    el("p", { className: "entera num", textContent: `${kcalEnteras(v.kcal_total)} kcal la receta entera · sin pesar` }),
     boton, panel);
 }

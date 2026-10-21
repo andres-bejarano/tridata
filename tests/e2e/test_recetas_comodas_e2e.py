@@ -86,7 +86,7 @@ def test_calcular_y_apuntar_en_hoy(servidor, abrir, capturar, oscuro):  # R1, R2
     ficha = _abrir_cosa(p, "fijos", "dátiles de prueba")
     calc = ficha.locator(".calculadora")
     calc.get_by_label("¿Cuánto has cogido? (g)").fill("6")
-    expect(calc.locator(".resultado")).to_have_text("16,8 kcal")
+    expect(calc.locator(".resultado")).to_have_text("17 kcal")
     capturar(p, f"calculadora-fijo{sufijo}")
 
     # back in Hoy, without reloading the page: the list has it and the total went up 325
@@ -169,9 +169,9 @@ def test_kcal_a_mano_en_hoy(servidor, abrir, capturar, oscuro):  # R5, R7, R9c �
     capturar(p, f"kcal-100g{sufijo}")
     ficha.get_by_role("button", name="Guardar cambios").click()
     fila = p.locator("#lista-dia .fila", has_text="dátiles de prueba")
-    expect(fila.locator(".kcal")).to_have_text("16,8")
+    expect(fila.locator(".kcal")).to_have_text("17")
     expect(fila.locator(".marca", has_text="kcal a mano")).to_have_count(0)
-    expect(p.locator("#total")).to_have_text("16,8 kcal comidas")
+    expect(p.locator("#total")).to_have_text("17 kcal comidas")
 
 
 def _entiende(texto: str, hoy: date) -> Interpretacion:

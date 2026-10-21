@@ -25,6 +25,10 @@ Examples:
 
     # Food log web app on this PC only (needs the `app` extra and .env values)
     tridata web
+
+    # One-off import of deficit.md and its weight chart: first a dry run, then for real
+    tridata importar-deficit --md deficit.md --html grafica_peso_deficit.html --simular
+    tridata importar-deficit --md deficit.md --html grafica_peso_deficit.html
 """
 from __future__ import annotations
 
@@ -167,6 +171,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     web_cmd.add_argument("--port", type=int, default=8765, help="Port (default: 8765).")
 
+    importar_cmd = sub.add_parser(
+        "importar-deficit",
+        help="Import the weights and day foods of deficit.md once, reviewing the dubious ones first",
+    )
+    importar_cmd.add_argument("--md", type=Path, required=True, help="The deficit.md file.")
+    importar_cmd.add_argument(
+        "--html", type=Path, default=None,
+        help="The weight chart (grafica_peso_deficit.html), only to cross-check the weights.",
+    )
+    importar_cmd.add_argument(
+        "--simular", action="store_true", default=False,
+        help="Dry run: show what would be imported and the dubious items, write nothing.",
+    )
+
     return parser
 
 
@@ -176,6 +194,10 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "importar-deficit":
+        # Before opening the store: a dry run must not touch the database at all.
+        return _cmd_importar(args.md, args.html, args.simular)
 
     store = DataStore()
 
@@ -296,6 +318,151 @@ def _cmd_backup(store: DataStore, dest_root: Path, keep: int, extras: list[Path]
         + (f", +{len(extras)} extra file(s)" if extras else "")
         + f"); removed {len(old)} old backup(s)."
     )
+    return 0
+
+
+class _SoloCopia(DataStore):
+    """The store, opened only to copy it: unlike `DataStore()`, it creates no table.
+
+    So a failed backup before an import leaves the database exactly as it was.
+    """
+
+    def __init__(self, db_path: Path) -> None:  # on purpose: no super().__init__, no schema
+        self._db_path = Path(db_path)
+
+
+def _leer_fichero(ruta: Path, opcion: str) -> bytes | None:
+    if not ruta.is_file():
+        print(f"No encuentro el fichero de {opcion}: {ruta}", file=sys.stderr)
+        return None
+    return ruta.read_bytes()
+
+
+def _revisar(dudosos: list, preguntar: Callable[[str], str]) -> dict[int, tuple[str, float | None]]:
+    """Ask the dubious items one by one: Intro accepts the proposal, a number corrects it, «o» omits it."""
+    from .nutricion import importar_deficit as imp
+
+    decisiones: dict[int, tuple[str, float | None]] = {}
+    for i, dudoso in enumerate(dudosos, 1):
+        print(f"\nDudoso {i}/{len(dudosos)} · {dudoso.apartado}" + (f" · {dudoso.dia}" if dudoso.dia else ""))
+        print(f"  Texto: «{dudoso.texto}»")
+        print(f"  Motivo: {dudoso.motivo}")
+        if not dudoso.corregible:
+            opciones = "solo se puede omitir: «o» para omitir (apúntalo a mano en la app si hace falta), sin Intro ni número"
+        elif dudoso.propuesta is not None:
+            print(f"  Propuesta: {imp.numero(dudoso.propuesta)}")
+            opciones = "Intro acepta la propuesta · un número la corrige · «o» lo omite"
+        else:
+            opciones = "sin propuesta: escribe un número para corregirlo o «o» para omitirlo (Intro no vale)"
+        while True:
+            respuesta = preguntar(f"  [{opciones}] > ").strip()
+            if respuesta.lower() == "o":
+                decisiones[i - 1] = (imp.OMITIDO, None)
+                break
+            if not dudoso.corregible:
+                print("  Este solo se puede omitir: escribe «o».")
+                continue
+            if respuesta == "":
+                if dudoso.propuesta is None:
+                    print("  No hay propuesta: escribe un número o «o».")
+                    continue
+                decisiones[i - 1] = (imp.ACEPTADO, dudoso.propuesta)
+                break
+            texto = respuesta.replace(",", ".") if dudoso.tipo == "peso" else respuesta.replace(".", "")
+            try:
+                valor = float(texto)
+            except ValueError:
+                print("  No es un número: Intro, un número o «o».")
+                continue
+            if not imp.valor_valido(dudoso, valor):
+                print("  Ese número no es razonable (kcal del día entre 500 y 8.000; peso entre 30 y 250 kg).")
+                continue
+            decisiones[i - 1] = (imp.CORREGIDO, valor)
+            break
+    return decisiones
+
+
+def _cmd_importar(
+    md: Path, html: Path | None, simular: bool, *, db_path: Path = DEFAULT_DB_PATH,
+    backup_dir: Path = DEFAULT_BACKUP_DIR, preguntar: Callable[[str], str] = input, hoy: date | None = None,
+) -> int:
+    """`tridata importar-deficit`: read → summary and dubious items → (dry run ends) → previous import
+    warning → review → «¿Guardar?» → backup → write what is missing → import record → final summary.
+
+    Everything it prints goes to the terminal only (never to sync.log): it is Andrés's health data.
+    """
+    from .nutricion import RegistroComidas, RegistroPeso
+    from .nutricion import importar_deficit as imp
+
+    hoy = hoy or date.today()
+    md_bytes = _leer_fichero(md, "--md")
+    html_bytes = _leer_fichero(html, "--html") if html is not None else None
+    if md_bytes is None or (html is not None and html_bytes is None):
+        return 1
+    try:
+        lectura = imp.leer(md_bytes.decode("utf-8"), html_bytes.decode("utf-8") if html_bytes is not None else None,
+                           hoy)
+    except imp.ErrorImportacion as exc:
+        print(f"No se puede importar: {exc}.", file=sys.stderr)
+        return 1
+    except UnicodeDecodeError:
+        print("No se puede importar: los ficheros tienen que estar en UTF-8.", file=sys.stderr)
+        return 1
+
+    print(lectura.resumen())
+    if lectura.referencias:
+        print(f"  Recetas o alimentos de referencia (para guardar-receta): {', '.join(lectura.referencias)}")
+    if lectura.taras:
+        print(f"  Taras (para guardar-receta): {', '.join(lectura.taras)}")
+    if html is None:
+        print("  Sin --html: los pesos no se cruzan con la gráfica.")
+    for i, dudoso in enumerate(lectura.dudosos, 1):
+        propuesta = f" · propuesta: {imp.numero(dudoso.propuesta)}" if dudoso.propuesta is not None else ""
+        print(f"  Dudoso {i}: {dudoso.apartado} · «{dudoso.texto}» · {dudoso.motivo}{propuesta}")
+    if simular:
+        print("Simulación: no se ha guardado nada.")
+        return 0
+
+    try:
+        anterior = imp.Importaciones(db_path).ultima()
+        if anterior is not None:
+            previo = anterior["resumen"].get("resumen", {})
+            n_pesos = previo.get("pesos_nuevos", 0) + previo.get("pesos_ya", 0)
+            n_dias = previo.get("dias_nuevos", 0) + previo.get("dias_ya", 0)
+            aviso = (f"Ya importaste el {anterior['fecha'][:10]} ({n_pesos} pesos, {n_dias} días). "
+                     "¿Importar otra vez? Solo se añadirá lo que falte [s/N] ")
+            if preguntar(aviso).strip().lower() != "s":
+                print("No se ha guardado nada.")
+                return 0
+        decisiones = _revisar(lectura.dudosos, preguntar)
+        if preguntar("\n¿Guardar? [s/N] ").strip().lower() != "s":
+            print("No se ha guardado nada.")
+            return 0
+    except (EOFError, KeyboardInterrupt):
+        print("\nNo se ha guardado nada.")
+        return 1
+
+    extras = [md] + ([html] if html is not None else [])
+    try:
+        codigo = _cmd_backup(_SoloCopia(db_path), backup_dir, 14, extras)
+    except Exception as exc:  # any failure of the copy stops the import before writing
+        print(f"La copia de seguridad ha fallado ({exc}): no se ha guardado nada.", file=sys.stderr)
+        return 1
+    if codigo != 0:
+        print("La copia de seguridad ha fallado: no se ha guardado nada.", file=sys.stderr)
+        return 1
+
+    resumen = imp.aplicar(lectura, decisiones, RegistroComidas(db_path), RegistroPeso(db_path), hoy)
+    dudosos = []
+    for i, dudoso in enumerate(lectura.dudosos):
+        decision, valor = decisiones.get(i, (imp.OMITIDO, None))
+        dudosos.append({**dudoso.como_dict(), "decision": decision, "valor": valor})
+    imp.Importaciones(db_path).registrar(
+        imp.huella(md_bytes, html_bytes),
+        {"resumen": resumen.como_dict(), "referencias": lectura.referencias, "taras": lectura.taras,
+         "dudosos": dudosos},
+    )
+    print(resumen.texto())
     return 0
 
 

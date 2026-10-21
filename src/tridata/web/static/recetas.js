@@ -5,6 +5,10 @@
 // (/api/interpretar, /api/dictado: the same interpreter, nothing saved), then reviewed here. The server
 // does every sum that is saved (fixed foods with THEIR kcal, kcal/100 g); this only shows and sends.
 // Without the PC nothing is saved here: it says so (the offline queue is only for the Hoy screen).
+// Unit 013: a saved recipe or fixed food opens with «¿Cuánto has cogido?», its kcal at once (worked out
+// here with what /api/recetas brought, only to show them) and «Apuntar en hoy», which sends just the
+// quantity: the server works the kcal out again with what is saved. A recipe not weighed yet shows its
+// kcal of the whole recipe on top and a big «Pesar ahora», which weighs the batch in use whenever.
 
 import { fechaLocal } from "./cola.js";
 import { grabar, puedeGrabar } from "./dictado.js";
@@ -227,7 +231,7 @@ function fichaFijo(f) {
   const alias_ = campo("Alias (separa con comas)", f ? f.alias.join(", ") : "");
   const nota = campo("Nota", f ? f.nota : "", "text", { placeholder: "p. ej. «no la fruta»" });
   const ruta = f ? `/api/fijos/${f.id}` : "/api/fijos";
-  return armazon({
+  const { tarjeta } = armazon({
     clase: "ficha-fijo", nombre: f && f.nombre, textoGuardar: "Guardar",
     nodos: [nombre, el("div", { className: "fila dos" }, kcal, por), alias_, nota],
     guardar: () => {
@@ -238,7 +242,9 @@ function fichaFijo(f) {
         alias: alias(alias_.entrada.value), nota: nota.entrada.value }, `Guardado: ${nombre.entrada.value.trim()}.`);
     },
     borrar: f && (() => enviar(`/api/fijos/${f.id}/borrar`, { confirmado: true }, `Borrado: ${f.nombre}.`)),
-  }).tarjeta;
+  });
+  if (f) tarjeta.prepend(calculadora("fijo", f));
+  return tarjeta;
 }
 
 function fichaOlla(o) {
@@ -441,6 +447,10 @@ function fichaReceta(r) {
     tarjeta.append(...preguntaBorrar(r.nombre, () => enviar(`/api/recetas/${r.id}/borrar`, { confirmado: true }, `Borrada: ${r.nombre}.`),
       acciones, avisar, "Borrar receta", detalle));
   }
+  if (r) {
+    tarjeta.prepend(calculadora("receta", r));
+    if (sinPesar(r)) tarjeta.prepend(pesarAhora(r));
+  }
   pintarIngredientes();
   return tarjeta;
 }
@@ -466,4 +476,110 @@ function versiones(r, avisar) {
     return fila;
   });
   return el("div", { className: "versiones" }, el("p", { className: "titulo-pieza", textContent: "Tandas" }), ...filas);
+}
+
+// -- unit 013: how much was taken, logged today, and weighing later ---------------------------------
+
+const redondear = (n) => Math.round(n * 10) / 10;
+const sinPesar = (r) => !r.por_revisar && r.en_uso && r.en_uso.estado === "provisional";
+
+// The kcal of `n` of a saved thing, only to show them (G-31, G-32): the server works them out again.
+function cuenta(tipo, cosa, n) {
+  if (tipo === "fijo") {
+    return { kcal: redondear(cosa.por === "unidad" ? n * cosa.kcal : n * cosa.kcal / 100), provisional: false };
+  }
+  const v = cosa.en_uso;
+  if (!v || v.estado === "sin_kcal") return { problema: "Corrige la receta: tiene un ingrediente dudoso y no se puede calcular." };
+  if (v.kcal_100g !== null) return { kcal: redondear(n * v.kcal_100g / 100), provisional: false };
+  if (v.kcal_100g_aprox !== null) return { kcal: redondear(n * v.kcal_100g_aprox / 100), provisional: true };
+  return { problema: "Sin pesar: pésala o pon sus kcal/100 g aproximadas." };
+}
+
+function calculadora(tipo, cosa) {
+  const porUnidad = tipo === "fijo" && cosa.por === "unidad";
+  const cuanto = campo(`¿Cuánto has cogido? (${porUnidad ? "unidades" : "g"})`, "", "text", numerico);
+  const resultado = el("p", { className: "resultado num", textContent: "— kcal" });
+  resultado.setAttribute("aria-live", "polite");
+  const aviso = el("p", { className: "aviso-calc", hidden: true });
+  const apuntar = el("button", { type: "button", className: "principal", textContent: "Apuntar en hoy" });
+  const avisar = (texto) => { aviso.textContent = texto; aviso.hidden = !texto; };
+  const leer = () => {
+    const n = comoNumero(cuanto.entrada.value);
+    if (n === null || Number.isNaN(n) || n <= 0) return { n, problema: "Escribe cuánto has cogido.", vacio: true };
+    return { n, ...cuenta(tipo, cosa, n) };
+  };
+  const pintarResultado = () => {
+    const c = leer();
+    resultado.textContent = c.problema ? "— kcal" : `${numero.format(c.kcal)} kcal${c.provisional ? " · provisional" : ""}`;
+    avisar(c.problema && !c.vacio ? c.problema : "");
+  };
+  cuanto.entrada.addEventListener("input", pintarResultado);
+  apuntar.addEventListener("click", async () => {
+    const c = leer();
+    if (c.problema) { avisar(c.problema); return; }
+    apuntar.disabled = true;
+    avisar("");
+    const ruta = `/api/${tipo === "fijo" ? "fijos" : "recetas"}/${cosa.id}/apuntar`;
+    const { ok, datos: r } = await api(ruta, { cantidad: c.n });
+    apuntar.disabled = false;
+    if (!ok) { avisar(r.error ?? "No se ha podido apuntar: no se ha guardado nada."); return; }
+    const a = r.alimento;
+    const unidad = a.unidad === "unidad" ? (a.cantidad === 1 ? "unidad" : "unidades") : a.unidad;
+    cerrar(`Apuntado en hoy: ${a.nombre}, ${numero.format(a.cantidad)} ${unidad}, ${numero.format(a.kcal)} kcal${a.provisional ? " (provisional)" : ""}.`);
+  });
+  const caja = el("div", { className: "calculadora" });
+  if (tipo === "receta" && cosa.en_uso && cosa.en_uso.estado === "definitiva") {
+    caja.append(el("p", { className: "estado-receta num", textContent: textoEstado(cosa.en_uso) }));
+  }
+  caja.append(el("div", { className: "fila-calc" }, cuanto, resultado), aviso, apuntar);
+  return caja;
+}
+
+// «Pesar ahora» (R-59): the pot and the full pot, or the net weight, sent ALONE to the route that corrects
+// the batch in use, so its ingredients, its date and the rest stay as they are.
+function pesarAhora(r) {
+  const v = r.en_uso;
+  const boton = el("button", { type: "button", className: "principal grande", textContent: "Pesar ahora" });
+  const ollas = [["", "Sin olla: escribo el peso neto"], ...datos.ollas.map((o) => [String(o.id), `${o.nombre} (${numero.format(o.tara_g)} g)`])];
+  const olla = seleccion("Olla", ollas, datos.ollas.length ? String(datos.ollas[0].id) : "");
+  const peso = campo("Olla llena (g)", "", "text", numerico);
+  const calculo = el("p", { className: "suave calculo" });
+  const aviso = el("p", { className: "aviso-calc", hidden: true });
+  const avisar = (texto) => { aviso.textContent = texto; aviso.hidden = !texto; };
+  const guardar = el("button", { type: "button", className: "principal", textContent: "Guardar el peso" });
+  const cancelar = el("button", { type: "button", textContent: "Cancelar" });
+  const panel = el("div", { className: "pesar", hidden: true }, el("div", { className: "fila dos" }, olla, peso), calculo, aviso,
+    el("div", { className: "acciones" }, guardar, cancelar));
+  const pintarCalculo = () => {
+    const conOlla = Boolean(olla.entrada.value);
+    peso.texto.textContent = conOlla ? "Olla llena (g)" : "Peso neto (g)";
+    const g = comoNumero(peso.entrada.value);
+    const tara = conOlla ? datos.ollas.find((o) => String(o.id) === olla.entrada.value).tara_g : 0;
+    const neto = g === null || Number.isNaN(g) ? null : g - tara;
+    if (neto === null) calculo.textContent = "";
+    else if (neto <= 0) calculo.textContent = "La olla llena no puede pesar menos que su tara.";
+    else calculo.textContent = `Saldrá a unas ${numero.format(Math.round(v.kcal_total / neto * 1000) / 10)} kcal/100 g (peso neto ${numero.format(neto)} g).`;
+  };
+  olla.entrada.addEventListener("change", pintarCalculo);
+  peso.entrada.addEventListener("input", pintarCalculo);
+  pintarCalculo();
+  boton.addEventListener("click", () => { panel.hidden = false; boton.hidden = true; avisar(""); peso.entrada.focus(); });
+  cancelar.addEventListener("click", () => { panel.hidden = true; boton.hidden = false; avisar(""); });
+  guardar.addEventListener("click", async () => {
+    const g = comoNumero(peso.entrada.value);
+    if (g === null || Number.isNaN(g)) { avisar(olla.entrada.value ? "Escribe lo que pesa la olla llena, en gramos." : "Escribe el peso neto, en gramos."); return; }
+    const cuerpo = olla.entrada.value ? { olla_id: Number(olla.entrada.value), peso_lleno_g: g } : { olla_id: null, peso_neto_g: g };
+    guardar.disabled = true;
+    avisar("");
+    const { ok, datos: respuesta } = await api(`/api/recetas/${r.id}`, cuerpo);
+    guardar.disabled = false;
+    if (!ok) { avisar(respuesta.error ?? "No se ha podido guardar el peso."); return; }
+    poner(respuesta);
+    pintar(); // the card stays open, now weighed
+    const ahora = respuesta.receta.en_uso;
+    mensaje(`Pesada: ${r.nombre}, ${textoEstado(ahora)}.`, "bien");
+  });
+  return el("div", { className: "pesar-ahora" },
+    el("p", { className: "entera num", textContent: `${numero.format(v.kcal_total)} kcal la receta entera · sin pesar` }),
+    boton, panel);
 }

@@ -753,6 +753,37 @@ class Recetario:
         return {"problema": f"«{cosa['nombre']}» está guardada por gramos o por fracción de la receta: dilo así",
                 "dudoso": False}
 
+    def para_apuntar(self, tipo: str, ident: int, cantidad: float | None) -> dict:
+        """Unit 013 (R-57, R-58): what «Apuntar en hoy» logs for `cantidad` of a saved recipe or fixed food.
+
+        Grams for a recipe and for a fixed food per 100 g, units for one per unit. The kcal come from
+        `_calcular` with what is saved, never from the page. `ValueError` with the text for Andrés if it
+        cannot be worked out (no quantity, not weighed and no approximate kcal/100 g, a doubtful
+        ingredient); `KeyError` if it does not exist.
+        """
+        with self._connect() as conn:
+            if tipo == "fijo":
+                cosa = self._fijo_fila(self._leer(conn, "alimento_fijo", ident))
+                unidad = "g" if cosa["por"] == "100g" else "unidad"
+            elif tipo == "receta":
+                cosa = self._receta_de(conn, self._leer(conn, "receta", ident))
+                unidad = "g"
+            else:
+                raise KeyError(tipo)
+        if cantidad is None or cantidad <= 0:
+            raise ValueError("escribe cuánto has cogido")
+        if tipo == "receta":
+            v = cosa["en_uso"]
+            if v is None or v["estado"] == "sin_kcal":
+                raise ValueError(f"corrige la receta «{cosa['nombre']}»: tiene un ingrediente dudoso y no se puede calcular")
+            if v["kcal_100g"] is None and v["kcal_100g_aprox"] is None:
+                raise ValueError(f"«{cosa['nombre']}» no está pesada: pésala o pon sus kcal/100 g aproximadas")
+        calculo = self._calcular(tipo, cosa, cantidad, unidad)
+        if "problema" in calculo:  # cannot happen with the unit chosen above; said all the same
+            raise ValueError(calculo["problema"] or "no se puede calcular")
+        return {"nombre": cosa["nombre"], "cantidad": cantidad, "unidad": unidad, "kcal": calculo["kcal"],
+                "origen": calculo["origen"], "provisional": calculo["provisional"]}
+
     def resolver(self, alimento: dict) -> dict:
         """What the list shows for one interpreted food (D1, D2, D6; R-42, R-43, R-45, R-48).
 

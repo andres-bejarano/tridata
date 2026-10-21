@@ -4,6 +4,7 @@
 plans): fixed foods garbanzo seco 350, aceite de oliva 900 and cebolla 40 kcal/100 g; the «olla
 grande» weighs 1.500 g empty. Claude is never called: what it «said» is written by hand.
 """
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -425,3 +426,64 @@ def test_cargar_de_deficit_una_vez(tmp_path):  # R15, C-60
     rara = recetas["Algo de prueba que no encaja"]
     rec.corregir(rara["id"], {"ingredientes": [ing("cosa de prueba", 300, 300)], "peso_neto_g": 300})
     assert "Algo de prueba que no encaja" in rec.nombres()
+
+
+# -- bug 012: the formats of the real table (all invented) ----------------------------------------------
+
+FORMATOS = Path(__file__).parent / "fixtures" / "recetas_formatos_inventado.md"
+
+
+def _formatos():
+    return {c.nombre: c for c in _cargas(FORMATOS.read_text(encoding="utf-8"))}
+
+
+def test_parentesis_sin_ingredientes_es_alimento_fijo():  # bug 012 · R1
+    cargas = _formatos()
+    mermelada, embutido = cargas["Mermelada de prueba"], cargas["Embutido de prueba"]
+    assert (mermelada.tipo, mermelada.kcal, mermelada.por) == ("fijo", 250, "100g")
+    assert (embutido.tipo, embutido.kcal, embutido.por) == ("fijo", 410, "100g")
+    assert "la de casa" in mermelada.nota  # the clarification is kept, in the note
+
+
+def test_el_nombre_no_lleva_ingredientes_ni_cola(tmp_path):  # bug 012 · R2, R-44
+    cargas = _formatos()
+    assert {"Garbanzos de la tía", "Magdalenas de prueba", "Alubias de la tía", "Tarta de prueba",
+            "Pavo asado de prueba", "Gominola de prueba"} <= set(cargas)
+    garbanzos = cargas["Garbanzos de la tía"]
+    assert "cebolla 100g" in garbanzos.nota and "la legumbre puede cambiar" in garbanzos.nota
+    rec = Recetario(tmp_path / "data.sqlite3")
+    rec.cargar_de_deficit(list(cargas.values()), hoy=HOY)
+    nombres = rec.nombres()
+    assert nombres
+    for nombre in nombres:
+        assert not any(trozo in nombre for trozo in ("(", "[", " + ", "kcal")), nombre
+        assert not re.search(r"\d\s*(?:g|ml)\b", nombre), nombre
+
+
+@pytest.mark.parametrize("nombre, tipo, kcal_total, kcal_100g, kcal, por, motivo", [
+    ("Garbanzos de la tía", "receta", 1234, 123.4, None, None, None),
+    ("Magdalenas de prueba", "receta", 1500, 333, None, None, None),
+    ("Alubias de la tía", "receta", 1000, 98.4, None, None, None),
+    ("Tarta de prueba", "receta", 610, 305, None, None, None),
+    ("Flan de prueba", "receta", 1000, None, None, None, None),
+    ("Sopa de prueba", "receta", 380, None, None, None, None),
+    ("Pavo asado de prueba", "fijo", None, None, 150, "100g", None),
+    ("Galletas de prueba rellenas", "fijo", None, None, 60, "unidad", None),
+    ("Gominola de prueba", "revisar", None, None, None, None, "varios alimentos en una fila"),
+    ("Guiso de prueba sin datos", "revisar", None, None, None, None, "sin kcal"),  # the R4 guard
+])
+def test_kcal_de_la_segunda_columna(nombre, tipo, kcal_total, kcal_100g, kcal, por, motivo):  # bug 012 · R3
+    c = _formatos()[nombre]
+    assert (c.tipo, c.kcal_total, c.kcal_100g, c.kcal, c.por, c.motivo) == (tipo, kcal_total, kcal_100g, kcal, por, motivo)
+
+
+def test_cargar_el_fichero_de_formatos(tmp_path):  # bug 012 · R5
+    rec = Recetario(tmp_path / "data.sqlite3")
+    rec.cargar_de_deficit(list(_formatos().values()), hoy=HOY)
+    datos = rec.listado()
+    assert len(datos["fijos"]) == 4 and len(datos["ollas"]) == 1
+    estados = sorted("por_revisar" if r["por_revisar"] else r["en_uso"]["estado"] for r in datos["recetas"])
+    assert estados == ["definitiva"] * 4 + ["por_revisar"] * 2 + ["provisional"] * 2
+    recetas = {r["nombre"]: r for r in datos["recetas"]}
+    assert "cebolla 100g" in recetas["Garbanzos de la tía"]["nota"]
+    assert {r["nombre"] for r in datos["recetas"] if r["por_revisar"]}.isdisjoint(rec.nombres())

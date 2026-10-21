@@ -197,9 +197,13 @@ def _kcal_de_fijo(fijo: dict, cantidad: float | None, unidad: str | None) -> flo
 
 # -- deficit.md (D7) ------------------------------------------------------------------------------
 
-_NUM = r"\d{1,3}(?:\.\d{3})+(?!\d)|\d+"
+# a number: «1.234» is 1234 (thousands point), «123,4» and «98.4» are decimals; never part of another number
+_NUM = r"(?<![\d.,])(?:\d{1,3}(?:\.\d{3})+(?![\d,])|\d+[.,]\d{1,2}(?![\d.,])|\d+)"
 _KCAL = re.compile(rf"({_NUM})\s*(?:kcal)?", re.I)
 _GRAMOS = re.compile(rf"({_NUM})\s*g\b", re.I)
+_KCAL_TOTAL = re.compile(rf"({_NUM})\s*kcal\b(?!\s*/)", re.I)  # «N kcal», not «N kcal/…»
+_KCAL_POR = re.compile(rf"({_NUM})\s*kcal\s*/\s*(?:(100)\s*g\b|(?:unidad|ud)\b)", re.I)  # not «kcal/g»
+_INGREDIENTES = re.compile(r"\d\s*(?:g|ml)\b| \+ ", re.I)  # a quantity in g/ml or a « + »
 _UNA_UNIDAD = re.compile(r"^\s*1\s*(?:unidad|ud)\b", re.I)
 
 
@@ -231,14 +235,37 @@ class Carga:
         return f"receta «{self.nombre}» · provisional · {self.kcal_total:g} kcal la receta entera"
 
 
+def _cifra(texto: str) -> float:
+    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", texto):
+        return float(texto.replace(".", ""))
+    return float(texto.replace(",", "."))
+
+
 def _kcal_md(texto: str) -> float | None:
     m = _KCAL.search(texto.replace("**", ""))
-    return float(m.group(1).replace(".", "")) if m else None
+    return _cifra(m.group(1)) if m else None
 
 
 def _gramos(texto: str) -> float | None:
     m = _GRAMOS.search(texto)
-    return float(m.group(1).replace(".", "")) if m else None
+    return _cifra(m.group(1)) if m else None
+
+
+def _nombre_y_resto(plato: str) -> tuple[str, str | None]:
+    """The name is the text up to the first « (»; the rest (ingredients, clarification, tail) is the note."""
+    nombre, separador, resto = plato.partition(" (")
+    if not separador:
+        return plato, None
+    resto = "(" + resto
+    cierre, abiertos = None, 0  # strip the brackets when they wrap the whole rest, as before
+    for i, letra in enumerate(resto):
+        abiertos += {"(": 1, ")": -1}.get(letra, 0)
+        if abiertos == 0:
+            cierre = i
+            break
+    if cierre == len(resto) - 1:
+        resto = resto[1:-1]
+    return nombre.strip(), resto.strip() or None
 
 
 def _limpio(celda: str) -> str:
@@ -252,18 +279,17 @@ def _leer_referencia(celdas: list[str]) -> Carga | None:
     plato = _limpio(celdas[0])
     racion = _limpio(celdas[1]) if len(celdas) > 1 else ""
     kcal = _kcal_md(celdas[2]) if len(celdas) > 2 else None
-    nombre, nota = plato, None
-    m = re.match(r"^(.*?)\s*\((.*)\)\s*$", plato)
-    if m:
-        nombre, nota = m.group(1).strip(), m.group(2).strip()
+    nombre, nota = _nombre_y_resto(plato)
+    ingredientes = bool(nota and _INGREDIENTES.search(nota))  # otherwise the brackets are a clarification
 
-    def revisar(motivo: str) -> Carga:
-        return Carga("revisar", nombre, texto, nota=nota or f"de deficit.md: {texto}", kcal_total=kcal, motivo=motivo)
+    def revisar(motivo: str, kcal_total: float | None = kcal) -> Carga:
+        return Carga("revisar", nombre, texto, nota=nota or f"de deficit.md: {texto}", kcal_total=kcal_total,
+                     motivo=motivo)
 
     if kcal is None or kcal <= 0:
-        return revisar("sin kcal")
+        return _leer_prosa(nombre, nota, plato, racion, texto, ingredientes, revisar)
     gramos = _gramos(racion)
-    if m:
+    if ingredientes:
         if gramos and "total" in racion.lower():
             por_100 = _redondear(kcal / gramos * 100)
             if por_100 > KCAL_100G_MAX:
@@ -274,10 +300,33 @@ def _leer_referencia(celdas: list[str]) -> Carga | None:
         por_100 = _redondear(kcal / gramos * 100)
         if por_100 > KCAL_100G_MAX:
             return revisar("más de 900 kcal/100 g")
-        return Carga("fijo", nombre, texto, kcal=por_100, por="100g")
+        return Carga("fijo", nombre, texto, nota=nota, kcal=por_100, por="100g")
     if _UNA_UNIDAD.match(racion):
-        return Carga("fijo", nombre, texto, kcal=kcal, por="unidad")
+        return Carga("fijo", nombre, texto, nota=nota, kcal=kcal, por="unidad")
     return revisar("la ración no dice gramos ni «1 unidad»")
+
+
+def _leer_prosa(nombre: str, nota: str | None, plato: str, prosa: str, texto: str, ingredientes: bool,
+                revisar: Any) -> Carga:
+    """Bug 012 · R3: a row whose kcal are written in the 2nd column, with text around them."""
+    if " · " in plato:
+        return revisar("varios alimentos en una fila", None)
+    total = _KCAL_TOTAL.search(prosa)
+    kcal_total = _cifra(total.group(1)) if total else None
+    por = None if "PROVISIONAL" in prosa else _KCAL_POR.search(prosa)
+    if por:
+        valor = _cifra(por.group(1))
+        por_100 = por.group(2) is not None
+        if por_100 and valor > KCAL_100G_MAX:
+            return revisar("más de 900 kcal/100 g", kcal_total)
+        if not ingredientes:
+            return Carga("fijo", nombre, texto, nota=nota, kcal=valor, por="100g" if por_100 else "unidad")
+        if por_100 and kcal_total:
+            return Carga("receta", nombre, texto, nota=nota, kcal_total=kcal_total, kcal_100g=valor)
+        return revisar("trae kcal por cantidad pero no las kcal de la receta entera", kcal_total)
+    if kcal_total:
+        return Carga("receta", nombre, texto, nota=nota, kcal_total=kcal_total)
+    return revisar("sin kcal", None)
 
 
 def leer_cargas(referencias: list[list[str]], taras: list[list[str]]) -> list[Carga]:

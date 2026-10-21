@@ -246,6 +246,35 @@ class RegistroComidas:
                 raise RuntimeError("no se ha podido apuntar el alimento")
             return self._fila(self._leer(conn, cur.lastrowid))
 
+    def importar_dia(self, dia: date, alimentos: list[Alimento], hoy: date) -> int:
+        """Save the food lines of an imported day (unit 009), only if that day has no foods yet.
+
+        One connection, all or nothing: if `dia` already has foods it returns 0 and writes nothing
+        (what the app has always wins, and importing twice does not duplicate); otherwise it
+        inserts every line with its own `estimado` and `supuestos`, without an interpretation,
+        and returns how many.
+        """
+        if not alimentos:
+            return 0
+        self.validar(alimentos)
+        ahora = datetime.now().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM alimento_apuntado WHERE dia = ? LIMIT 1", (dia.isoformat(),)).fetchone():
+                return 0
+            for a in alimentos:
+                conn.execute(
+                    "INSERT INTO alimento_apuntado (dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, "
+                    "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+                    (
+                        dia.isoformat(), a.nombre, a.cantidad, a.unidad, a.kcal, a.proteina_g, a.hidratos_g,
+                        a.grasa_g, _estado(dia, hoy), int(a.estimado),
+                        json.dumps(a.supuestos, ensure_ascii=False), int(a.pendiente_cantidad), ahora,
+                    ),
+                )
+        return len(alimentos)
+
     def apuntes_del_dia(self, dia: date) -> list[dict]:
         with self._connect() as conn:
             filas = conn.execute(

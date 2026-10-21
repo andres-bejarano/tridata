@@ -93,10 +93,10 @@ from starlette.staticfiles import StaticFiles
 from ..garmin_client import GarminAuthError
 from ..ia import ErrorInterpretacion, ErrorTranscripcion
 from ..nutricion import (
-    Ajustes, Alimento, Cierres, ObjetivosDia, RegistroComidas, RegistroPeso, config_gasto_del_dia, dias_de_retraso,
-    gasto_estimado_del_dia, gramos_que_caben, kcal_previstas, objetivo_valido, peso_valido, Recetario, media_7_dias,
-    resumen_del_dia, resumen_peso, simular, texto_retraso,
+    Ajustes, Alimento, Cierres, ObjetivosDia, RegistroComidas, RegistroPeso, gramos_que_caben, kcal_previstas,
+    objetivo_valido, peso_valido, Recetario, media_7_dias, simular,
 )
+from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
 from ..storage import DataStore
 from .recetas import rutas as rutas_recetas
 
@@ -106,16 +106,11 @@ ESTATICOS = Path(__file__).parent / "static"
 NO_ESTA = "Ese alimento ya no está apuntado."
 NO_ESTA_CARRERA = "Esa carrera ya no está en tus ajustes."
 DIAS_RECIENTES = 14  # the planned training is chosen among the activities of the last 14 days (R-15)
-DIAS_RETRASO_MAX = 730  # the days of delay look at most two years ahead
 DIAS_GRAFICA_PESO = 30  # the weight chart of the Peso tab (unit 010, R10)
 FALTA_GARMIN = "Faltan GARMIN_EMAIL / GARMIN_PASSWORD en .env: no puedo traer Garmin."
 AUDIO_MAX_BYTES = 10 * 1024 * 1024  # a 2-minute recording is far below this (R4)
 TIPOS_AUDIO = frozenset({"audio/mp4", "audio/x-m4a", "audio/aac", "audio/webm", "audio/ogg", "audio/wav", "audio/mpeg"})
 DICTADO_NO_DISPONIBLE = "El dictado no está disponible en el PC ahora mismo. Se reintentará más tarde."
-
-
-class FaltanAjustes(Exception):
-    """A day cannot be computed: the settings of that day lack basal or kcal per step."""
 
 
 def _error(mensaje: str, estado: int, **extra: Any) -> JSONResponse:
@@ -128,11 +123,6 @@ async def _cuerpo(request: Request) -> dict | None:
     except (ValueError, json.JSONDecodeError):
         return None
     return datos if isinstance(datos, dict) else None
-
-
-def _plan(vigentes: Any) -> dict:
-    return {"objetivo_pct": vigentes.objetivo_pct, "motivo": vigentes.motivo_objetivo,
-            "limite_saludable_pct": vigentes.limite_saludable_pct}
 
 
 _NUEVAS = ("guardado", "coincidencia", "origen", "provisional", "propuesta", "kcal_estimada")
@@ -208,48 +198,10 @@ def crear_app(
         dia_hoy = hoy()  # today's own activities already count as done: they are not offered
         return store.activities_between(dia_hoy - timedelta(days=DIAS_RECIENTES), dia_hoy - timedelta(days=1))
 
-    def _retraso(fecha: date, vigentes: Any, nuevo_pct: float) -> dict | None:
-        meta = vigentes.objetivo_peso
-        if meta is None or meta.fecha < fecha:
-            return None
-        hasta = min(meta.fecha, fecha + timedelta(days=DIAS_RETRASO_MAX))
-        plan = {fecha + timedelta(days=i): ajustes.vigentes(fecha + timedelta(days=i)).objetivo_pct
-                for i in range((hasta - fecha).days + 1)}
-        dias = dias_de_retraso(plan, fecha, nuevo_pct)
-        return None if dias is None else {"dias": dias, "texto": texto_retraso(dias), "fecha_objetivo": meta.fecha.isoformat()}
-
     def _dia(fecha: date) -> dict:
-        vigentes = ajustes.vigentes(fecha)
-        cuando = "de hoy" if fecha == hoy() else "de ese día"
-        try:
-            _, basal, config = config_gasto_del_dia(fecha, ajustes, pesos)
-            estimado = gasto_estimado_del_dia(fecha, ajustes, pesos, objetivos, store, cuando=cuando)
-        except ValueError as exc:
-            raise FaltanAjustes(str(exc)) from None
-        ventana = pesos.entre(fecha - timedelta(days=6), fecha)
-        objetivo_dia = objetivos.del_dia(fecha)
-        # unit 014: a day closed with Garmin computes its margins, objective and bar with the real expenditure
-        fila = cierres.del_dia(fecha)
-        real = fila["gasto_real"] if fila and fila["estado"] == "cerrado_garmin" else None
-        gasto = estimado if real is None else {**estimado, "kcal": real}
-        plan = _plan(vigentes)
-        resumen = resumen_del_dia(registro.apuntes_del_dia(fecha), fecha, config, objetivo_dia=objetivo_dia,
-                                  basal=basal, peso=resumen_peso(ventana, fecha, vigentes, basal),
-                                  gasto_estimado=gasto, plan=plan)
-        bloque_gasto = resumen["gasto"]
-        if real is not None:
-            bloque_gasto["explicacion"] = (f"gasto real de Garmin {real:g} kcal (el estimado era {estimado['kcal']:g} "
-                                           f"kcal: {bloque_gasto['explicacion']})")
-        bloque_gasto.update(origen="estimado" if real is None else "garmin", estimado_kcal=estimado["kcal"],
-                            real_kcal=real, calibracion=cierres.calibracion_vigente(fecha))
-        if resumen["objetivo"]["origen"] == "dia":
-            resumen["objetivo"]["retraso"] = _retraso(fecha, vigentes, resumen["objetivo"]["porcentaje"])
-        # unit 010: what is planned is only shown apart, it never subtracts from the margin (rule of 004)
-        planeado = round(sum(a["kcal"] for a in resumen["alimentos"] if a["estado"] == "planeado"
-                             and a["kcal"] is not None and not a["pendiente_cantidad"]), 1)
-        return {**resumen, "plan": plan, "planeado_kcal": planeado, "con_planeado": simular(resumen, planeado),
-                "cierre": cierres.bloque_del_dia(fecha, resumen["total_kcal"], estimado["kcal"]),
-                "avisos_cierre": cierres.avisos_pendientes()}
+        """The day as the screen shows it: `nutricion.dia.resumen_completo` (unit 015), the same nutricion.md uses."""
+        return resumen_completo(fecha, registro=registro, pesos=pesos, ajustes=ajustes, objetivos=objetivos,
+                                store=store, cierres=cierres, hoy=hoy())
 
     def _al_dia() -> None:
         """Today's screen first brings the days up to date (unit 014); a failure there never hides the day."""
@@ -265,7 +217,7 @@ def crear_app(
             "vigentes": ajustes.valores_con_fecha(fecha),
             "futuros": ajustes.cambios_futuros(fecha),
             "carreras": [c.como_dict() for c in vigentes.carreras],
-            "plan": _plan(vigentes),
+            "plan": plan_del_dia(vigentes),
         }
 
     async def faltan_ajustes(request: Request, exc: Exception) -> Response:

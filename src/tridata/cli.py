@@ -20,6 +20,10 @@ Examples:
     # Export only daily metrics (no per-activity lines)
     tridata export-metrics --out exports/metrics.md
 
+    # The whole food history (weights, days with foods, expenditure, objective, margin, recipes) in one
+    # readable file that the two imports below can load back (unit 015); offline, no Garmin credentials
+    tridata export-nutricion --out exports/nutricion.md
+
     # Verified copy of the store (plus extra files, e.g. a food diary), keep 14
     tridata backup --extra deficit/deficit.md
 
@@ -148,6 +152,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Also regenerate docs/assets/pmc_last14d.png",
     )
 
+    nutricion_cmd = sub.add_parser(
+        "export-nutricion",
+        help="Rebuild nutricion.md: weights, every day eaten, expenditure, objective, margin and recipes",
+    )
+    nutricion_cmd.add_argument("--out", type=Path, default=Path("exports/nutricion.md"))
+
     backup_cmd = sub.add_parser(
         "backup",
         help="Write a verified copy of the local store to ~/.tridata/backups/",
@@ -214,6 +224,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_importar(args.md, args.html, args.simular)
     if args.command == "importar-recetas":
         return _cmd_importar_recetas(args.md, args.simular)
+    if args.command == "export-nutricion":
+        return _cmd_export_nutricion(args.out)
 
     store = DataStore()
 
@@ -327,6 +339,20 @@ def _cerrar_dias(store: DataStore) -> None:
                  if cal["descartada_motivo"] else "kcal/paso recalibradas")
     print(f"Cierre del día: {r['comidas_cerradas']} con la comida cerrada, {r['cerrados_garmin']} cerrados con "
           f"Garmin, {r['esperan']} esperan a Garmin, {r['correcciones']} correcciones; {calibrado}.")
+
+
+def _cmd_export_nutricion(out: Path, *, db_path: Path | None = None, hoy: date | None = None) -> int:
+    """Unit 015: rewrite nutricion.md whole from the base. Offline: it never asks for Garmin credentials (G-9).
+
+    It prints only the path and the counts (it goes to sync.log): never a kcal or a weight (R-63).
+    """
+    from .nutricion import historial_md
+
+    db_path = db_path or DEFAULT_DB_PATH
+    historial = historial_md.componer(db_path, DataStore(db_path), hoy or date.today())
+    ruta = historial_md.escribir(historial.texto, out)
+    print(f"Wrote {ruta} · {historial.dias} días, {historial.pesos} pesos, {historial.recetas} recetas")
+    return 0
 
 
 def _cmd_backup(store: DataStore, dest_root: Path, keep: int, extras: list[Path]) -> int:

@@ -4,7 +4,7 @@ Examples:
     # First run: backfill everything since Feb 1st, 2026
     tridata sync --since 2026-02-01
 
-    # Daily cron run: just catch up on whatever's missing
+    # Daily cron run: just catch up on whatever's missing (and then close the pending days, unit 014)
     tridata sync
 
     # Backfill per-lap splits for the 20 most recent unprocessed activities
@@ -245,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
                 since = args.since or (date.today() - timedelta(days=45))
                 svc.sync(since=since, revalidate_days=args.revalidate_days)
                 print("Sync complete.")
+                _cerrar_dias(store)
         except GarminAuthError as exc:
             print(f"Login failed: {exc}", file=sys.stderr)
             return 1
@@ -306,6 +307,26 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.print_help()
     return 1
+
+
+def _cerrar_dias(store: DataStore) -> None:
+    """Unit 014: after a good `tridata sync`, close the pending days (food, Garmin, corrections, calibration).
+
+    It only reads what the sync just brought. A failure here is printed and never changes the exit code of
+    the sync: the daily routine goes on exporting. Only counts are printed (this goes to sync.log): no kcal.
+    """
+    try:
+        from .nutricion import Cierres
+
+        r = Cierres(DEFAULT_DB_PATH, store=store).al_dia(date.today())
+    except Exception as exc:  # noqa: BLE001 - said, and the sync still ends well
+        print(f"Cierre del día: no se ha podido poner al día ({type(exc).__name__}: {exc}).", file=sys.stderr)
+        return
+    cal = r["calibracion"]
+    calibrado = ("sin recalibrar" if cal is None else "calibración descartada (fuera de rango)"
+                 if cal["descartada_motivo"] else "kcal/paso recalibradas")
+    print(f"Cierre del día: {r['comidas_cerradas']} con la comida cerrada, {r['cerrados_garmin']} cerrados con "
+          f"Garmin, {r['esperan']} esperan a Garmin, {r['correcciones']} correcciones; {calibrado}.")
 
 
 def _cmd_backup(store: DataStore, dest_root: Path, keep: int, extras: list[Path]) -> int:

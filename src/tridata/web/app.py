@@ -46,6 +46,17 @@
     POST /api/ollas[/N[/borrar]]  delete fixed foods and pots
     POST /api/recetas/N/apuntar   unit 013: {"cantidad": n} of that recipe or fixed food, logged today as eaten
     POST /api/fijos/N/apuntar     with the kcal worked out on the server with what is saved (R-57)
+    POST /api/dia/cerrar          unit 014: «Cerrar el día» {"fecha"?} (today by default, or a past day still
+                                  open with something logged; a future day or one with nothing is 422): what
+                                  is planned becomes eaten and the food is closed; returns the day
+    POST /api/aviso-cierre/N/visto  «Entendido» on the warning of a Garmin correction (marked seen, never
+                                  deleted); returns the warnings still pending
+
+Unit 014: today's GET /api/dia first brings the days up to date (`Cierres.al_dia`: closes the food of the past
+days, closes with Garmin those it can, looks at the corrections and recalibrates the kcal per step). Every
+/api/dia brings `cierre` (state, balance, trail and week, `Cierres.bloque_del_dia`), `avisos_cierre` and, in
+`gasto`, `origen` ("garmin" | "estimado"), `estimado_kcal`, `real_kcal` and `calibracion`: a day closed with
+Garmin computes its margins, objective and bar with the real expenditure (`gasto.kcal`).
 
 Unit 013 (R-8): a food without a quantity but with kcal counts («kcal a mano»); only one with neither is
 pending. An interpreted food without a quantity whose kcal are estimated goes out with `kcal: null`, so an
@@ -82,11 +93,10 @@ from starlette.staticfiles import StaticFiles
 from ..garmin_client import GarminAuthError
 from ..ia import ErrorInterpretacion, ErrorTranscripcion
 from ..nutricion import (
-    Ajustes, Alimento, ConfigGasto, ObjetivosDia, RegistroComidas, RegistroPeso, basal_del_dia, config_del_dia,
-    dias_de_retraso, estimar_gasto, gramos_que_caben, kcal_previstas, objetivo_valido, peso_valido,
-    Recetario, media_7_dias, resumen_del_dia, resumen_peso, simular, texto_retraso,
+    Ajustes, Alimento, Cierres, ObjetivosDia, RegistroComidas, RegistroPeso, config_gasto_del_dia, dias_de_retraso,
+    gasto_estimado_del_dia, gramos_que_caben, kcal_previstas, objetivo_valido, peso_valido, Recetario, media_7_dias,
+    resumen_del_dia, resumen_peso, simular, texto_retraso,
 )
-from ..nutricion.margen import PASOS_POR_DEFECTO
 from ..storage import DataStore
 from .recetas import rutas as rutas_recetas
 
@@ -170,7 +180,7 @@ def crear_app(
     registro: RegistroComidas, interprete: Any, ajustes: Ajustes, hoy: Callable[[], date] = date.today, *,
     pesos: RegistroPeso | None = None, objetivos: ObjetivosDia | None = None,
     store: DataStore | None = None, actualizar_garmin: Callable[[date], None] | None = None,
-    transcriptor: Any = None, recetario: Recetario | None = None,
+    transcriptor: Any = None, recetario: Recetario | None = None, cierres: Cierres | None = None,
 ) -> Starlette:
     """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double).
 
@@ -183,10 +193,13 @@ def crear_app(
     `cargar()` too, it is loaded in a background thread when the server starts, never blocking it.
     Without it, /api/dictado says «try again later» (503) and writing works as always.
     `recetario` holds the recipes, fixed foods and pots (unit 011); by default, in the same SQLite.
+    `cierres` is the close of the day (unit 014); by default, in the same SQLite with these settings and `store`.
     """
     recetario = recetario or Recetario(registro.db_path)
     pesos = pesos or RegistroPeso(registro.db_path)
     objetivos = objetivos or ObjetivosDia(registro.db_path)
+    cierres = cierres or Cierres(registro.db_path, ajustes=ajustes, pesos=pesos, objetivos=objetivos, store=store,
+                                 registro=registro)
     cerrojo_garmin = threading.Lock()
 
     def _recientes() -> list[dict]:
@@ -207,33 +220,43 @@ def crear_app(
 
     def _dia(fecha: date) -> dict:
         vigentes = ajustes.vigentes(fecha)
-        ultimo = pesos.ultimo_hasta(fecha)
-        basal = basal_del_dia(vigentes, [ultimo] if ultimo else [], fecha)
+        cuando = "de hoy" if fecha == hoy() else "de ese día"
         try:
-            config = vigentes.config_gasto()
+            _, basal, config = config_gasto_del_dia(fecha, ajustes, pesos)
+            estimado = gasto_estimado_del_dia(fecha, ajustes, pesos, objetivos, store, cuando=cuando)
         except ValueError as exc:
-            # without a hand-written basal, a day with a weight can still use its Mifflin-St Jeor one
-            if basal.kcal is None or vigentes.kcal_por_paso is None:
-                raise FaltanAjustes(str(exc)) from None
-            pasos = PASOS_POR_DEFECTO if vigentes.pasos_por_defecto is None else vigentes.pasos_por_defecto
-            config = ConfigGasto(basal_kcal=basal.kcal, kcal_por_paso=vigentes.kcal_por_paso, pasos=pasos)
+            raise FaltanAjustes(str(exc)) from None
         ventana = pesos.entre(fecha - timedelta(days=6), fecha)
         objetivo_dia = objetivos.del_dia(fecha)
-        stats = store.daily_stats_on(fecha) if store is not None else None
-        actividades = store.activities_between(fecha, fecha) if store is not None else []
-        cuando = "de hoy" if fecha == hoy() else "de ese día"
-        gasto = estimar_gasto(config_del_dia(config, basal, objetivo_dia), stats, actividades,
-                              objetivo_dia.get("previsto") if objetivo_dia else None, cuando=cuando)
+        # unit 014: a day closed with Garmin computes its margins, objective and bar with the real expenditure
+        fila = cierres.del_dia(fecha)
+        real = fila["gasto_real"] if fila and fila["estado"] == "cerrado_garmin" else None
+        gasto = estimado if real is None else {**estimado, "kcal": real}
         plan = _plan(vigentes)
         resumen = resumen_del_dia(registro.apuntes_del_dia(fecha), fecha, config, objetivo_dia=objetivo_dia,
                                   basal=basal, peso=resumen_peso(ventana, fecha, vigentes, basal),
                                   gasto_estimado=gasto, plan=plan)
+        bloque_gasto = resumen["gasto"]
+        if real is not None:
+            bloque_gasto["explicacion"] = (f"gasto real de Garmin {real:g} kcal (el estimado era {estimado['kcal']:g} "
+                                           f"kcal: {bloque_gasto['explicacion']})")
+        bloque_gasto.update(origen="estimado" if real is None else "garmin", estimado_kcal=estimado["kcal"],
+                            real_kcal=real, calibracion=cierres.calibracion_vigente(fecha))
         if resumen["objetivo"]["origen"] == "dia":
             resumen["objetivo"]["retraso"] = _retraso(fecha, vigentes, resumen["objetivo"]["porcentaje"])
         # unit 010: what is planned is only shown apart, it never subtracts from the margin (rule of 004)
         planeado = round(sum(a["kcal"] for a in resumen["alimentos"] if a["estado"] == "planeado"
                              and a["kcal"] is not None and not a["pendiente_cantidad"]), 1)
-        return {**resumen, "plan": plan, "planeado_kcal": planeado, "con_planeado": simular(resumen, planeado)}
+        return {**resumen, "plan": plan, "planeado_kcal": planeado, "con_planeado": simular(resumen, planeado),
+                "cierre": cierres.bloque_del_dia(fecha, resumen["total_kcal"], estimado["kcal"]),
+                "avisos_cierre": cierres.avisos_pendientes()}
+
+    def _al_dia() -> None:
+        """Today's screen first brings the days up to date (unit 014); a failure there never hides the day."""
+        try:
+            cierres.al_dia(hoy())
+        except Exception:  # noqa: BLE001 - logged, and the day is shown as it is
+            log.exception("could not bring the closed days up to date")
 
     def _vista_ajustes(fecha: date) -> dict:
         vigentes = ajustes.vigentes(fecha)
@@ -308,7 +331,34 @@ def crear_app(
             fecha = date.fromisoformat(texto) if texto else hoy()
         except ValueError:
             return _error(f"Fecha no válida: {texto!r}", 400)
+        if fecha == hoy():
+            await run_in_threadpool(_al_dia)
         return JSONResponse(_dia(fecha))
+
+    async def cerrar_dia(request: Request) -> Response:
+        """«Cerrar el día» (R-24): today or a past day still open; never a future one. Nothing else changes."""
+        texto = (await _cuerpo(request) or {}).get("fecha")
+        dia_hoy = hoy()
+        try:
+            fecha = date.fromisoformat(texto) if texto else dia_hoy
+        except (TypeError, ValueError):
+            return _error(f"Fecha no válida: {texto!r}", 400)
+        if fecha > dia_hoy:
+            return _error("Ese día aún no ha llegado: no se puede cerrar.", 422)
+        try:
+            cierres.cerrar_comida(fecha, "boton")
+        except ValueError as exc:
+            return _error(f"No se ha cerrado: {exc}.", 422)
+        if fecha < dia_hoy:  # a past day may already have its whole day in Garmin
+            await run_in_threadpool(_al_dia)
+        return JSONResponse({"dia": _dia(fecha)})
+
+    async def aviso_visto(request: Request) -> Response:
+        try:
+            cierres.marcar_visto(request.path_params["id"])
+        except KeyError:
+            return _error("Ese aviso ya no está.", 404)
+        return JSONResponse({"avisos_cierre": cierres.avisos_pendientes()})
 
     async def peso(request: Request) -> Response:
         texto = request.query_params.get("hasta")
@@ -575,6 +625,8 @@ def crear_app(
         Route("/ajustes", pagina_ajustes),
         Route("/api/dia", dia),
         Route("/api/dia/objetivo", cambiar_objetivo, methods=["POST"]),
+        Route("/api/dia/cerrar", cerrar_dia, methods=["POST"]),
+        Route("/api/aviso-cierre/{id:int}/visto", aviso_visto, methods=["POST"]),
         Route("/api/peso", peso),
         Route("/api/actividades-recientes", actividades_recientes),
         Route("/api/simular", simular_lista, methods=["POST"]),

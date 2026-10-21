@@ -3,7 +3,7 @@
 `crear_app` runs with uvicorn in a thread, on a free port, over a temporary SQLite; the Claude
 interpreter, the Whisper transcriber and «Actualizar Garmin» are `MagicMock`s and the Garmin data
 are a temporary `DataStore` with one invented activity. «Today» is fixed on the server and on the
-phone's clock. Every value is invented.
+phone's clock. Every value is invented. Unit 014: `Servidor.cierres` is the close of the day the app uses.
 
 Optional: needs the `e2e` extra (`python -m pip install -e ".[dev,e2e]"` and, once,
 `python -m playwright install chromium`). Without Playwright these tests are skipped by
@@ -24,7 +24,7 @@ import pytest
 
 from tridata.ia import AlimentoInterpretado, Interpretacion, ObjetivoDiaInterpretado, PesoInterpretado
 from tridata.models import Activity
-from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, ObjetivosDia, RegistroComidas, RegistroPeso
+from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, Cierres, ObjetivosDia, RegistroComidas, RegistroPeso
 from tridata.storage import DataStore
 from tridata.web import crear_app
 
@@ -77,6 +77,9 @@ class Servidor:
         self.store.save_activities([Activity(
             activity_id="e2e-natacion", activity_date=HOY - timedelta(days=3), activity_type="lap_swimming",
             name="Natación técnica", duration_seconds=2400, calories=310)])
+        # unit 014: the close of the day over the same SQLite, so a test can close days before opening the page
+        self.cierres = Cierres(self.db, ajustes=self.ajustes, pesos=self.pesos, objetivos=self.objetivos,
+                               store=self.store)
         self.interprete = MagicMock()
         self.interprete.interpretar.side_effect = interpretacion_de_prueba
         self.transcriptor = MagicMock(spec=["transcribir"])
@@ -84,7 +87,7 @@ class Servidor:
         self.actualizar_garmin = MagicMock()
         app = crear_app(self.registro, self.interprete, self.ajustes, hoy=lambda: HOY, pesos=self.pesos,
                         objetivos=self.objetivos, store=self.store, actualizar_garmin=self.actualizar_garmin,
-                        transcriptor=self.transcriptor)
+                        transcriptor=self.transcriptor, cierres=self.cierres)
         self.puerto = _puerto_libre()
         self.url = f"http://127.0.0.1:{self.puerto}"
         self._server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=self.puerto, log_level="warning"))

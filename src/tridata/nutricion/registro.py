@@ -40,8 +40,11 @@ CREATE INDEX IF NOT EXISTS idx_alimento_apuntado_dia ON alimento_apuntado(dia);
 
 _COLUMNAS = (
     "id, dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, grasa_g, estado, estimado, "
-    "supuestos, pendiente_cantidad, creado"
+    "supuestos, pendiente_cantidad, creado, origen, provisional"
 )
+# unit 011 (D8): where the kcal came from («de tu receta …») and whether they were provisional;
+# added to an existing store with ALTER TABLE, saved on confirming and never recomputed.
+_COLUMNAS_NUEVAS = (("origen", "TEXT"), ("provisional", "INTEGER NOT NULL DEFAULT 0"))
 
 
 def _estado(dia: date, hoy: date) -> str:
@@ -76,6 +79,8 @@ class Alimento:
     estimado: bool = False
     dudoso: bool = False
     supuestos: list[str] = field(default_factory=list)
+    origen: str | None = None
+    provisional: bool = False
 
     @property
     def pendiente_cantidad(self) -> bool:
@@ -104,10 +109,14 @@ class Alimento:
         supuestos = datos.get("supuestos") or []
         if not isinstance(supuestos, list) or not all(isinstance(s, str) for s in supuestos):
             raise ValueError(f"{nombre}: supuestos no válidos")
+        origen = datos.get("origen")
+        if origen is not None and not isinstance(origen, str):
+            raise ValueError(f"{nombre}: origen no válido")
         return cls(
             nombre=nombre.strip(), dia=dia, unidad=(unidad or "").strip() or None,
             estimado=bool(datos.get("estimado", False)), dudoso=bool(datos.get("dudoso", False)),
-            supuestos=supuestos, **numeros,
+            supuestos=supuestos, origen=(origen or "").strip() or None,
+            provisional=bool(datos.get("provisional", False)), **numeros,
         )
 
 
@@ -119,6 +128,10 @@ class RegistroComidas:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            tiene = {f["name"] for f in conn.execute("PRAGMA table_info(alimento_apuntado)")}
+            for columna, tipo in _COLUMNAS_NUEVAS:
+                if columna not in tiene:
+                    conn.execute(f"ALTER TABLE alimento_apuntado ADD COLUMN {columna} {tipo}")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -162,13 +175,13 @@ class RegistroComidas:
             for a in alimentos:
                 conn.execute(
                     "INSERT INTO alimento_apuntado (dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, "
-                    "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado, origen, "
+                    "provisional) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         a.dia.isoformat(), a.nombre, a.cantidad, a.unidad, a.kcal, a.proteina_g, a.hidratos_g,
                         a.grasa_g, _estado(a.dia, hoy), int(a.estimado),
                         json.dumps(a.supuestos, ensure_ascii=False), int(a.pendiente_cantidad),
-                        interpretacion_id, ahora,
+                        interpretacion_id, ahora, a.origen, int(a.provisional),
                     ),
                 )
             filas = conn.execute(
@@ -237,10 +250,10 @@ class RegistroComidas:
         with self._connect() as conn:
             cur = conn.execute(
                 "INSERT INTO alimento_apuntado (dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, "
-                "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', ?, NULL, ?)",
+                "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado, origen, "
+                "provisional) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', ?, NULL, ?, ?, ?)",
                 (a.dia.isoformat(), a.nombre, a.cantidad, a.unidad, a.kcal, a.proteina_g, a.hidratos_g,
-                 a.grasa_g, _estado(a.dia, hoy), int(a.pendiente_cantidad), ahora),
+                 a.grasa_g, _estado(a.dia, hoy), int(a.pendiente_cantidad), ahora, a.origen, int(a.provisional)),
             )
             if cur.lastrowid is None:  # sqlite always sets it after an INSERT
                 raise RuntimeError("no se ha podido apuntar el alimento")
@@ -265,12 +278,13 @@ class RegistroComidas:
             for a in alimentos:
                 conn.execute(
                     "INSERT INTO alimento_apuntado (dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, "
-                    "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+                    "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado, origen, "
+                    "provisional) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
                     (
                         dia.isoformat(), a.nombre, a.cantidad, a.unidad, a.kcal, a.proteina_g, a.hidratos_g,
                         a.grasa_g, _estado(dia, hoy), int(a.estimado),
                         json.dumps(a.supuestos, ensure_ascii=False), int(a.pendiente_cantidad), ahora,
+                        a.origen, int(a.provisional),
                     ),
                 )
         return len(alimentos)
@@ -304,5 +318,6 @@ class RegistroComidas:
         datos = dict(fila)
         datos["estimado"] = bool(datos["estimado"])
         datos["pendiente_cantidad"] = bool(datos["pendiente_cantidad"])
+        datos["provisional"] = bool(datos["provisional"])
         datos["supuestos"] = json.loads(datos["supuestos"])
         return datos

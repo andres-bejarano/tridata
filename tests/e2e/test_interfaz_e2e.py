@@ -526,13 +526,16 @@ def test_recetas_vacia(servidor, abrir):  # R11
     p.on("request", lambda r: llamadas.append(r.url) if "/api/" in r.url else None)
     p.locator(".pestana", has_text="Recetas").click()
     seccion = p.locator("section#recetas")
-    for texto in ("Aún no hay nada aquí", "Tus recetas, taras y alimentos fijos", "«la tortilla de siempre»",
-                  "Recetas", "Taras", "Alimentos fijos"):
+    # unit 011 replaced the empty placeholder by the real tab: its three sections, each one empty
+    # with its own add button, and no «próximamente» any more
+    for texto in ("Recetas", "Taras", "Alimentos fijos"):
         expect(seccion).to_contain_text(texto)
-    boton = seccion.get_by_role("button", name="＋ Añadir · próximamente")
-    expect(boton).to_be_disabled()
+    expect(seccion.locator(".vacio-apartado")).to_have_count(3)
+    for boton in ("＋ Añadir receta", "＋ Añadir tara", "＋ Añadir alimento fijo"):
+        expect(seccion.get_by_role("button", name=boton)).to_be_enabled()
+    expect(seccion.get_by_text("próximamente")).to_have_count(0)
     p.wait_for_timeout(300)
-    assert llamadas == []
+    assert [u for u in llamadas if "/api/recetas" not in u] == []  # only the tab's own listing
 
 
 # -- R12: Ajustes -----------------------------------------------------------------------------------------

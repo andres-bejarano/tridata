@@ -338,3 +338,114 @@ def test_script_marca_fallo_en_las_piezas():
     sin_objetivo = {**esperado, "objetivo_dia": None}
     vacio = {"tipo": None, "porcentaje": None, "niveles": None, "entreno": None, "pasos": None}
     assert script.comparar_piezas(sin_objetivo, {**bien, "objetivo_dia": vacio}) == []  # empty counts as absent
+
+
+# == unit 011: what is saved (names and aliases only) and the manual test with recipes ==
+
+HOY11 = date(2026, 10, 21)  # a Wednesday
+
+
+def _recetario_con_numeros(tmp_path):
+    """3 recipes, 2 fixed foods (one with the alias «guayaba») and 2 pots, with recognisable values."""
+    from tridata.nutricion.recetas import Recetario
+
+    rec = Recetario(tmp_path / "data.sqlite3")
+    rec.crear_fijo({"nombre": "dulce de guayaba de ciclismo", "kcal": 93, "por": "unidad", "alias": ["guayaba"]})
+    rec.crear_fijo({"nombre": "gel de prueba", "kcal": 107, "por": "unidad"})
+    rec.crear_olla({"nombre": "olla exprés azul", "tara_g": 1537})
+    rec.crear_olla({"nombre": "cazo verde", "tara_g": 733})
+    for nombre in ("garbanzos de la abuela", "lasaña de la tía", "crema de calabaza inventada"):
+        rec.crear_receta({"nombre": nombre, "ingredientes": [
+            {"nombre": "harina misteriosa", "cantidad": 417, "unidad": "g", "kcal": 1459}],
+            "peso_neto_g": 1871}, hoy=HOY11)
+    return rec
+
+
+def test_la_peticion_lleva_solo_nombres_y_alias(tmp_path):  # R5, C-47
+    rec = _recetario_con_numeros(tmp_path)
+    cliente = _cliente(_item("garbanzos de la abuela"))
+    InterpreteClaude(cliente=cliente, modelo="m", guardados=rec.nombres).interpretar("dos guayabas", HOY11)
+    kwargs = cliente.messages.parse.call_args.kwargs
+    assert set(kwargs) == {"model", "max_tokens", "system", "messages", "output_format", "output_config"}
+    assert kwargs["system"] == INSTRUCCION
+    contenido = kwargs["messages"][0]["content"]
+    assert contenido.startswith("Hoy es miércoles, 2026-10-21.")
+    assert contenido.endswith("Lo que ha escrito:\ndos guayabas")
+    for nombre in ("garbanzos de la abuela", "lasaña de la tía", "crema de calabaza inventada",
+                   "dulce de guayaba de ciclismo", "gel de prueba", "guayaba"):
+        assert f"«{nombre}»" in contenido
+    peticion = repr(kwargs)
+    for prohibido in ("harina", "olla", "cazo", "1537", "733", "93", "107", "417", "1459", "1871"):
+        assert prohibido not in peticion
+    sin_fecha = contenido.split("\n", 1)[1]
+    assert re.search(r"\d", sin_fecha) is None  # no grams, kcal or tares anywhere
+
+
+def test_sin_nada_guardado_la_peticion_es_la_de_siempre(tmp_path, monkeypatch):  # R5
+    from tridata.nutricion.recetas import Recetario
+
+    monkeypatch.delenv("TRIDATA_MODELO_TEXTO", raising=False)
+    cliente = _cliente(_item("avena"))
+    InterpreteClaude(cliente=cliente, guardados=Recetario(tmp_path / "data.sqlite3").nombres).interpretar("avena", HOY)
+    assert cliente.messages.parse.call_args.kwargs["messages"] == [
+        {"role": "user", "content": "Hoy es miércoles, 2026-03-04.\n\nLo que ha escrito:\navena"}]
+
+
+def test_el_esquema_pide_guardado_y_coincidencia():  # R3, D1
+    from anthropic.lib._parse._transform import transform_schema
+
+    alimento = transform_schema(ListaInterpretada)["$defs"]["AlimentoInterpretado"]
+    assert {"guardado", "coincidencia"} <= set(alimento["required"])
+    assert _item("pan").guardado is None and _item("pan").coincidencia is None  # optional in Python
+    for regla in ("guardado", "coincidencia", "exacta", "parecida", "receta"):
+        assert regla in INSTRUCCION
+    assert "no hay recetas ni alimentos guardados" not in INSTRUCCION
+
+
+def _dictados_recetas():
+    return json.loads((RAIZ / "tests" / "fixtures" / "dictados_recetas.json").read_text(encoding="utf-8"))
+
+
+def test_dictados_de_recetas_bien_formados():  # R17
+    datos = _dictados_recetas()
+    date.fromisoformat(datos["hoy"])
+    assert len(datos["casos"]) == 8
+    assert len(datos["guardados"]["recetas"]) == 3 and len(datos["guardados"]["fijos"]) == 2
+    for caso in datos["casos"]:
+        assert caso["texto"].strip()
+        for e in caso["esperado"]:
+            assert set(e) == {"nombre", "guardado", "coincidencia", "cantidad", "unidad"}
+            assert e["coincidencia"] in ("exacta", "parecida", None)
+            assert (e["guardado"] is None) == (e["coincidencia"] is None)
+
+
+def _como_si_claude_acertara_recetas(caso):
+    return [_item(e["nombre"][0], cantidad=e["cantidad"], unidad=e["unidad"], dia=HOY11,
+                  guardado=e["guardado"][0] if e["guardado"] else None, coincidencia=e["coincidencia"])
+            for e in caso["esperado"]]
+
+
+def test_script_de_recetas_cuenta_aciertos_con_un_doble():  # R17
+    script, datos = _script(), _dictados_recetas()
+    interprete = MagicMock()
+    interprete.interpretar.side_effect = lambda texto, hoy: _como_si_claude_acertara_recetas(
+        next(c for c in datos["casos"] if c["texto"] == texto))
+    resultado = script.evaluar_recetas(interprete, datos)
+    assert resultado.aciertos == resultado.total == 8
+    assert sorted(script.nombres_guardados(datos)) == sorted([
+        "garbanzos de la abuela", "lasaña de la tía", "crema de calabaza inventada", "dulce de guayaba de ciclismo",
+        "guayaba", "gel de prueba"])
+
+
+def test_script_de_recetas_marca_los_fallos():  # R17
+    script = _script()
+    esperado = [{"nombre": ["guayaba"], "guardado": ["guayaba", "dulce de guayaba de ciclismo"],
+                 "coincidencia": "exacta", "cantidad": 2, "unidad": "unidad"}]
+    bien = {"nombre": "dulce de guayaba", "cantidad": 2, "unidad": "unidades", "guardado": "Dulce de guayaba de ciclismo",
+            "coincidencia": "exacta"}
+    assert script.comparar_recetas(esperado, [bien]) == []
+    assert script.comparar_recetas(esperado, [{**bien, "guardado": None, "coincidencia": None}])
+    assert script.comparar_recetas(esperado, [{**bien, "coincidencia": "parecida"}])
+    assert script.comparar_recetas(esperado, [{**bien, "cantidad": 3}])
+    assert script.comparar_recetas(esperado, [{**bien, "unidad": "g"}])
+    assert script.comparar_recetas(esperado, [bien, {**bien, "nombre": "guayaba"}])  # one too many

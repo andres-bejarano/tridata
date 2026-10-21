@@ -29,6 +29,10 @@ Examples:
     # One-off import of deficit.md and its weight chart: first a dry run, then for real
     tridata importar-deficit --md deficit.md --html grafica_peso_deficit.html --simular
     tridata importar-deficit --md deficit.md --html grafica_peso_deficit.html
+
+    # Load the recipes, fixed foods and pot tares of deficit.md into the Recetas tab (once)
+    tridata importar-recetas --md deficit.md --simular
+    tridata importar-recetas --md deficit.md
 """
 from __future__ import annotations
 
@@ -185,6 +189,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Dry run: show what would be imported and the dubious items, write nothing.",
     )
 
+    recetas_cmd = sub.add_parser(
+        "importar-recetas",
+        help="Load the recipes, fixed foods and pot tares of deficit.md into the Recetas tab (what is there wins)",
+    )
+    recetas_cmd.add_argument("--md", type=Path, required=True, help="The deficit.md file.")
+    recetas_cmd.add_argument(
+        "--simular", action="store_true", default=False,
+        help="Dry run: show what would be loaded, write nothing.",
+    )
+
     return parser
 
 
@@ -198,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "importar-deficit":
         # Before opening the store: a dry run must not touch the database at all.
         return _cmd_importar(args.md, args.html, args.simular)
+    if args.command == "importar-recetas":
+        return _cmd_importar_recetas(args.md, args.simular)
 
     store = DataStore()
 
@@ -466,6 +482,57 @@ def _cmd_importar(
     return 0
 
 
+def _cmd_importar_recetas(md: Path, simular: bool, *, db_path: Path = DEFAULT_DB_PATH,
+                          backup_dir: Path = DEFAULT_BACKUP_DIR, hoy: date | None = None) -> int:
+    """`tridata importar-recetas` (unit 011, D7): read the two tables of deficit.md → what each row
+    becomes and whether it is already there → (dry run ends) → backup → add what is missing.
+
+    Everything it prints goes to the terminal only (never to sync.log).
+    """
+    from .nutricion import importar_deficit as imp
+    from .nutricion.recetas import Recetario, leer_cargas
+
+    hoy = hoy or date.today()
+    md_bytes = _leer_fichero(md, "--md")
+    if md_bytes is None:
+        return 1
+    try:
+        filas = imp.filas_de_recetas(md_bytes.decode("utf-8"))
+    except UnicodeDecodeError:
+        print("No se puede importar: el fichero tiene que estar en UTF-8.", file=sys.stderr)
+        return 1
+    cargas = leer_cargas(filas.referencias, filas.taras)
+    if not cargas:
+        print("No hay recetas, alimentos fijos ni taras en ese fichero: no se ha guardado nada.")
+        return 0
+
+    def imprimir(resultado: list) -> None:
+        for carga, estado in resultado:
+            print(f"  {carga.describir()} · {estado}")
+
+    if simular:
+        # read-only: a copy of the store in memory would also work, but simply not opening it is safer
+        imprimir(Recetario(db_path).cargar_de_deficit(cargas, hoy, simular=True) if db_path.is_file()
+                 else [(c, "nueva") for c in cargas])
+        print("Simulación: no se ha guardado nada.")
+        return 0
+
+    try:
+        codigo = _cmd_backup(_SoloCopia(db_path), backup_dir, 14, [md])
+    except Exception as exc:  # any failure of the copy stops the load before writing
+        print(f"La copia de seguridad ha fallado ({exc}): no se ha guardado nada.", file=sys.stderr)
+        return 1
+    if codigo != 0:
+        print("La copia de seguridad ha fallado: no se ha guardado nada.", file=sys.stderr)
+        return 1
+    resultado = Recetario(db_path).cargar_de_deficit(cargas, hoy)
+    imprimir(resultado)
+    nuevas = sum(estado == "nueva" for _, estado in resultado)
+    print(f"Guardado: {nuevas} nuevas · {sum(estado == 'ya estaba' for _, estado in resultado)} ya estaban "
+          "(no se tocan). Lo que está «por revisar» no se usa al dictar hasta que lo abras y lo guardes.")
+    return 0
+
+
 def _actualizador_garmin(store: DataStore, entorno: Mapping[str, str] | None = None) -> Callable[[date], None] | None:
     """The «Actualizar Garmin» button: the same sync as `tridata sync`, for one day only.
 
@@ -488,7 +555,7 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
         import uvicorn
 
         from .ia import InterpreteClaude, TranscriptorWhisper
-        from .nutricion import Ajustes, ObjetivosDia, RegistroComidas, RegistroPeso
+        from .nutricion import Ajustes, ObjetivosDia, Recetario, RegistroComidas, RegistroPeso
         from .web import crear_app
     except ImportError as exc:
         print(f"Missing the `app` extra ({exc}). Install it: pip install -e '.[app]'", file=sys.stderr)
@@ -512,9 +579,12 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
         print(f"Dictation: loading Whisper {transcriptor.modelo} on the GPU in the background.")
     else:
         print("Aviso: dictado desactivado: instala el extra voz (pip install -e '.[voz]').", file=sys.stderr)
-    app = crear_app(RegistroComidas(db_path), InterpreteClaude(), ajustes,
+    # Unit 011: Claude gets the NAMES and aliases of the saved recipes and fixed foods, read on every call.
+    recetario = Recetario(db_path)
+    app = crear_app(RegistroComidas(db_path), InterpreteClaude(guardados=recetario.nombres), ajustes,
                     pesos=RegistroPeso(db_path), objetivos=ObjetivosDia(db_path),
-                    store=store, actualizar_garmin=_actualizador_garmin(store), transcriptor=transcriptor)
+                    store=store, actualizar_garmin=_actualizador_garmin(store), transcriptor=transcriptor,
+                    recetario=recetario)
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(f"Warning: listening on {host}, reachable from outside this PC.", file=sys.stderr)
     print(f"TriData web on http://{host}:{port} (Ctrl+C to stop)")

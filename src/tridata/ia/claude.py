@@ -2,7 +2,10 @@
 
 The pieces (unit 007): foods (as before), the weight of a day, the objective of the day and the
 doubtful phrases that fit nowhere. Only the written text, today's date and a fixed instruction
-leave the PC (R-12, C-12): never saved weights, the mean, the basal, the profile or any target. The client is created lazily and
+leave the PC (R-12, C-12): never saved weights, the mean, the basal, the profile or any target.
+Unit 011: when there are saved recipes or fixed foods, their NAMES and aliases go too (R-44) and
+Claude says, for each food, which one it is (`guardado`) and whether it is `exacta` or `parecida`;
+their kcal are put by the app, never by Claude. With nothing saved the request is as before. The client is created lazily and
 can be injected, so tests use a double and never call the API.
 """
 from __future__ import annotations
@@ -10,7 +13,8 @@ from __future__ import annotations
 import logging
 import os
 from datetime import date
-from typing import Any
+from collections.abc import Callable
+from typing import Any, Literal
 
 import anthropic
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,10 +43,17 @@ unidad "unidad". Para medidas vagas («un trozo», «un poco», «un puñado») 
 típica, márcala como estimado y explícalo en supuestos.
 4. Sin cantidad: si no dice ninguna cantidad (p. ej. «leche en el café»), pon cantidad, unidad y \
 kcal a null. No la inventes: queda pendiente de cantidad.
-5. Kcal estimadas: no hay recetas ni alimentos guardados, así que estima las kcal de la cantidad \
-indicada con un valor promedio, sin preguntar nada, y marca estimado = true. Solo si la persona \
-da ella misma las kcal (p. ej. «35 kcal cada 100 ml») calcúlalas con ese dato y marca \
-estimado = false.
+5. Recetas y alimentos guardados: puede venir una lista con los nombres y alias de lo que la \
+persona tiene guardado (solo los nombres). Si un alimento es uno de esa lista, pon en guardado ese \
+nombre o alias tal cual aparece en la lista y en coincidencia "exacta" si lo dice por ese nombre o \
+alias (aunque cambie el plural o las mayúsculas), o "parecida" si solo se le parece (p. ej. dice \
+«garbanzos» y está guardado «garbanzos de la abuela»). Si no se parece a ninguno, o no hay lista, \
+guardado y coincidencia van a null; no uses nombres que no estén en la lista. Una fracción de una \
+receta guardada («un cuarto de …», «media …», «la mitad de …») va con la unidad "receta" y la \
+cantidad en decimales (un cuarto = 0.25, media = 0.5). Kcal estimadas: estima siempre las kcal de \
+la cantidad indicada con un valor promedio, sin preguntar nada, y marca estimado = true, también \
+con guardado (las de lo guardado las pone la aplicación). Solo si la persona da ella misma las \
+kcal (p. ej. «35 kcal cada 100 ml») calcúlalas con ese dato y marca estimado = false.
 6. Dudoso: si una palabra o parte del texto no la entiendes o no es un alimento reconocible \
 (p. ej. «kfjd»), inclúyela tal cual como nombre con dudoso = true y kcal = null. No adivines.
 7. Macros (proteína, hidratos, grasa en gramos): solo si los conoces con razonable confianza; \
@@ -77,10 +88,18 @@ entiendes sigue la regla 6. Lista vacía si no hay.
 """
 
 
+def _todo_requerido(esquema: dict[str, Any]) -> None:
+    """Claude must always say every piece (null or an empty list when absent), never skip one."""
+    esquema["required"] = list(esquema.get("properties", {}))
+
+
 class AlimentoInterpretado(BaseModel):
+    model_config = ConfigDict(json_schema_extra=_todo_requerido)
+
     nombre: str = Field(description="Nombre breve del alimento, o la palabra no entendida si es dudoso")
     cantidad: float | None = Field(description="Cantidad numérica; null si no se dijo")
-    unidad: str | None = Field(description='"g", "ml" o "unidad"; null si no hay cantidad')
+    unidad: str | None = Field(
+        description='"g", "ml", "unidad" o "receta" (fracción de una receta guardada); null si no hay cantidad')
     dia: date = Field(description="Día al que pertenece (AAAA-MM-DD)")
     kcal: float | None = Field(description="Kcal de esa cantidad; null si es dudoso o falta la cantidad")
     proteina_g: float | None = Field(description="Proteína en gramos, o null")
@@ -89,6 +108,10 @@ class AlimentoInterpretado(BaseModel):
     estimado: bool = Field(description="true si las kcal son una estimación promedio")
     dudoso: bool = Field(description="true si no se ha entendido esta parte del texto")
     supuestos: list[str] = Field(description="Supuestos usados para calcular")
+    guardado: str | None = Field(
+        default=None, description="Nombre o alias de la lista de guardados al que corresponde, tal cual; o null")
+    coincidencia: Literal["exacta", "parecida"] | None = Field(
+        default=None, description='"exacta", "parecida" o null si no corresponde a ningún guardado')
 
 
 class PesoInterpretado(BaseModel):
@@ -103,11 +126,6 @@ class ObjetivoDiaInterpretado(BaseModel):
     niveles: list[float] | None = Field(description="% de margen que quiere ver, con signo, o null")
     entreno: str | None = Field(description="Entreno previsto tal como lo dice, breve, o null")
     pasos: int | None = Field(description="Pasos previstos, o null")
-
-
-def _todo_requerido(esquema: dict[str, Any]) -> None:
-    """Claude must always say every piece (null or an empty list when absent), never skip one."""
-    esquema["required"] = list(esquema.get("properties", {}))
 
 
 class ListaInterpretada(BaseModel):
@@ -129,15 +147,18 @@ class ErrorInterpretacion(Exception):
     """Claude could not interpret the text (no key, no network, rate limit, refusal…)."""
 
 
-def construir_peticion(texto: str, hoy: date, modelo: str) -> dict[str, Any]:
-    """The whole request: the fixed instruction, today's date and the text. Nothing else."""
+def construir_peticion(texto: str, hoy: date, modelo: str, guardados: list[str] | None = None) -> dict[str, Any]:
+    """The whole request: the fixed instruction, today's date, the saved NAMES (if any) and the text."""
+    lista = ""
+    if guardados:
+        lista = "Recetas y alimentos guardados (solo nombres y alias): " + ", ".join(f"«{n}»" for n in guardados) + "\n\n"
     return {
         "model": modelo,
         "max_tokens": 16000,
         "system": INSTRUCCION,
         "messages": [{
             "role": "user",
-            "content": f"Hoy es {_DIAS[hoy.weekday()]}, {hoy.isoformat()}.\n\nLo que ha escrito:\n{texto}",
+            "content": f"Hoy es {_DIAS[hoy.weekday()]}, {hoy.isoformat()}.\n\n{lista}Lo que ha escrito:\n{texto}",
         }],
         "output_format": ListaInterpretada,
         "output_config": {"effort": "low"},
@@ -145,15 +166,19 @@ def construir_peticion(texto: str, hoy: date, modelo: str) -> dict[str, Any]:
 
 
 class InterpreteClaude:
-    def __init__(self, cliente: Any = None, modelo: str | None = None) -> None:
+    def __init__(self, cliente: Any = None, modelo: str | None = None,
+                 guardados: Callable[[], list[str]] | None = None) -> None:
+        """`guardados()` gives the names and aliases saved right now (`Recetario.nombres`), read on every call."""
         self._cliente = cliente
         self.modelo = modelo or os.environ.get("TRIDATA_MODELO_TEXTO") or MODELO_POR_DEFECTO
+        self._guardados = guardados
 
     def interpretar(self, texto: str, hoy: date) -> ListaInterpretada:
         try:
             if self._cliente is None:
                 self._cliente = anthropic.Anthropic(timeout=30.0)
-            respuesta = self._cliente.messages.parse(**construir_peticion(texto, hoy, self.modelo))
+            nombres = self._guardados() if self._guardados is not None else None
+            respuesta = self._cliente.messages.parse(**construir_peticion(texto, hoy, self.modelo, nombres))
         except anthropic.AuthenticationError as exc:
             raise ErrorInterpretacion("la clave de la API no es válida") from exc
         except anthropic.RateLimitError as exc:

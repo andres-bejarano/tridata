@@ -19,6 +19,9 @@ from tridata.storage import DataStore
 from tridata.web import crear_app
 
 HOY = date(2026, 3, 10)
+# unit 016 (R6): a fixed text; nothing of the library's exception reaches the screen
+SESION_FALLIDA = ("La sesión de Garmin ha fallado. Prueba otra vez y, si sigue, revisa GARMIN_EMAIL y "
+                  "GARMIN_PASSWORD en .env.")
 
 
 def _app(db, actualizar):
@@ -59,7 +62,7 @@ def test_actualizar_trae_la_natacion_y_recalcula(tmp_path):  # R13
 
 
 @pytest.mark.parametrize(("error", "estado", "motivo", "texto"), [
-    (GarminAuthError("token caducado"), 502, "sesion", "La sesión de Garmin ha fallado: token caducado"),
+    (GarminAuthError("token caducado"), 502, "sesion", SESION_FALLIDA),
     (ConnectionError("sin red"), 502, "red", "No se ha podido conectar con Garmin"),
 ])
 def test_fallo_de_garmin_lo_dice_y_no_toca_nada(tmp_path, error, estado, motivo, texto):  # R13
@@ -73,6 +76,23 @@ def test_fallo_de_garmin_lo_dice_y_no_toca_nada(tmp_path, error, estado, motivo,
 
     assert r.status_code == estado
     assert r.json()["motivo"] == motivo and texto in r.json()["error"]
+    assert _filas(db) == antes
+    assert cliente.get("/api/dia").json()["gasto"]["desglose"]["pasos_hechos"] == 4000
+
+
+def test_sesion_fallida_no_ensena_la_excepcion(tmp_path):  # unit 016 R6 (008 R13, security)
+    db = tmp_path / "data.sqlite3"
+    actualizar = MagicMock(side_effect=GarminAuthError("Could not authenticate usuario.inventado@ejemplo.com: 401"))
+    cliente, store = _app(db, actualizar)
+    store.save_daily_stats(DailyStats(stat_date=HOY, steps=4000))
+    antes = _filas(db)
+
+    r = cliente.post("/api/garmin/actualizar")
+
+    assert r.status_code == 502
+    assert r.json() == {"error": SESION_FALLIDA, "motivo": "sesion"}
+    for dentro in ("usuario.inventado@ejemplo.com", "Could not", "401", "authenticate"):
+        assert dentro not in r.text
     assert _filas(db) == antes
     assert cliente.get("/api/dia").json()["gasto"]["desglose"]["pasos_hechos"] == 4000
 

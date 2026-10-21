@@ -4,6 +4,7 @@
 interpreter, the Whisper transcriber and «Actualizar Garmin» are `MagicMock`s and the Garmin data
 are a temporary `DataStore` with one invented activity. «Today» is fixed on the server and on the
 phone's clock. Every value is invented. Unit 014: `Servidor.cierres` is the close of the day the app uses.
+Unit 016: `servidor.hoy = …` moves the server's «today» (`HOY` by default).
 
 Optional: needs the `e2e` extra (`python -m pip install -e ".[dev,e2e]"` and, once,
 `python -m playwright install chromium`). Without Playwright these tests are skipped by
@@ -85,7 +86,8 @@ class Servidor:
         self.transcriptor = MagicMock(spec=["transcribir"])
         self.transcriptor.transcribir.return_value = TEXTO_DICTADO
         self.actualizar_garmin = MagicMock()
-        app = crear_app(self.registro, self.interprete, self.ajustes, hoy=lambda: HOY, pesos=self.pesos,
+        self.hoy = HOY  # unit 016: a test may move the server's «today» (midnight)
+        app = crear_app(self.registro, self.interprete, self.ajustes, hoy=lambda: self.hoy, pesos=self.pesos,
                         objetivos=self.objetivos, store=self.store, actualizar_garmin=self.actualizar_garmin,
                         transcriptor=self.transcriptor, cierres=self.cierres)
         self.puerto = _puerto_libre()

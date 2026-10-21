@@ -2,13 +2,16 @@
 
     GET  /                        the page (static HTML + JS modules + CSS)
     POST /api/interpretar         text -> every piece in it (foods, weight, objective of the day,
-                                  doubtful phrases); saves NOTHING (R-1, R-31)
+                                  doubtful phrases); saves NOTHING (R-1, R-31). Unit 016: optional `fecha`
+                                  (a list of the queue: «hoy» = the day it was recorded; after today is 400)
     POST /api/dictado             raw audio (?id=<uuid>&fecha=AAAA-MM-DD) -> its text, transcribed on this PC,
                                   and the same interpretation /api/interpretar gives, with «hoy» = the day
                                   of the recording; saves NOTHING, keeps no audio (unit 006: R-1, R-10, R-12)
     GET  /sw.js                   the service worker, at the root so it serves the page offline (unit 006)
     POST /api/confirmar           reviewed pieces (at least one) -> each saved in its place, all or
-                                  nothing; a doubtful phrase blocks it; returns today (R-4, R-5, R-32)
+                                  nothing; a doubtful phrase blocks it; returns today (R-4, R-5, R-32).
+                                  Unit 016: optional `dia` of the list, where the objective of the day goes
+                                  (after today or not a date: 400, nothing saved)
     POST /api/alimento            add a food by hand (no AI, no interpretation); body with `dia`
     POST /api/alimento/N          change a saved food (name, quantity, unit, kcal; `dia` optional
                                   moves it, with the planned/eaten rule)
@@ -51,6 +54,8 @@
                                   is planned becomes eaten and the food is closed; returns the day
     POST /api/aviso-cierre/N/visto  «Entendido» on the warning of a Garmin correction (marked seen, never
                                   deleted); returns the warnings still pending
+
+Unit 016: every day the screen gets also says `hoy` (today on the server), so the page sees midnight pass.
 
 Unit 014: today's GET /api/dia first brings the days up to date (`Cierres.al_dia`: closes the food of the past
 days, closes with Garmin those it can, looks at the corrections and recalibrates the kcal per step). Every
@@ -108,6 +113,9 @@ NO_ESTA_CARRERA = "Esa carrera ya no está en tus ajustes."
 DIAS_RECIENTES = 14  # the planned training is chosen among the activities of the last 14 days (R-15)
 DIAS_GRAFICA_PESO = 30  # the weight chart of the Peso tab (unit 010, R10)
 FALTA_GARMIN = "Faltan GARMIN_EMAIL / GARMIN_PASSWORD en .env: no puedo traer Garmin."
+# unit 016 (R6): a fixed text; the library's exception (it may carry the e-mail) never reaches the screen or the log
+SESION_GARMIN = ("La sesión de Garmin ha fallado. Prueba otra vez y, si sigue, revisa GARMIN_EMAIL y "
+                 "GARMIN_PASSWORD en .env.")
 AUDIO_MAX_BYTES = 10 * 1024 * 1024  # a 2-minute recording is far below this (R4)
 TIPOS_AUDIO = frozenset({"audio/mp4", "audio/x-m4a", "audio/aac", "audio/webm", "audio/ogg", "audio/wav", "audio/mpeg"})
 DICTADO_NO_DISPONIBLE = "El dictado no está disponible en el PC ahora mismo. Se reintentará más tarde."
@@ -115,6 +123,19 @@ DICTADO_NO_DISPONIBLE = "El dictado no está disponible en el PC ahora mismo. Se
 
 def _error(mensaje: str, estado: int, **extra: Any) -> JSONResponse:
     return JSONResponse({"error": mensaje, **extra}, status_code=estado)
+
+
+def _dia_de_la_lista(valor: Any, hoy: date) -> date:
+    """Unit 016 (R1, R2): the day a list was recorded or written; ValueError if it is not a date or is after today."""
+    if not isinstance(valor, str):
+        raise ValueError(f"el día de la lista no es una fecha: {valor!r}")
+    try:
+        dia = date.fromisoformat(valor)
+    except ValueError:
+        raise ValueError(f"el día de la lista no es una fecha: {valor!r}") from None
+    if dia > hoy:
+        raise ValueError("la lista es de un día que aún no ha llegado")
+    return dia
 
 
 async def _cuerpo(request: Request) -> dict | None:
@@ -200,8 +221,10 @@ def crear_app(
 
     def _dia(fecha: date) -> dict:
         """The day as the screen shows it: `nutricion.dia.resumen_completo` (unit 015), the same nutricion.md uses."""
-        return resumen_completo(fecha, registro=registro, pesos=pesos, ajustes=ajustes, objetivos=objetivos,
-                                store=store, cierres=cierres, hoy=hoy())
+        dia_hoy = hoy()
+        resumen = resumen_completo(fecha, registro=registro, pesos=pesos, ajustes=ajustes, objetivos=objetivos,
+                                   store=store, cierres=cierres, hoy=dia_hoy)
+        return {**resumen, "hoy": dia_hoy.isoformat()}  # unit 016 (R3): the page sees midnight pass
 
     def _al_dia() -> None:
         """Today's screen first brings the days up to date (unit 014); a failure there never hides the day."""
@@ -341,11 +364,18 @@ def crear_app(
         return {"texto": texto, **_piezas(resultado, recetario.resolver)}
 
     async def interpretar(request: Request) -> Response:
-        texto = (await _cuerpo(request) or {}).get("texto")
+        cuerpo = await _cuerpo(request) or {}
+        texto = cuerpo.get("texto")
         if not isinstance(texto, str) or not texto.strip():
             return _error("Escribe lo que has comido o vas a comer.", 400, texto=texto or "")
+        dia = hoy()
+        if cuerpo.get("fecha") is not None:  # unit 016 (R2): a list of the queue, with the day it was recorded
+            try:
+                dia = _dia_de_la_lista(cuerpo["fecha"], dia)
+            except ValueError as exc:
+                return _error(f"No he interpretado nada: {exc}.", 400, texto=texto)
         try:
-            return JSONResponse(await _interpretacion(texto, hoy()))
+            return JSONResponse(await _interpretacion(texto, dia))
         except ErrorInterpretacion as exc:
             return _error(f"No he podido interpretar lo que has escrito ({exc}). Inténtalo de nuevo.", 502,
                           texto=texto)
@@ -400,6 +430,12 @@ def crear_app(
         """Validate EVERY piece first; only if all are valid is anything written (R11)."""
         cuerpo = await _cuerpo(request) or {}
         dia_hoy = hoy()
+        dia_lista = dia_hoy  # unit 016 (R1): the objective of the day goes to the day of the list
+        if cuerpo.get("dia") is not None:
+            try:
+                dia_lista = _dia_de_la_lista(cuerpo["dia"], dia_hoy)
+            except ValueError as exc:
+                return _error(f"No se ha guardado nada: {exc}.", 400)
         crudos = cuerpo.get("alimentos")
         if crudos is None:
             crudos = []
@@ -438,7 +474,7 @@ def crear_app(
         guardados = registro.guardar(alimentos, hoy=dia_hoy, texto=texto if isinstance(texto, str) else "",
                                      sin_cambios=bool(cuerpo.get("sin_cambios")))
         peso_guardado = pesos.apuntar(*peso, hoy=dia_hoy) if peso is not None else None
-        objetivo_guardado = objetivos.guardar(dia_hoy, objetivo) if objetivo is not None else None
+        objetivo_guardado = objetivos.guardar(dia_lista, objetivo) if objetivo is not None else None
         return JSONResponse({"guardados": guardados, "peso": peso_guardado, "objetivo_dia": objetivo_guardado,
                              "dia": _dia(dia_hoy)})
 
@@ -550,8 +586,8 @@ def crear_app(
             return _error("Ya estoy actualizando Garmin: espera a que acabe.", 409, motivo="en_marcha")
         try:
             await run_in_threadpool(actualizar_garmin, hoy())
-        except GarminAuthError as exc:
-            return _error(f"La sesión de Garmin ha fallado: {exc}", 502, motivo="sesion")
+        except GarminAuthError:  # its text is not shown nor logged (R6 of unit 016)
+            return _error(SESION_GARMIN, 502, motivo="sesion")
         except Exception:  # network, Garmin down, anything else: said, never hidden
             return _error("No se ha podido conectar con Garmin. Inténtalo más tarde.", 502, motivo="red")
         finally:

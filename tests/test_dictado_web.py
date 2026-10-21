@@ -219,7 +219,8 @@ def test_sw_en_la_raiz_sin_cache_y_solo_el_cascaron(entorno):  # R7
     assert set(rutas) == {"/", "/static/app.js", "/static/cola.js", "/static/dictado.js", "/static/estilos.css",
                           # unit 010 (R13): the weight tab, the icon, the manifest and the settings page
                           "/static/peso.js", "/static/manifest.json", "/static/icono.svg", "/static/icono-32.png",
-                          "/static/icono-180.png", "/static/icono-512.png", "/ajustes", "/static/ajustes.js"}
+                          "/static/icono-180.png", "/static/icono-512.png", "/ajustes", "/static/ajustes.js",
+                          "/static/recetas.js"}  # unit 011: the Recetas tab
     assert '"/api/"' in r.text  # the fetch handler leaves /api/* to the network
     for ruta in rutas:
         assert entorno.cliente.get(ruta).status_code == 200

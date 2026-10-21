@@ -15,10 +15,14 @@
 // (remembered on this phone) with the others as buttons; everything that adjusts the day lives in
 // the sheet «⚙ Ajustar el día» (<dialog id="hoja">); the day is a list Comido / Planeado. The Peso
 // tab is drawn by peso.js, always for today.
+// Unit 011: the Recetas tab is drawn by recetas.js. A food that comes from a saved recipe or fixed
+// food says so («de tu receta …», «provisional») in the review and in the day list; one that is only
+// alike comes as a visible proposal with «Usar estimación», which puts Claude's estimate back.
 
 import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
 import { pintarPeso } from "./peso.js";
+import { pintarRecetas } from "./recetas.js";
 
 const $ = (id) => document.getElementById(id);
 // kcal with a thousands point always («1.040»): es-ES does not group 4 digits by default
@@ -196,6 +200,8 @@ function filaAlimento(a) {
   const planeado = a.estado === "planeado";
   const detalle = el("span", { className: a.cantidad === null ? "sin-cantidad" : "" }, a.cantidad === null ? "" : cantidad(a));
   if (a.estimado) detalle.append(el("i", { className: "marca", textContent: "estimado" }));
+  if (a.provisional) detalle.append(el("i", { className: "marca", textContent: "provisional" }));
+  if (a.origen) detalle.append(el("i", { className: "marca origen", textContent: a.origen }));
   if (a.pendiente_cantidad) detalle.append(el("i", { className: "marca alerta", textContent: "falta cantidad" }));
   const cuenta = !a.pendiente_cantidad && a.kcal !== null;
   const fila = el("div", { className: `fila${planeado ? " planeada" : ""}`, tabIndex: 0, title: "Toca para cambiarlo" },
@@ -647,9 +653,14 @@ function pintarRevision() {
     const aplicar = (clave, convertir = (v) => v) => (valor) => {
       const nuevo = convertir(valor);
       if (nuevo === a[clave] || (Number.isNaN(nuevo) && Number.isNaN(a[clave]))) return false;
+      const antes = a[clave];
       a[clave] = nuevo;
       if (clave === "nombre" || clave === "kcal") a.dudoso = false; // corrected by Andrés
-      if (clave === "kcal") a.estimado = false;
+      if (clave === "kcal") { a.estimado = false; a.origen = null; a.provisional = false; a.propuesta = null; }
+      // unit 011: a saved recipe or fixed food keeps its kcal per gram or unit when the quantity changes
+      if (clave === "cantidad" && a.origen && antes > 0 && nuevo > 0 && a.kcal !== null) {
+        a.kcal = Math.round(a.kcal / antes * nuevo * 10) / 10;
+      }
       if (a.cantidad !== null && !a.unidad) a.unidad = "g"; // a quantity always has a unit
       return true;
     };
@@ -660,6 +671,9 @@ function pintarRevision() {
     if (a.cantidad === null && !a.dudoso) marcas.push(el("span", { className: "marca alerta", textContent: "pendiente de cantidad" }));
     if (a.dia !== revision.hoy) marcas.push(el("span", { className: "marca", textContent: `planeado: ${deFecha(a.dia)}` }));
     if (a.anadida) marcas.push(el("span", { className: "marca", textContent: "añadido a mano" }));
+    if (a.origen) marcas.push(el("span", { className: "marca origen", textContent: a.origen }));
+    if (a.provisional) marcas.push(el("span", { className: "marca", textContent: "provisional" }));
+    const propuesta = a.propuesta ? tarjetaPropuesta(a) : null;
     const quitar = el("button", { type: "button", className: "quitar", textContent: "Quitar" });
     quitar.addEventListener("click", () => { revision.alimentos.splice(i, 1); pintarRevision(); });
     const respuesta = el("p", { className: "cabe", hidden: true });
@@ -691,10 +705,11 @@ function pintarRevision() {
     });
     return el("article", { className: a.dudoso ? "tarjeta dudosa" : (a.anadida ? "tarjeta nueva" : "tarjeta") },
       el("div", { className: "marcas" }, ...marcas),
+      propuesta,
       campos.nombre,
       el("div", { className: "fila" }, campos.cantidad, campos.unidad, campos.kcal),
       campos.dia,
-      a.supuestos.length ? el("p", { className: "supuestos", textContent: `Supuestos: ${a.supuestos.join("; ")}` }) : null,
+      a.supuestos.length && !a.propuesta ? el("p", { className: "supuestos", textContent: `Supuestos: ${a.supuestos.join("; ")}` }) : null,
       el("div", { className: "acciones" }, cuanto, quitar), respuesta,
     );
   });
@@ -702,6 +717,20 @@ function pintarRevision() {
   $("piezas").replaceChildren(...tarjetasPiezas());
   pintarBloqueo();
   programarSimulacion();
+}
+
+// Unit 011 (R4): «you said X: I propose your recipe Y», and the way back to Claude's estimate.
+function tarjetaPropuesta(a) {
+  const usar = el("button", { type: "button", className: "cambiar", textContent: "Usar estimación" });
+  usar.addEventListener("click", () => {
+    for (const leer of lectores) leer(); // keep what is typed in the other cards…
+    lectores = []; // …and do not read this card's inputs back over the estimate
+    Object.assign(a, { nombre: a.propuesta.dicho, kcal: a.kcal_estimada, estimado: true, origen: null, provisional: false,
+      propuesta: null, kcal_estimada: null, supuestos: [], guardado: null, coincidencia: null });
+    pintarRevision();
+  });
+  return el("div", { className: "propuesta" },
+    el("p", { textContent: `Has dicho «${a.propuesta.dicho}»: te propongo «${a.propuesta.guardado}». ¿No es eso?` }), usar);
 }
 
 // Cards of the other pieces: weight (numeric keyboard), objective of the day, doubtful phrases.
@@ -938,6 +967,7 @@ function mostrarPestana() {
   if (actual === "hoy") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
   else document.title = `TriData · ${mayuscula(actual)}`;
   if (actual === "peso") pintarPeso($("peso-contenido"));
+  if (actual === "recetas") pintarRecetas($("recetas"));
   window.scrollTo(0, 0);
 }
 

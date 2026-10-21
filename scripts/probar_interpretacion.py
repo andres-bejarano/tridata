@@ -6,12 +6,17 @@ the test suite and only runs by hand:
 
     python scripts/probar_interpretacion.py                         # the 20-30 food dictations
     python scripts/probar_interpretacion.py --piezas                # only the 5-8 weight / new-day ones
+    python scripts/probar_interpretacion.py --recetas               # the 8 ones with saved recipes (unit 011)
     python scripts/probar_interpretacion.py --modelo claude-sonnet-5-5
 
 A list counts as right when it has the expected foods, quantities, units and days (kcal are
 not judged). A pieces case also needs the right weight (kg and day), objective of the day (type,
 %, levels, steps, whether it has a planned training) and number of doubtful phrases. Below 9
 out of 10, repeat with Sonnet and choose with both results in front.
+
+`--recetas` (unit 011, R17) sends Claude only the invented NAMES and aliases of
+`tests/fixtures/dictados_recetas.json` and judges, for each food, which saved one it is
+(`guardado`), the match (`coincidencia`), the quantity and the unit. It passes with 7 of 8.
 """
 # No `from __future__ import annotations`: the tests load this file with importlib without
 # registering it in sys.modules, and @dataclass then cannot resolve string annotations.
@@ -27,7 +32,9 @@ from pathlib import Path
 from typing import Any
 
 CASOS = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "dictados.json"
+CASOS_RECETAS = CASOS.with_name("dictados_recetas.json")
 UMBRAL = 0.9
+UMBRAL_RECETAS = 7 / 8
 MODELO_ALTERNATIVO = "claude-sonnet-5-5"
 _UNIDADES = {
     "g": "g", "gr": "g", "gramo": "g", "gramos": "g",
@@ -187,6 +194,57 @@ def evaluar(interprete: Any, datos: dict) -> Resultado:
     return resultado
 
 
+def nombres_guardados(datos: dict) -> list[str]:
+    """The names and aliases Claude is given in the recipes test (the only thing it sees)."""
+    nombres = list(datos["guardados"]["recetas"])
+    for fijo in datos["guardados"]["fijos"]:
+        nombres += [fijo["nombre"], *fijo["alias"]]
+    return nombres
+
+
+def comparar_recetas(esperados: list[dict], obtenidos: list[dict]) -> list[str]:
+    """What is wrong with one list in the recipes test (empty = right): saved one, match, quantity, unit."""
+    errores = []
+    libres = list(obtenidos)
+    for e in esperados:
+        nombre = e["nombre"][0]
+        hallado = next((o for o in libres if _encaja_nombre(e, o["nombre"])), None)
+        if hallado is None:
+            errores.append(f"falta «{nombre}»")
+            continue
+        libres.remove(hallado)
+        validos = [_normal(g) for g in e["guardado"] or []]
+        obtenido = _normal(hallado.get("guardado")) or None
+        if (obtenido is None) != (not validos) or (obtenido is not None and obtenido not in validos):
+            errores.append(f"«{nombre}»: guardado {hallado.get('guardado')!r} en vez de {e['guardado']!r}")
+        if hallado.get("coincidencia") != e["coincidencia"]:
+            errores.append(f"«{nombre}»: coincidencia {hallado.get('coincidencia')!r} en vez de {e['coincidencia']!r}")
+        if hallado.get("cantidad") is None or abs(float(hallado["cantidad"]) - e["cantidad"]) > 0.01 * max(1, e["cantidad"]):
+            errores.append(f"«{nombre}»: cantidad {hallado.get('cantidad')} en vez de {e['cantidad']}")
+        if _unidad(hallado.get("unidad")) != e["unidad"]:
+            errores.append(f"«{nombre}»: unidad {hallado.get('unidad')!r} en vez de {e['unidad']!r}")
+    errores += [f"sobra «{o['nombre']}»" for o in libres]
+    return errores
+
+
+def evaluar_recetas(interprete: Any, datos: dict) -> Resultado:
+    """The 8 recipe cases; `interprete` must already be given `nombres_guardados(datos)`."""
+    from tridata.ia import ErrorInterpretacion
+
+    hoy = date.fromisoformat(datos["hoy"])
+    resultado = Resultado()
+    for caso in datos["casos"]:
+        inicio = time.monotonic()
+        try:
+            errores = comparar_recetas(caso["esperado"], _piezas(interprete.interpretar(caso["texto"], hoy))["alimentos"])
+        except ErrorInterpretacion as exc:
+            errores = [f"sin interpretación: {exc}"]
+        resultado.total += 1
+        resultado.aciertos += not errores
+        resultado.detalles.append((f"{caso['texto']}  [{time.monotonic() - inicio:.1f} s]", errores))
+    return resultado
+
+
 def main(argv: list[str] | None = None) -> int:
     from dotenv import load_dotenv
 
@@ -198,10 +256,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--casos", type=Path, default=CASOS)
     parser.add_argument("--piezas", action="store_true",
                         help="only the 5-8 weight / new-day cases (unit 007), with the time of each answer")
+    parser.add_argument("--recetas", action="store_true",
+                        help="the 8 cases with saved recipes and fixed foods (unit 011): only their names go")
     args = parser.parse_args(argv)
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("Falta ANTHROPIC_API_KEY en .env: esta prueba llama a la API de verdad.", file=sys.stderr)
         return 1
+
+    if args.recetas:
+        ruta = CASOS_RECETAS if args.casos == CASOS else args.casos
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+        nombres = nombres_guardados(datos)
+        resultado = evaluar_recetas(InterpreteClaude(modelo=args.modelo, guardados=lambda: nombres), datos)
+        for texto, errores in resultado.detalles:
+            print(f"{'OK   ' if not errores else 'FALLO'}  {texto}")
+            for error in errores:
+                print(f"         - {error}")
+        print(f"\nModelo {args.modelo}: {resultado.aciertos}/{resultado.total} con recetas bien "
+              f"(pasa con 7 de 8).")
+        if resultado.aciertos / resultado.total < UMBRAL_RECETAS and args.modelo != MODELO_ALTERNATIVO:
+            print(f"Menos de 7 de 8: repite con --modelo {MODELO_ALTERNATIVO} y decide con los dos resultados.")
+        return 0
 
     datos = json.loads(args.casos.read_text(encoding="utf-8"))
     resultado = (evaluar_piezas if args.piezas else evaluar)(InterpreteClaude(modelo=args.modelo), datos)

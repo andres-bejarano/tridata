@@ -427,6 +427,24 @@ def leer(md_texto: str, html_texto: str | None, hoy: date) -> Lectura:
     return lectura
 
 
+@dataclass
+class FilasRecetas:
+    """The whole rows (cells) of «Referencias calóricas fijas» and «Taras de ollas» (unit 011, D7)."""
+
+    referencias: list[list[str]]
+    taras: list[list[str]]
+
+
+def filas_de_recetas(md_texto: str) -> FilasRecetas:
+    """The two tables `leer` only counts by name, with every cell, for `tridata importar-recetas`.
+
+    Neither section is required: a file without them gives empty lists.
+    """
+    secciones = _secciones(md_texto)
+    return FilasRecetas(referencias=_tabla(_seccion(secciones, REFERENCIAS, False)),
+                        taras=_tabla(_seccion(secciones, TARAS, False)))
+
+
 # -- decisions and writing ---------------------------------------------------------------------
 
 ACEPTADO, CORREGIDO, OMITIDO = "aceptado", "corregido", "omitido"

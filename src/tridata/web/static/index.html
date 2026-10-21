@@ -104,21 +104,23 @@
       <div id="peso-contenido"><p class="suave">Cargando…</p></div>
     </section>
 
-    <!-- ================= RECETAS (empty until unit 011) ================= -->
+    <!-- ================= RECETAS (recetas.js, unit 011) ================= -->
     <section id="recetas" class="pantalla" data-pestana="recetas" aria-label="Recetas" hidden>
       <h1 class="titulo-pantalla">Recetas</h1>
-      <article class="tarjeta vacio">
-        <div class="dibujo" aria-hidden="true"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5"/><path d="M9 8h6M9 12h6"/></svg></div>
-        <h3>Aún no hay nada aquí</h3>
-        <p>Tus recetas, taras y alimentos fijos.</p>
-        <p>Lo que guardes aquí lo entenderá al dictar: «la tortilla de siempre», «el táper grande».</p>
+      <p class="suave intro-recetas">Lo que guardes aquí lo usará al dictar: «garbanzos de la abuela 250 g».</p>
+      <p id="recetas-mensaje" role="status" aria-live="polite"></p>
+      <article id="apartado-recetas" class="tarjeta apartado" aria-labelledby="t-recetas">
+        <div class="tipo"><div class="ico ico-receta" aria-hidden="true">🍲</div><div><strong id="t-recetas">Recetas</strong><span>Platos con sus ingredientes, pesados en su olla</span></div></div>
+        <div class="elementos"></div>
       </article>
-      <article class="tarjeta tipos">
-        <div class="tipo"><div class="ico ico-receta" aria-hidden="true">🍲</div><div><strong>Recetas</strong><span>Platos con sus ingredientes y raciones</span></div></div>
-        <div class="tipo"><div class="ico ico-tara" aria-hidden="true">⚖️</div><div><strong>Taras</strong><span>Lo que pesa cada táper o plato vacío</span></div></div>
-        <div class="tipo"><div class="ico ico-fijo" aria-hidden="true">📌</div><div><strong>Alimentos fijos</strong><span>Los de siempre, con sus kcal ya puestas</span></div></div>
+      <article id="apartado-taras" class="tarjeta apartado" aria-labelledby="t-taras">
+        <div class="tipo"><div class="ico ico-tara" aria-hidden="true">⚖️</div><div><strong id="t-taras">Taras</strong><span>Lo que pesa cada olla o táper vacío</span></div></div>
+        <div class="elementos"></div>
       </article>
-      <button type="button" class="pronto" disabled>＋ Añadir · próximamente</button>
+      <article id="apartado-fijos" class="tarjeta apartado" aria-labelledby="t-fijos">
+        <div class="tipo"><div class="ico ico-fijo" aria-hidden="true">📌</div><div><strong id="t-fijos">Alimentos fijos</strong><span>Los de siempre, con sus kcal ya puestas</span></div></div>
+        <div class="elementos"></div>
+      </article>
     </section>
   </main>
 

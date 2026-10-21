@@ -1,0 +1,63 @@
+{
+ "_nota": "Dictados INVENTADOS para la prueba manual con recetas guardadas (scripts/probar_interpretacion.py --recetas, unidad 011 R17). `guardados`: solo NOMBRES y alias inventados, lo único que ve Claude. En cada esperado, `nombre`: palabras aceptadas (sin tildes, basta con que una aparezca); `guardado`: los nombres o alias que valen (null = ninguno); `coincidencia`: exacta, parecida o null. Se juzgan guardado, coincidencia, cantidad y unidad; las kcal no.",
+ "hoy": "2026-10-21",
+ "guardados": {
+  "recetas": ["garbanzos de la abuela", "lasaña de la tía", "crema de calabaza inventada"],
+  "fijos": [
+   {"nombre": "dulce de guayaba de ciclismo", "alias": ["guayaba"]},
+   {"nombre": "gel de prueba", "alias": []}
+  ]
+ },
+ "casos": [
+  {
+   "texto": "garbanzos de la abuela 250 g",
+   "esperado": [
+    {"nombre": ["garbanzo"], "guardado": ["garbanzos de la abuela"], "coincidencia": "exacta", "cantidad": 250, "unidad": "g"}
+   ]
+  },
+  {
+   "texto": "dos guayabas",
+   "esperado": [
+    {"nombre": ["guayaba"], "guardado": ["guayaba", "dulce de guayaba de ciclismo"], "coincidencia": "exacta", "cantidad": 2, "unidad": "unidad"}
+   ]
+  },
+  {
+   "texto": "un cuarto de lasaña de la tía",
+   "esperado": [
+    {"nombre": ["lasana"], "guardado": ["lasaña de la tía"], "coincidencia": "exacta", "cantidad": 0.25, "unidad": "receta"}
+   ]
+  },
+  {
+   "texto": "200 g de garbanzos",
+   "esperado": [
+    {"nombre": ["garbanzo"], "guardado": ["garbanzos de la abuela"], "coincidencia": "parecida", "cantidad": 200, "unidad": "g"}
+   ]
+  },
+  {
+   "texto": "300 g de lentejas de la vecina",
+   "esperado": [
+    {"nombre": ["lenteja"], "guardado": null, "coincidencia": null, "cantidad": 300, "unidad": "g"}
+   ]
+  },
+  {
+   "texto": "media crema de calabaza inventada y un yogur",
+   "esperado": [
+    {"nombre": ["crema", "calabaza"], "guardado": ["crema de calabaza inventada"], "coincidencia": "exacta", "cantidad": 0.5, "unidad": "receta"},
+    {"nombre": ["yogur"], "guardado": null, "coincidencia": null, "cantidad": 1, "unidad": "unidad"}
+   ]
+  },
+  {
+   "texto": "150 gramos de lasaña de la tía y un gel de prueba",
+   "esperado": [
+    {"nombre": ["lasana"], "guardado": ["lasaña de la tía"], "coincidencia": "exacta", "cantidad": 150, "unidad": "g"},
+    {"nombre": ["gel"], "guardado": ["gel de prueba"], "coincidencia": "exacta", "cantidad": 1, "unidad": "unidad"}
+   ]
+  },
+  {
+   "texto": "garbanzos de la abuela, no, mejor 180 g de lasaña de la tía",
+   "esperado": [
+    {"nombre": ["lasana"], "guardado": ["lasaña de la tía"], "coincidencia": "exacta", "cantidad": 180, "unidad": "g"}
+   ]
+  }
+ ]
+}

@@ -276,7 +276,7 @@ dialog.hoja::backdrop { background: rgba(10, 14, 20, .45); }
 .bloque-objetivo p { margin: 0; }
 #peso-ultimos .fila { cursor: default; }
 
-/* -- Recetas (empty until unit 011) ----------------------------------------------------- */
+/* -- Recetas: the section headers of the 010 mockup (used by unit 011) ---------------------- */
 .vacio { padding: 28px 20px; text-align: center; display: block; }
 .vacio .dibujo { width: 84px; height: 84px; border-radius: 24px; background: var(--acento-suave); color: var(--acento); display: grid; place-items: center; margin: 0 auto 12px; }
 .vacio h3 { margin: 4px 0 6px; font-size: 1.25rem; }
@@ -290,7 +290,6 @@ dialog.hoja::backdrop { background: rgba(10, 14, 20, .45); }
 .ico-fijo { background: var(--ico-fijo); }
 .tipo strong { display: block; }
 .tipo span { font-size: .9rem; color: var(--suave); }
-.pronto { opacity: .55; width: 100%; margin-top: 6px; }
 
 /* -- Ajustes (ajustes.html): iOS-style rows ---------------------------------------------- */
 .nota { font-size: .88rem; color: var(--suave); margin: 6px 6px 0; }
@@ -313,3 +312,48 @@ dialog.hoja::backdrop { background: rgba(10, 14, 20, .45); }
 .punto { width: 10px; height: 10px; border-radius: 50%; background: var(--bien); flex-shrink: 0; }
 .punto.apagado { background: var(--alerta); }
 .futuro { margin: 0; font-size: .9rem; color: var(--acento); }
+
+/* -- Recetas (recetas.js, unit 011): the three sections of the mockup, with their rows and cards ---- */
+.intro-recetas { margin: -4px 4px 12px; }
+#recetas-mensaje { margin: 0 4px 10px; }
+#recetas-mensaje:empty { display: none; }
+#recetas-mensaje.error { color: var(--error); }
+#recetas-mensaje.bien { color: var(--bien); }
+.apartado { padding: 0; gap: 0; display: block; overflow: hidden; }
+.apartado > .tipo { border-top: 0; }
+.elementos { display: block; }
+.elemento {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 60px; padding: 8px 14px; margin: 0;
+  border: 0; border-top: 1px solid var(--borde); border-radius: 0; background: transparent; color: var(--texto);
+  text-align: left; font-weight: 400;
+}
+.elemento .que { flex: 1; min-width: 0; }
+.elemento .que strong { display: block; font-weight: 600; overflow-wrap: anywhere; }
+.elemento .que span { display: block; font-size: .88rem; color: var(--suave); overflow-wrap: anywhere; }
+.elemento .valor { font-weight: 700; white-space: nowrap; }
+.elemento .chev { color: var(--suave); font-size: 1.3rem; }
+.elemento.revisar .que span { color: var(--alerta); }
+.vacio-apartado { margin: 0; padding: 12px 14px; border-top: 1px solid var(--borde); }
+.apartado > .elementos > button.anadir { width: calc(100% - 28px); margin: 6px 14px 14px; }
+.apartado .ficha { margin: 8px; }
+.ficha textarea { min-height: 88px; resize: vertical; }
+.ficha select { appearance: auto; }
+.ingredientes { display: grid; gap: 8px; }
+.ingrediente { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--borde); border-radius: 14px; }
+.ingrediente.dudosa { border-color: var(--alerta); }
+.total-receta { margin: 0; font-weight: 650; }
+.calculo { margin: 0; }
+.versiones { display: grid; gap: 0; border-top: 1px solid var(--borde); padding-top: 8px; }
+.versiones .titulo-pieza { margin: 0 0 4px; font-weight: 600; }
+.version { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 6px 0; border-top: 1px solid var(--borde); }
+.version:first-of-type { border-top: 0; }
+.version .que { flex: 1; min-width: 0; }
+.version .que strong { display: block; }
+.version .que span { display: block; font-size: .85rem; color: var(--suave); }
+.ficha .ancho { width: 100%; }
+button.dictar { flex-shrink: 0; }
+/* the review and the day list: where the kcal come from, and a proposal for what is only alike */
+.marca.origen { color: var(--bien); border-color: var(--bien); white-space: normal; }
+.propuesta { display: grid; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--acento-suave); }
+.propuesta p { margin: 0; font-size: .95rem; }
+.propuesta button { justify-self: start; }

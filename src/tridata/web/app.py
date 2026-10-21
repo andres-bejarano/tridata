@@ -40,6 +40,15 @@
     POST /api/carrera             add a race {"nombre", "fecha", "dias_mantenimiento"}
     POST /api/carrera/N           change a race (same body)
     POST /api/carrera/N/quitar    remove a race; only with {"confirmado": true}
+    GET  /api/recetas             unit 011, the Recetas tab (web/recetas.py): recipes with their versions,
+    POST /api/recetas[/N[/version|/borrar]]   fixed foods and pots; new recipe or batch, correct the one
+    POST /api/fijos[/N[/borrar]]  in use, choose a batch, delete with {"confirmado": true}; add, change and
+    POST /api/ollas[/N[/borrar]]  delete fixed foods and pots
+
+Unit 011: every food /api/interpretar and /api/dictado give back has gone through the saved recipes
+and fixed foods (`Recetario.resolver`): `origen` («de tu receta …»), `provisional`, `propuesta` (what
+was said and the saved one proposed, when it is only alike) and `kcal_estimada` (Claude's, to go
+back to it). /api/confirmar keeps `origen` and `provisional` in the row, and /api/dia shows them.
 
 Every /api/alimento route answers {"alimento": ..., "dia": ...}, where `dia` is the day the food
 was in BEFORE the action (the screen being looked at; for an added food, its day).
@@ -69,10 +78,11 @@ from ..ia import ErrorInterpretacion, ErrorTranscripcion
 from ..nutricion import (
     Ajustes, Alimento, ConfigGasto, ObjetivosDia, RegistroComidas, RegistroPeso, basal_del_dia, config_del_dia,
     dias_de_retraso, estimar_gasto, gramos_que_caben, kcal_previstas, objetivo_valido, peso_valido,
-    media_7_dias, resumen_del_dia, resumen_peso, simular, texto_retraso,
+    Recetario, media_7_dias, resumen_del_dia, resumen_peso, simular, texto_retraso,
 )
 from ..nutricion.margen import PASOS_POR_DEFECTO
 from ..storage import DataStore
+from .recetas import rutas as rutas_recetas
 
 log = logging.getLogger(__name__)
 
@@ -109,15 +119,28 @@ def _plan(vigentes: Any) -> dict:
             "limite_saludable_pct": vigentes.limite_saludable_pct}
 
 
-def _piezas(resultado: Any) -> dict:
-    """The interpretation as JSON: every piece, empty when absent. A bare list is foods only."""
+_NUEVAS = ("guardado", "coincidencia", "origen", "provisional", "propuesta", "kcal_estimada")
+
+
+def _sin_lo_vacio(alimento: dict) -> dict:
+    """A food nothing saved touched goes out exactly as before unit 011: without its new, empty keys."""
+    if alimento.get("origen") or alimento.get("propuesta") or alimento.get("provisional"):
+        return alimento
+    return {k: v for k, v in alimento.items() if k not in _NUEVAS or v not in (None, False)}
+
+
+def _piezas(resultado: Any, resolver: Callable[[dict], dict] = lambda a: a) -> dict:
+    """The interpretation as JSON: every piece, empty when absent. A bare list is foods only.
+
+    Each food goes through `resolver` (the saved recipes and fixed foods, unit 011).
+    """
     if isinstance(resultado, list):
         alimentos, peso, objetivo, dudosas = resultado, None, None, []
     else:
         alimentos, peso, objetivo, dudosas = (resultado.alimentos, resultado.peso, resultado.objetivo_dia,
                                               resultado.dudosas)
     return {
-        "alimentos": [a.model_dump(mode="json") for a in alimentos],
+        "alimentos": [_sin_lo_vacio(resolver(a.model_dump(mode="json"))) for a in alimentos],
         "peso": peso.model_dump(mode="json") if peso is not None else None,
         "objetivo_dia": objetivo.model_dump(mode="json") if objetivo is not None else None,
         "dudosas": list(dudosas),
@@ -134,7 +157,7 @@ def crear_app(
     registro: RegistroComidas, interprete: Any, ajustes: Ajustes, hoy: Callable[[], date] = date.today, *,
     pesos: RegistroPeso | None = None, objetivos: ObjetivosDia | None = None,
     store: DataStore | None = None, actualizar_garmin: Callable[[date], None] | None = None,
-    transcriptor: Any = None,
+    transcriptor: Any = None, recetario: Recetario | None = None,
 ) -> Starlette:
     """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double).
 
@@ -146,7 +169,9 @@ def crear_app(
     `transcriptor` is anything with `transcribir(audio) -> str` (Whisper, or a test double); with a
     `cargar()` too, it is loaded in a background thread when the server starts, never blocking it.
     Without it, /api/dictado says «try again later» (503) and writing works as always.
+    `recetario` holds the recipes, fixed foods and pots (unit 011); by default, in the same SQLite.
     """
+    recetario = recetario or Recetario(registro.db_path)
     pesos = pesos or RegistroPeso(registro.db_path)
     objetivos = objetivos or ObjetivosDia(registro.db_path)
     cerrojo_garmin = threading.Lock()
@@ -298,7 +323,7 @@ def crear_app(
     async def _interpretacion(texto: str, dia: date) -> dict:
         """What /api/interpretar answers for `texto` with «hoy» = `dia`. Raises ErrorInterpretacion."""
         resultado = await run_in_threadpool(interprete.interpretar, texto.strip(), dia)
-        return {"texto": texto, **_piezas(resultado)}
+        return {"texto": texto, **_piezas(resultado, recetario.resolver)}
 
     async def interpretar(request: Request) -> Response:
         texto = (await _cuerpo(request) or {}).get("texto")
@@ -553,5 +578,6 @@ def crear_app(
         Route("/api/alimento/{id:int}", cambiar, methods=["POST"]),
         Route("/api/alimento/{id:int}/borrar", borrar, methods=["POST"]),
         Route("/api/alimento/{id:int}/comido", comido, methods=["POST"]),
+        *rutas_recetas(recetario, hoy),
         Mount("/static", StaticFiles(directory=ESTATICOS), name="static"),
     ])

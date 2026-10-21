@@ -44,6 +44,12 @@
     POST /api/recetas[/N[/version|/borrar]]   fixed foods and pots; new recipe or batch, correct the one
     POST /api/fijos[/N[/borrar]]  in use, choose a batch, delete with {"confirmado": true}; add, change and
     POST /api/ollas[/N[/borrar]]  delete fixed foods and pots
+    POST /api/recetas/N/apuntar   unit 013: {"cantidad": n} of that recipe or fixed food, logged today as eaten
+    POST /api/fijos/N/apuntar     with the kcal worked out on the server with what is saved (R-57)
+
+Unit 013 (R-8): a food without a quantity but with kcal counts («kcal a mano»); only one with neither is
+pending. An interpreted food without a quantity whose kcal are estimated goes out with `kcal: null`, so an
+estimate never passes for hand-written kcal.
 
 Unit 011: every food /api/interpretar and /api/dictado give back has gone through the saved recipes
 and fixed foods (`Recetario.resolver`): `origen` («de tu receta …»), `provisional`, `propuesta` (what
@@ -129,6 +135,13 @@ def _sin_lo_vacio(alimento: dict) -> dict:
     return {k: v for k, v in alimento.items() if k not in _NUEVAS or v not in (None, False)}
 
 
+def _sin_estimacion_suelta(alimento: dict) -> dict:
+    """R-8 (unit 013): estimated kcal without a quantity are not kcal by hand: the food stays pending."""
+    if alimento.get("cantidad") is None and alimento.get("estimado") and alimento.get("kcal") is not None:
+        return {**alimento, "kcal": None}
+    return alimento
+
+
 def _piezas(resultado: Any, resolver: Callable[[dict], dict] = lambda a: a) -> dict:
     """The interpretation as JSON: every piece, empty when absent. A bare list is foods only.
 
@@ -140,7 +153,7 @@ def _piezas(resultado: Any, resolver: Callable[[dict], dict] = lambda a: a) -> d
         alimentos, peso, objetivo, dudosas = (resultado.alimentos, resultado.peso, resultado.objetivo_dia,
                                               resultado.dudosas)
     return {
-        "alimentos": [_sin_lo_vacio(resolver(a.model_dump(mode="json"))) for a in alimentos],
+        "alimentos": [_sin_estimacion_suelta(_sin_lo_vacio(resolver(a.model_dump(mode="json")))) for a in alimentos],
         "peso": peso.model_dump(mode="json") if peso is not None else None,
         "objetivo_dia": objetivo.model_dump(mode="json") if objetivo is not None else None,
         "dudosas": list(dudosas),
@@ -511,7 +524,7 @@ def crear_app(
             return _error(f"No se puede simular: {exc}.", 400)
         dia_hoy = hoy()
         resumen = _dia(dia_hoy)
-        cuenta = [a for a in alimentos if a.dia == dia_hoy and a.cantidad is not None and a.kcal is not None]
+        cuenta = [a for a in alimentos if a.dia == dia_hoy and not a.pendiente_cantidad and a.kcal is not None]
         kcal_lista = round(sum(a.kcal or 0 for a in cuenta), 1)
         margen = resumen["barra"]["objetivo_kcal"] - resumen["total_kcal"]
         caben = []
@@ -578,6 +591,6 @@ def crear_app(
         Route("/api/alimento/{id:int}", cambiar, methods=["POST"]),
         Route("/api/alimento/{id:int}/borrar", borrar, methods=["POST"]),
         Route("/api/alimento/{id:int}/comido", comido, methods=["POST"]),
-        *rutas_recetas(recetario, hoy),
+        *rutas_recetas(recetario, hoy, registro),
         Mount("/static", StaticFiles(directory=ESTATICOS), name="static"),
     ])

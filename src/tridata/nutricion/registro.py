@@ -84,7 +84,8 @@ class Alimento:
 
     @property
     def pendiente_cantidad(self) -> bool:
-        return self.cantidad is None
+        """R-8 (unit 013): pending only without a quantity AND without kcal; kcal by hand count."""
+        return self.cantidad is None and self.kcal is None
 
     @classmethod
     def desde_dict(cls, datos: dict) -> Alimento:
@@ -317,7 +318,8 @@ class RegistroComidas:
     def _fila(fila: sqlite3.Row) -> dict:
         datos = dict(fila)
         datos["estimado"] = bool(datos["estimado"])
-        datos["pendiente_cantidad"] = bool(datos["pendiente_cantidad"])
+        # recomputed on reading (R-8, unit 013): a row saved before with kcal and no quantity counts too
+        datos["pendiente_cantidad"] = datos["cantidad"] is None and datos["kcal"] is None
         datos["provisional"] = bool(datos["provisional"])
         datos["supuestos"] = json.loads(datos["supuestos"])
         return datos

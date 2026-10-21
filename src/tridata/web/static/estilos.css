@@ -357,3 +357,17 @@ button.dictar { flex-shrink: 0; }
 .propuesta { display: grid; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--acento-suave); }
 .propuesta p { margin: 0; font-size: .95rem; }
 .propuesta button { justify-self: start; }
+/* unit 013: «¿Cuánto has cogido?» on top of a saved recipe or fixed food, «Pesar ahora», kcal/100 g */
+.calculadora, .pesar-ahora, .pesar { display: grid; gap: 8px; }
+.calculadora { padding: 12px; border-radius: 14px; background: var(--acento-suave); }
+.fila-calc { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
+.calculadora .resultado { margin: 0; min-height: 48px; display: flex; align-items: center; font-size: 1.35rem; font-weight: 700; color: var(--texto); white-space: nowrap; }
+.calculadora .estado-receta, .pesar-ahora .entera { margin: 0; font-size: 1.0625rem; font-weight: 650; }
+.pesar-ahora { padding: 12px; border-radius: 14px; border: 1px solid var(--alerta); background: var(--alerta-fondo); }
+.pesar-ahora .entera { color: var(--texto); }
+button.grande { width: 100%; min-height: 56px; font-size: 1.0625rem; }
+.aviso-calc { margin: 0; color: var(--alerta); background: var(--alerta-fondo); padding: 10px 12px; border-radius: 12px; font-size: .95rem; }
+.pesar-ahora .aviso-calc { background: var(--tarjeta); }
+.kcal-100g { display: grid; gap: 6px; }
+button.por100 { justify-self: start; min-height: 44px; font-size: .9rem; color: var(--acento); }
+.solo-gramos { margin: 0; font-size: .85rem; color: var(--alerta); }

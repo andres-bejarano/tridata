@@ -50,6 +50,8 @@ let conectado = null; // whether the PC answered the last request (null: not kno
 let grabacion = null; // { parar } while recording
 let esperada = null; // id of the recording just made: its list opens by itself when it comes back
 let textoDeLista = null; // a list whose interpretation failed (502), its text put in the box
+const porCien = new WeakMap(); // unit 013: the kcal/100 g typed on a review card, by food (never saved)
+let pestanaVista = null; // the tab on screen, to reload the day when coming back to Hoy (unit 013)
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -194,6 +196,44 @@ function pintarTarjeta(dia) {
   }));
 }
 
+// Unit 013 (R-8): kcal without a quantity that are not an estimate count, marked «kcal a mano».
+const kcalAMano = (a) => a.cantidad === null && a.kcal !== null && !Number.isNaN(a.kcal) && !a.estimado;
+
+// Unit 013 (R-56): «kcal/100 g» works the kcal out with the grams (kcal/100 g × g ÷ 100); never saved.
+// It opens from a button and its input only exists once opened, so a card that has not used it keeps a
+// single input named «kcal». `alCalcular(kcal)` gets the result; `alEscribir(v)` what is typed.
+function kcalPor100(inicial, alCalcular, alEscribir = () => {}) {
+  const abrir = el("button", { type: "button", className: "por100", textContent: "kcal/100 g" });
+  const nota = el("p", { className: "solo-gramos", hidden: true, textContent: "Las kcal/100 g van solo con gramos: con otra unidad no lo calculo." });
+  const caja = el("div", { className: "kcal-100g" }, abrir, nota);
+  let entrada = null;
+  let cantidad = null;
+  let unidad = null;
+  const valor = () => {
+    const v = entrada ? comoNumero(entrada.value) : null;
+    return v === null || Number.isNaN(v) || v < 0 ? null : v;
+  };
+  const calcular = () => {
+    const por100 = valor();
+    const gramos = !unidad || unidad === "g";
+    nota.hidden = por100 === null || gramos;
+    if (por100 === null || !gramos || cantidad === null || Number.isNaN(cantidad) || cantidad <= 0) return;
+    alCalcular(Math.round(por100 * cantidad / 100 * 10) / 10);
+  };
+  const crear = (valorInicial) => {
+    entrada = el("input", { type: "number", step: "any", min: "0", inputMode: "decimal", value: valorInicial ?? "" });
+    entrada.addEventListener("input", () => { alEscribir(valor()); calcular(); });
+    abrir.replaceWith(el("label", { className: "campo number" }, el("span", { textContent: "kcal/100 g" }), entrada));
+  };
+  if (inicial !== null && inicial !== undefined) crear(String(inicial));
+  abrir.addEventListener("click", () => { crear(""); entrada.focus(); });
+  return {
+    caja, valor,
+    // the quantity or the unit changed: work the kcal out again (R-56: 6 g → 16,8; 10 g → 28)
+    cambiar: (nuevaCantidad, nuevaUnidad) => { cantidad = nuevaCantidad; unidad = nuevaUnidad; calcular(); },
+  };
+}
+
 // The day as a list in two groups, Comido and Planeado; tapping a row opens its change card (R4).
 function filaAlimento(a) {
   if (a.id === editando) return fichaCambio(a);
@@ -203,6 +243,7 @@ function filaAlimento(a) {
   if (a.provisional) detalle.append(el("i", { className: "marca", textContent: "provisional" }));
   if (a.origen) detalle.append(el("i", { className: "marca origen", textContent: a.origen }));
   if (a.pendiente_cantidad) detalle.append(el("i", { className: "marca alerta", textContent: "falta cantidad" }));
+  if (kcalAMano(a)) detalle.append(el("i", { className: "marca", textContent: "kcal a mano" }));
   const cuenta = !a.pendiente_cantidad && a.kcal !== null;
   const fila = el("div", { className: `fila${planeado ? " planeada" : ""}`, tabIndex: 0, title: "Toca para cambiarlo" },
     el("div", { className: "que" }, el("strong", { textContent: a.nombre }), detalle),
@@ -467,6 +508,11 @@ function camposFicha(a) {
   const unidad = campo("Unidad", a.unidad, "text");
   const kc = campo("kcal", a.kcal, "number", null, { step: "any", min: "0", inputMode: "decimal" });
   const dia = campo("Día", a.dia, "date");
+  const por100 = kcalPor100(null, (k) => { kc.entrada.value = String(k); });
+  const alCambiarCantidad = () => por100.cambiar(comoNumero(cant.entrada.value), unidad.entrada.value.trim() || null);
+  cant.entrada.addEventListener("input", alCambiarCantidad);
+  unidad.entrada.addEventListener("input", alCambiarCantidad);
+  alCambiarCantidad();
   const leer = () => {
     const datos = {
       nombre: nombre.entrada.value.trim(), cantidad: comoNumero(cant.entrada.value),
@@ -475,7 +521,7 @@ function camposFicha(a) {
     if (datos.cantidad !== null && !datos.unidad) datos.unidad = "g";
     return datos;
   };
-  const nodos = [nombre, el("div", { className: "fila" }, cant, unidad, kc), dia];
+  const nodos = [nombre, el("div", { className: "fila" }, cant, unidad, kc), por100.caja, dia];
   return { nodos, leer, foco: () => nombre.entrada.focus() };
 }
 
@@ -665,14 +711,20 @@ function pintarRevision() {
       return true;
     };
     const repintar = (aplicarlo) => (valor) => { if (aplicarlo(valor)) pintarRevision(); };
-    const marcas = [];
-    if (a.dudoso) marcas.push(el("span", { className: "marca alerta", textContent: "dudoso: corrígelo o quítalo" }));
-    if (a.estimado && !a.dudoso) marcas.push(el("span", { className: "marca", textContent: "kcal estimadas" }));
-    if (a.cantidad === null && !a.dudoso) marcas.push(el("span", { className: "marca alerta", textContent: "pendiente de cantidad" }));
-    if (a.dia !== revision.hoy) marcas.push(el("span", { className: "marca", textContent: `planeado: ${deFecha(a.dia)}` }));
-    if (a.anadida) marcas.push(el("span", { className: "marca", textContent: "añadido a mano" }));
-    if (a.origen) marcas.push(el("span", { className: "marca origen", textContent: a.origen }));
-    if (a.provisional) marcas.push(el("span", { className: "marca", textContent: "provisional" }));
+    const marcas = () => {
+      const m = [];
+      if (a.dudoso) m.push(el("span", { className: "marca alerta", textContent: "dudoso: corrígelo o quítalo" }));
+      if (a.estimado && !a.dudoso) m.push(el("span", { className: "marca", textContent: "kcal estimadas" }));
+      // unit 013 (R-8): pending only without a quantity and without kcal; kcal by hand count
+      if (a.cantidad === null && a.kcal === null && !a.dudoso) m.push(el("span", { className: "marca alerta", textContent: "pendiente de cantidad" }));
+      if (kcalAMano(a) && !a.dudoso) m.push(el("span", { className: "marca", textContent: "kcal a mano" }));
+      if (a.dia !== revision.hoy) m.push(el("span", { className: "marca", textContent: `planeado: ${deFecha(a.dia)}` }));
+      if (a.anadida) m.push(el("span", { className: "marca", textContent: "añadido a mano" }));
+      if (a.origen) m.push(el("span", { className: "marca origen", textContent: a.origen }));
+      if (a.provisional) m.push(el("span", { className: "marca", textContent: "provisional" }));
+      return m;
+    };
+    const cajaMarcas = el("div", { className: "marcas" }, ...marcas());
     const propuesta = a.propuesta ? tarjetaPropuesta(a) : null;
     const quitar = el("button", { type: "button", className: "quitar", textContent: "Quitar" });
     quitar.addEventListener("click", () => { revision.alimentos.splice(i, 1); pintarRevision(); });
@@ -695,19 +747,35 @@ function pintarRevision() {
       kcal: campo("kcal", a.kcal, "number", repintar(aplicar("kcal", comoNumero)), numerico),
       dia: campo("Día", a.dia, "date", repintar(aplicar("dia"))),
     };
-    // Typing keeps the model and the block reason current without repainting the cards.
+    // unit 013 (R-56): kcal/100 g, kept per food while the review lives (never sent, never saved)
+    const por100 = kcalPor100(porCien.get(a) ?? null, (k) => {
+      campos.kcal.entrada.value = String(k);
+      aplicar("kcal", comoNumero)(campos.kcal.entrada.value);
+      cajaMarcas.replaceChildren(...marcas());
+      pintarBloqueo();
+      programarSimulacion();
+    }, (v) => { if (v === null) porCien.delete(a); else porCien.set(a, v); });
+    // Typing keeps the model, the marks and the block reason current without repainting the cards.
     for (const [clave, c] of Object.entries(campos)) {
-      c.entrada.addEventListener("input", () => { aplicar(clave, conversiones[clave])(c.entrada.value); pintarBloqueo(); programarSimulacion(); });
+      c.entrada.addEventListener("input", () => {
+        aplicar(clave, conversiones[clave])(c.entrada.value);
+        if (clave === "cantidad" || clave === "unidad") por100.cambiar(a.cantidad, a.unidad);
+        cajaMarcas.replaceChildren(...marcas());
+        pintarBloqueo();
+        programarSimulacion();
+      });
     }
+    por100.cambiar(a.cantidad, a.unidad);
     // R9: on "Confirmar", what is in the inputs at that moment is what gets saved.
     lectores.push(() => {
       for (const [clave, c] of Object.entries(campos)) aplicar(clave, conversiones[clave])(c.entrada.value);
     });
     return el("article", { className: a.dudoso ? "tarjeta dudosa" : (a.anadida ? "tarjeta nueva" : "tarjeta") },
-      el("div", { className: "marcas" }, ...marcas),
+      cajaMarcas,
       propuesta,
       campos.nombre,
       el("div", { className: "fila" }, campos.cantidad, campos.unidad, campos.kcal),
+      por100.caja,
       campos.dia,
       a.supuestos.length && !a.propuesta ? el("p", { className: "supuestos", textContent: `Supuestos: ${a.supuestos.join("; ")}` }) : null,
       el("div", { className: "acciones" }, cuanto, quitar), respuesta,
@@ -966,6 +1034,9 @@ function mostrarPestana() {
   if ($("hoja").open) $("hoja").close();
   if (actual === "hoy") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
   else document.title = `TriData · ${mayuscula(actual)}`;
+  // unit 013: back in Hoy from another tab, the day is asked again (what was logged from Recetas shows)
+  if (actual === "hoy" && pestanaVista !== null && pestanaVista !== "hoy" && diaVisto) cargarDia(diaVisto);
+  pestanaVista = actual;
   if (actual === "peso") pintarPeso($("peso-contenido"));
   if (actual === "recetas") pintarRecetas($("recetas"));
   window.scrollTo(0, 0);

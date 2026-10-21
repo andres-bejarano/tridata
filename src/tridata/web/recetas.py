@@ -11,8 +11,12 @@
     POST /api/recetas/N/borrar        delete it; only with {"confirmado": true} (R-53)
     POST /api/fijos, /api/fijos/N, /api/fijos/N/borrar   add, change, delete a fixed food
     POST /api/ollas, /api/ollas/N, /api/ollas/N/borrar   add, change, delete a pot
+    POST /api/recetas/N/apuntar       unit 013: {"cantidad": n} grams of that recipe, logged today as eaten
+    POST /api/fijos/N/apuntar         {"cantidad": n} grams (per 100 g) or units (per unit) of that fixed food,
+                                      logged today as eaten. Both answer {"alimento": the saved row}; the kcal
+                                      are worked out here with what is saved, never taken from the page (R-57)
 
-Every route answers the whole listing plus the thing touched ("receta", "fijo" or "olla").
+Every other route answers the whole listing plus the thing touched ("receta", "fijo" or "olla").
 400 malformed data, 422 a business rule (its text says why), 404 it does not exist. The kcal of
 an ingredient that is a fixed food are always recomputed here, never taken from the page.
 """
@@ -27,7 +31,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from ..nutricion.recetas import ErrorDatos, Recetario, YaEsReceta
+from ..nutricion.recetas import ErrorDatos, Recetario, YaEsReceta, _numero
+from ..nutricion.registro import Alimento, RegistroComidas
 
 NO_ESTA = {"receta": "Esa receta ya no está guardada.", "fijo": "Ese alimento fijo ya no está guardado.",
            "olla": "Esa tara ya no está guardada."}
@@ -45,7 +50,7 @@ async def _cuerpo(request: Request) -> dict | None:
     return datos if isinstance(datos, dict) else None
 
 
-def rutas(recetario: Recetario, hoy: Callable[[], date]) -> list[Route]:
+def rutas(recetario: Recetario, hoy: Callable[[], date], registro: RegistroComidas) -> list[Route]:
     def respuesta(que: str, cosa: dict | None) -> JSONResponse:
         return JSONResponse({que: cosa, **recetario.listado()})
 
@@ -93,15 +98,37 @@ def rutas(recetario: Recetario, hoy: Callable[[], date]) -> list[Route]:
     async def listado(request: Request) -> Response:
         return JSONResponse(recetario.listado())
 
+    def apuntar(que: str) -> Callable[[Request], Any]:
+        """R-57, R-58: only the quantity is read from the page; anything else it sends is ignored."""
+        async def ruta(request: Request) -> Response:
+            cuerpo = await _cuerpo(request)
+            if cuerpo is None:
+                return _error("Lo enviado no se entiende: no se ha guardado nada.", 400)
+            try:
+                cantidad = _numero(cuerpo, "cantidad")
+                datos = recetario.para_apuntar(que, request.path_params["id"], cantidad)
+            except KeyError:
+                return _error(NO_ESTA[que], 404)
+            except ErrorDatos as exc:
+                return _error(f"No se ha guardado nada: {exc}.", 400)
+            except ValueError as exc:
+                return _error(f"No se ha guardado nada: {exc}.", 422)
+            dia = hoy()
+            alimento = registro.anadir(Alimento(dia=dia, **datos), dia)
+            return JSONResponse({"alimento": alimento})
+        return ruta
+
     return [
         Route("/api/recetas", listado),
         Route("/api/recetas", ejecutar("receta", nueva_receta), methods=["POST"]),
         Route("/api/recetas/{id:int}", ejecutar("receta", lambda d: recetario.corregir(d["_id"], d)), methods=["POST"]),
         Route("/api/recetas/{id:int}/version", ejecutar("receta", usar_version), methods=["POST"]),
         Route("/api/recetas/{id:int}/borrar", borrar("receta", recetario.borrar_receta), methods=["POST"]),
+        Route("/api/recetas/{id:int}/apuntar", apuntar("receta"), methods=["POST"]),
         Route("/api/fijos", ejecutar("fijo", recetario.crear_fijo), methods=["POST"]),
         Route("/api/fijos/{id:int}", ejecutar("fijo", lambda d: recetario.cambiar_fijo(d["_id"], d)), methods=["POST"]),
         Route("/api/fijos/{id:int}/borrar", borrar("fijo", recetario.borrar_fijo), methods=["POST"]),
+        Route("/api/fijos/{id:int}/apuntar", apuntar("fijo"), methods=["POST"]),
         Route("/api/ollas", ejecutar("olla", recetario.crear_olla), methods=["POST"]),
         Route("/api/ollas/{id:int}", ejecutar("olla", lambda d: recetario.cambiar_olla(d["_id"], d)), methods=["POST"]),
         Route("/api/ollas/{id:int}/borrar", borrar("olla", recetario.borrar_olla), methods=["POST"]),

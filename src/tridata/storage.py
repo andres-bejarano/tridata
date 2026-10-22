@@ -113,7 +113,16 @@ CREATE TABLE IF NOT EXISTS activity_weather (
     station_name TEXT,
     synced_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sync_estado (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    ok_en TEXT,
+    fallo_en TEXT,
+    fallo_motivo TEXT
+);
 """
+
+# Unit 018 (R-90, G-44): why the last sync with Garmin failed.
+MOTIVOS_FALLO_SYNC = ("sesion", "limite", "conexion")
 
 # Populate sync-state from any laps that pre-date this table (one-time migration).
 _MIGRATE_LAP_SYNC_STATE = """
@@ -317,6 +326,35 @@ class DataStore:
             }
         finally:
             check.close()
+
+    # -- Last sync with Garmin (unit 018, R-90, G-44) ----------------------
+
+    def marcar_sync_ok(self, cuando: datetime) -> None:
+        """A sync with Garmin ended well at `cuando` (local ISO, no time zone, to the second)."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO sync_estado (id, ok_en) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET ok_en = excluded.ok_en",
+                (cuando.isoformat(timespec="seconds"),),
+            )
+
+    def marcar_sync_fallo(self, cuando: datetime, motivo: str) -> None:
+        """A sync failed at `cuando` because of `motivo` (sesion | limite | conexion); the last good one stays."""
+        if motivo not in MOTIVOS_FALLO_SYNC:
+            raise ValueError(f"unknown sync failure: {motivo!r}")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO sync_estado (id, fallo_en, fallo_motivo) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE "
+                "SET fallo_en = excluded.fallo_en, fallo_motivo = excluded.fallo_motivo",
+                (cuando.isoformat(timespec="seconds"), motivo),
+            )
+
+    def estado_sync(self) -> dict | None:
+        """`{ok_en, fallo_en, fallo_motivo}` (ISO texts or None), or None if nothing was ever written down."""
+        with self._connect() as conn:
+            fila = conn.execute("SELECT ok_en, fallo_en, fallo_motivo FROM sync_estado WHERE id = 1").fetchone()
+        if fila is None:
+            return None
+        return {"ok_en": fila[0], "fallo_en": fila[1], "fallo_motivo": fila[2]}
 
     # -- Reads -----------------------------------------------------------
 

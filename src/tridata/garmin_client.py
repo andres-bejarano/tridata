@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from garminconnect import Garmin
+from garminconnect import Garmin, GarminConnectTooManyRequestsError
 
 from .models import (
     Activity, ActivityLap, BodyBatteryDay, DailyStats, FloorsRecord, HRVRecord,
@@ -39,6 +39,21 @@ DEFAULT_TOKEN_DIR = Path.home() / ".tridata" / "tokens"
 
 class GarminAuthError(RuntimeError):
     """Raised when login to Garmin Connect fails."""
+
+
+class GarminRateLimitError(RuntimeError):
+    """Raised when Garmin Connect answers 429 (too many requests) to the login (unit 018, G-45)."""
+
+
+def _es_429(exc: BaseException | None) -> bool:
+    """Whether `exc`, or what caused it, is Garmin limiting the requests (a 429)."""
+    vistos = 0
+    while exc is not None and vistos < 10:
+        if isinstance(exc, GarminConnectTooManyRequestsError) or "429" in str(exc):
+            return True
+        exc = exc.__cause__ or exc.__context__
+        vistos += 1
+    return False
 
 
 class GarminClient:
@@ -73,6 +88,8 @@ class GarminClient:
         try:
             api.login(str(self._token_dir))
         except Exception as exc:  # garminconnect raises several exception types
+            if _es_429(exc):  # unit 018: said apart, the routine waits longer (G-45)
+                raise GarminRateLimitError("Garmin Connect is limiting the requests (429)") from exc
             raise GarminAuthError(f"Could not authenticate with Garmin Connect: {exc}") from exc
         self._restrict_token_store()
         self._api = api

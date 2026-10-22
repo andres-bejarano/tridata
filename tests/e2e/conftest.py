@@ -6,6 +6,9 @@ are a temporary `DataStore` with one invented activity. «Today» is fixed on th
 phone's clock. Every value is invented. Unit 014: `Servidor.cierres` is the close of the day the app uses.
 Unit 016: `servidor.hoy = …` moves the server's «today» (`HOY` by default).
 Unit 017: `semana_de_prueba()`, `historial_de_prueba(desde)` and `hoy_con_garmin(pasos, previsto_kcal)`.
+Unit 018: `servidor.ahora` (the server's clock for the Garmin warning, 10:00 of `HOY` by default),
+`sync_de_prueba(ok_en, fallo_en=None, motivo=None)`, and `abrir()` on "/" waits for the day painted
+(`body[data-dia]`), never for the «Hoy» of the static HTML (R12).
 
 Optional: needs the `e2e` extra (`python -m pip install -e ".[dev,e2e]"` and, once,
 `python -m playwright install chromium`). Without Playwright these tests are skipped by
@@ -88,9 +91,11 @@ class Servidor:
         self.transcriptor.transcribir.return_value = TEXTO_DICTADO
         self.actualizar_garmin = MagicMock()
         self.hoy = HOY  # unit 016: a test may move the server's «today» (midnight)
+        self.ahora = RELOJ_DEL_MOVIL  # unit 018: the clock of the Garmin warning
+        self.con_ajustes = bool(ajustes)  # without settings the day never paints (a 409 says so)
         app = crear_app(self.registro, self.interprete, self.ajustes, hoy=lambda: self.hoy, pesos=self.pesos,
                         objetivos=self.objetivos, store=self.store, actualizar_garmin=self.actualizar_garmin,
-                        transcriptor=self.transcriptor, cierres=self.cierres)
+                        transcriptor=self.transcriptor, cierres=self.cierres, ahora=lambda: self.ahora)
         self.puerto = _puerto_libre()
         self.url = f"http://127.0.0.1:{self.puerto}"
         self._server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=self.puerto, log_level="warning"))
@@ -151,6 +156,14 @@ class Servidor:
                 self.pesos.apuntar(dia, round(76 - i * 0.02, 1), hoy=HOY)
         self.cierres.al_dia(HOY)
 
+    def sync_de_prueba(self, ok_en: datetime | None, fallo_en: datetime | None = None,
+                       motivo: str | None = None) -> None:
+        """Unit 018: the last good sync with Garmin and, if given, a failed one after it."""
+        if ok_en is not None:
+            self.store.marcar_sync_ok(ok_en)
+        if fallo_en is not None:
+            self.store.marcar_sync_fallo(fallo_en, motivo or "sesion")
+
     def hoy_con_garmin(self, pasos: int, previsto_kcal: float) -> None:
         """Today's Garmin steps (no total yet) and a planned swim of `previsto_kcal` in `objetivo_dia`."""
         self.store.save_daily_stats(DailyStats(stat_date=HOY, steps=pasos, total_calories=None))
@@ -195,11 +208,14 @@ def navegador():
 def abrir(navegador):
     """`abrir(servidor, ruta="/", oscuro=False)` -> a page of a new phone (390 × 844, touch, es-ES).
 
-    The page fails the test if it throws a JavaScript error.
+    The page fails the test if it throws a JavaScript error. Unit 018: on "/" it waits until the first day is
+    painted (`body[data-dia]`), unless `esperar=False`; `antes(pagina)` runs before the page is loaded (e.g. a
+    `page.route` that delays an answer).
     """
     contextos, errores = [], []
 
-    def _abrir(servidor: Servidor, ruta: str = "/", *, oscuro: bool = False, service_worker: bool = False):
+    def _abrir(servidor: Servidor, ruta: str = "/", *, oscuro: bool = False, service_worker: bool = False,
+               esperar: bool = True, antes=None):
         contexto = navegador.new_context(
             viewport={"width": ANCHO, "height": ALTO}, device_scale_factor=2, has_touch=True, is_mobile=True,
             locale="es-ES", timezone_id="Europe/Madrid", color_scheme="dark" if oscuro else "light",
@@ -209,7 +225,11 @@ def abrir(navegador):
         pagina = contexto.new_page()
         pagina.on("pageerror", lambda e: errores.append(str(e)))
         pagina.clock.install(time=RELOJ_DEL_MOVIL)
+        if antes is not None:
+            antes(pagina)
         pagina.goto(servidor.url + ruta)
+        if ruta == "/" and esperar and servidor.con_ajustes:
+            pagina.wait_for_selector("body[data-dia]", state="attached")
         return pagina
 
     yield _abrir

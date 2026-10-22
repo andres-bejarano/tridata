@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import shutil
 import sys
 from collections.abc import Callable, Mapping
@@ -54,16 +55,19 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
+from garminconnect import GarminConnectTooManyRequestsError
 
 from .exporters import (
     CyclingMarkdownExporter, GymMarkdownExporter, JSONExporter, MarkdownExporter,
     MetricsMarkdownExporter, PMCMarkdownExporter, RunningMarkdownExporter,
     SwimmingMarkdownExporter,
 )
-from .garmin_client import GarminAuthError, GarminClient
+from .garmin_client import GarminAuthError, GarminClient, GarminRateLimitError
 from .metrics import compute_pmc, daily_tss
 from .storage import DEFAULT_DB_PATH, DataStore
-from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncService
+from .sync import (
+    ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncService, desde_para_actualizar,
+)
 
 DEFAULT_BACKUP_DIR = DEFAULT_DB_PATH.parent / "backups"
 
@@ -71,6 +75,52 @@ EXPORTERS = {
     "json": JSONExporter,
     "markdown": MarkdownExporter,
 }
+
+# -- unit 018: sync.log stays clean (R-60, Q-3): a failure is one line, no trace, no e-mail, no response body --
+LARGO_LOG = 200
+CODIGO_LIMITE = 75  # `tridata sync` exits with this on a 429: daily_update.sh then waits longer (G-45)
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+
+
+def _ahora() -> datetime:
+    """The clock of the sync record (a test puts its own)."""
+    return datetime.now()
+
+
+def limpiar_para_log(texto: str) -> str:
+    """One line for sync.log: no e-mail (it says `<email>`), nothing from the first «{» or «[» on (Garmin's
+    response bodies, which carry health data) and at most `LARGO_LOG` characters."""
+    email = os.environ.get("GARMIN_EMAIL")
+    if email:
+        texto = texto.replace(email, "<email>")
+    texto = _EMAIL.sub("<email>", texto)
+    corte = min((i for i in (texto.find("{"), texto.find("[")) if i >= 0), default=-1)
+    if corte >= 0:
+        texto = texto[:corte].rstrip() + " …"
+    texto = " ".join(texto.split())
+    return texto if len(texto) <= LARGO_LOG else texto[:LARGO_LOG - 1] + "…"
+
+
+class _LogLimpio(logging.Filter):
+    """On the handlers of `main()`: drops traces (`exc_info`, `stack_info`) and cleans every message, also the
+    `logger.exception` of garminconnect and garth, which add the response body."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = limpiar_para_log(record.getMessage())
+        record.args = None
+        record.exc_info = None
+        record.exc_text = None
+        record.stack_info = None
+        return True
+
+
+def _motivo_del_fallo(exc: BaseException) -> tuple[str, int]:
+    """`(motivo, exit code)` of a failed sync: sesion/1, limite/75 (a 429) or conexion/1 (anything else)."""
+    if isinstance(exc, (GarminRateLimitError, GarminConnectTooManyRequestsError)):
+        return "limite", CODIGO_LIMITE
+    if isinstance(exc, GarminAuthError):
+        return "sesion", 1
+    return "conexion", 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -228,6 +278,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    for handler in logging.getLogger().handlers:  # unit 018: sync.log never gets a trace nor a response body
+        if not any(isinstance(f, _LogLimpio) for f in handler.filters):
+            handler.addFilter(_LogLimpio())
     load_dotenv()
 
     parser = _build_parser()
@@ -257,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         client = GarminClient(email, password)
         svc = SyncService(client, store)
+        normal = not args.laps and not args.weather  # only the normal sync is written down (R-90)
         try:
             if args.laps:
                 n = svc.sync_laps(limit=args.laps_backfill_limit)
@@ -272,11 +326,16 @@ def main(argv: list[str] | None = None) -> int:
                 # can no longer strand data the moment the month rolls over.
                 since = args.since or (date.today() - timedelta(days=45))
                 svc.sync(since=since, revalidate_days=args.revalidate_days)
-                print("Sync complete.")
-                _cerrar_dias(store)
-        except GarminAuthError as exc:
-            print(f"Login failed: {exc}", file=sys.stderr)
-            return 1
+        except Exception as exc:  # noqa: BLE001 - unit 018: one line with the motive, what was saved stays (G-2)
+            motivo, codigo = _motivo_del_fallo(exc)
+            print(f"sync FAILED: {motivo} ({type(exc).__name__}: {limpiar_para_log(str(exc))})", file=sys.stderr)
+            if normal:
+                store.marcar_sync_fallo(_ahora(), motivo)
+            return codigo
+        if normal:
+            store.marcar_sync_ok(_ahora())
+            print("Sync complete.")
+            _cerrar_dias(store)
         return 0
 
     if args.command == "export":
@@ -666,10 +725,11 @@ def _cmd_importar_detalle(md: Path, simular: bool, *, db_path: Path = DEFAULT_DB
 
 
 def _actualizador_garmin(store: DataStore, entorno: Mapping[str, str] | None = None) -> Callable[[date], None] | None:
-    """The «Actualizar Garmin» button: the same sync as `tridata sync`, for one day only.
+    """The «Actualizar Garmin» button: the same sync as `tridata sync`, from the day of the last good sync to
+    `dia` (unit 018, R-90: at most 45 days; without a record, only that day, as before).
 
-    `revalidate_days=1` fetches today again even if it already has a row. Nothing talks to Garmin
-    until it is called. None without GARMIN_EMAIL / GARMIN_PASSWORD (the button says so).
+    `revalidate_days` covers every one of those days, so they are fetched again even if they have a row.
+    Nothing talks to Garmin until it is called. None without GARMIN_EMAIL / GARMIN_PASSWORD (the button says so).
     """
     entorno = os.environ if entorno is None else entorno
     email, password = entorno.get("GARMIN_EMAIL"), entorno.get("GARMIN_PASSWORD")
@@ -677,7 +737,9 @@ def _actualizador_garmin(store: DataStore, entorno: Mapping[str, str] | None = N
         return None
 
     def actualizar(dia: date) -> None:
-        SyncService(GarminClient(email, password), store).sync(since=dia, until=dia, revalidate_days=1)
+        desde = desde_para_actualizar(store.estado_sync(), dia)
+        SyncService(GarminClient(email, password), store).sync(since=desde, until=dia,
+                                                               revalidate_days=(dia - desde).days + 1)
 
     return actualizar
 

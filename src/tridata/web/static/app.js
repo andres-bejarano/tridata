@@ -26,10 +26,16 @@
 // page asks the day again when it comes back to the front and every minute in sight, and past midnight it
 // moves from the old today to the new one; an open card survives a repaint; confirming sends the day of the
 // list and reinterpreting a list of the queue sends the day it was recorded.
+// Unit 019: in «Añadir a mano» and in each review card the name is the search box of buscador.js; choosing a
+// saved recipe or ingredient leaves only how much (grams, units, or the whole recipe / ½ / ⅓ / ¼) with its kcal at
+// once, and the food goes with `guardado: {tipo, id}` so the server logs it with ITS kcal. «Cambiar» goes back to
+// the free fields. A fraction reads «la receta entera», «½ receta»…; an origin «de tu alimento fijo …» logged
+// before the rename reads «de tu ingrediente …» (the base is not rewritten).
 
 import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
 import { pintarBalance } from "./balance.js";
+import { buscador, cajaElegida, cargarGuardado, cosaGuardada, cuenta, leerOrigen, origenDe, textoReceta, unidadPropia } from "./buscador.js";
 import { pintarPeso } from "./peso.js";
 import { pintarRecetas } from "./recetas.js";
 
@@ -77,7 +83,13 @@ function el(etiqueta, props = {}, ...hijos) {
 }
 
 const kcal = (n) => (n === null || n === undefined ? "—" : `${kcalEnteras(n)} kcal`);
-const cantidad = (a) => (a.cantidad === null ? "sin cantidad" : `${numero.format(a.cantidad)} ${a.unidad ?? ""}`.trim());
+const cantidad = (a) => {
+  if (a.cantidad === null) return "sin cantidad";
+  if (a.unidad === "receta") return textoReceta(a.cantidad); // unit 019: «la receta entera», «½ receta»
+  return `${numero.format(a.cantidad)} ${a.unidad ?? ""}`.trim();
+};
+// unit 019: a food chosen from the saved ones (an object; Claude's `guardado` is a name, not a choice)
+const esElegido = (a) => Boolean(a.guardado) && typeof a.guardado === "object";
 const deFecha = (iso) => fechaLarga.format(new Date(`${iso}T12:00:00`)).replace(",", "");
 const sumarDias = (iso, n) => {
   const d = new Date(`${iso}T12:00:00Z`);
@@ -318,7 +330,7 @@ function filaAlimento(a) {
   const detalle = el("span", { className: a.cantidad === null ? "sin-cantidad" : "" }, a.cantidad === null ? "" : cantidad(a));
   if (a.estimado) detalle.append(el("i", { className: "marca", textContent: "estimado" }));
   if (a.provisional) detalle.append(el("i", { className: "marca", textContent: "provisional" }));
-  if (a.origen) detalle.append(el("i", { className: "marca origen", textContent: a.origen }));
+  if (a.origen) detalle.append(el("i", { className: "marca origen", textContent: leerOrigen(a.origen) }));
   if (a.pendiente_cantidad) detalle.append(el("i", { className: "marca alerta", textContent: "falta cantidad" }));
   if (kcalAMano(a)) detalle.append(el("i", { className: "marca", textContent: "kcal a mano" }));
   const cuenta = !a.pendiente_cantidad && a.kcal !== null;
@@ -630,7 +642,10 @@ async function simularRevision() {
 }
 
 // Inputs of a saved-food card; `leer()` takes what is typed at that moment (R7).
-function camposFicha(a) {
+// Unit 019: with `buscar` («Añadir a mano», not the card to change one) the name is the search box; once a saved
+// thing is chosen, quantity, unit, kcal and kcal/100 g give way to only how much of it, and `leer()` says
+// `guardado: {tipo, id}` (the kcal it sends are only shown: the server works them out again).
+function camposFicha(a, { buscar = false } = {}) {
   const nombre = campo("Alimento", a.nombre, "text");
   const cant = campo("Cantidad", a.cantidad, "number", null, { step: "any", min: "0", inputMode: "decimal" });
   const unidad = campo("Unidad", a.unidad, "text");
@@ -641,7 +656,33 @@ function camposFicha(a) {
   cant.entrada.addEventListener("input", alCambiarCantidad);
   unidad.entrada.addEventListener("input", alCambiarCantidad);
   alCambiarCantidad();
+  const libres = [el("div", { className: "fila" }, cant, unidad, kc), por100.caja];
+  const cuanto = el("div", { className: "cuanto" }, ...libres);
+  let elegido = null; // { tipo, cosa, caja }
+  let lista = null;
+  if (buscar) {
+    const soltar = () => {
+      elegido = null;
+      nombre.entrada.readOnly = false;
+      cuanto.replaceChildren(...libres);
+      nombre.entrada.focus();
+    };
+    lista = buscador({
+      entrada: nombre.entrada,
+      alElegir: ({ tipo, cosa }) => {
+        elegido = { tipo, cosa, caja: cajaElegida({ tipo, cosa, alSoltar: soltar }) };
+        nombre.entrada.readOnly = true;
+        cuanto.replaceChildren(elegido.caja.caja);
+        elegido.caja.foco();
+      },
+    });
+  }
   const leer = () => {
+    if (elegido) {
+      const c = elegido.caja.leer();
+      return { nombre: elegido.cosa.nombre, cantidad: c.cantidad, unidad: c.unidad, kcal: c.kcal, dia: dia.entrada.value,
+        guardado: { tipo: elegido.tipo, id: elegido.cosa.id } };
+    }
     const datos = {
       nombre: nombre.entrada.value.trim(), cantidad: comoNumero(cant.entrada.value),
       unidad: unidad.entrada.value.trim() || null, kcal: comoNumero(kc.entrada.value), dia: dia.entrada.value,
@@ -649,7 +690,7 @@ function camposFicha(a) {
     if (datos.cantidad !== null && !datos.unidad) datos.unidad = "g";
     return datos;
   };
-  const nodos = [nombre, el("div", { className: "fila" }, cant, unidad, kc), por100.caja, dia];
+  const nodos = [nombre, lista, cuanto, dia];
   return { nodos, leer, foco: () => nombre.entrada.focus() };
 }
 
@@ -657,6 +698,9 @@ function camposFicha(a) {
 function falta(datos) {
   if (!datos.nombre) return "Ponle nombre al alimento.";
   if (!datos.dia) return `Pon el día de «${datos.nombre}».`;
+  if (datos.guardado) { // unit 019: chosen from the saved ones, only how much is missing; the server does the rest
+    return datos.cantidad === null || Number.isNaN(datos.cantidad) || !(datos.cantidad > 0) ? `Pon cuánto has cogido de «${datos.nombre}».` : "";
+  }
   if (datos.cantidad !== null && (Number.isNaN(datos.cantidad) || datos.cantidad <= 0)) return `La cantidad de «${datos.nombre}» no vale.`;
   if (datos.kcal !== null && Number.isNaN(datos.kcal)) return `Las kcal de «${datos.nombre}» no valen.`;
   if (datos.cantidad !== null && datos.kcal === null) return `Pon las kcal de «${datos.nombre}».`;
@@ -681,7 +725,7 @@ function ficha({ campos, textoGuardar, enviar, alCancelar }) {
     guardar.disabled = false;
     if (error) avisar(error);
   });
-  const tarjeta = el("article", { className: "tarjeta" }, ...campos.nodos, aviso, acciones);
+  const tarjeta = el("article", { className: "tarjeta" }, ...campos.nodos.filter(Boolean), aviso, acciones);
   return { tarjeta, acciones, avisar };
 }
 
@@ -730,7 +774,7 @@ function fichaCambio(a) {
 
 // Empty card under the table to add a food by hand, without the AI, on the day being looked at.
 function fichaAnadir(fecha) {
-  const campos = camposFicha({ nombre: "", cantidad: null, unidad: null, kcal: null, dia: fecha });
+  const campos = camposFicha({ nombre: "", cantidad: null, unidad: null, kcal: null, dia: fecha }, { buscar: true });
   const { tarjeta } = ficha({
     campos, textoGuardar: "Guardar",
     alCancelar: () => { anadiendo = false; mensaje(""); pintarDia(ultimoDia); },
@@ -858,7 +902,7 @@ function pintarRevision() {
       if (a.dia > revision.hoy) m.push(el("span", { className: "marca", textContent: `planeado: ${deFecha(a.dia)}` }));
       else if (a.dia && a.dia < revision.hoy) m.push(el("span", { className: "marca", textContent: deFecha(a.dia) }));
       if (a.anadida) m.push(el("span", { className: "marca", textContent: "añadido a mano" }));
-      if (a.origen) m.push(el("span", { className: "marca origen", textContent: a.origen }));
+      if (a.origen) m.push(el("span", { className: "marca origen", textContent: leerOrigen(a.origen) }));
       if (a.provisional) m.push(el("span", { className: "marca", textContent: "provisional" }));
       return m;
     };
@@ -878,32 +922,54 @@ function pintarRevision() {
       nombre: (v) => v.trim(), cantidad: comoNumero, unidad: (v) => v.trim() || null, kcal: comoNumero, dia: (v) => v,
     };
     const numerico = { step: "any", min: "0", inputMode: "decimal" };
-    const campos = {
-      nombre: campo("Alimento", a.nombre, "text", repintar(aplicar("nombre", conversiones.nombre))),
-      cantidad: campo("Cantidad", a.cantidad, "number", repintar(aplicar("cantidad", comoNumero)), numerico),
-      unidad: campo("Unidad", a.unidad, "text", repintar(aplicar("unidad", conversiones.unidad))),
-      kcal: campo("kcal", a.kcal, "number", repintar(aplicar("kcal", comoNumero)), numerico),
-      dia: campo("Día", a.dia, "date", repintar(aplicar("dia"))),
-    };
-    // unit 013 (R-56): kcal/100 g, kept per food while the review lives (never sent, never saved)
-    const por100 = kcalPor100(porCien.get(a) ?? null, (k) => {
-      campos.kcal.entrada.value = String(k);
-      aplicar("kcal", comoNumero)(campos.kcal.entrada.value);
-      cajaMarcas.replaceChildren(...marcas());
-      pintarBloqueo();
-      programarSimulacion();
-    }, (v) => { if (v === null) porCien.delete(a); else porCien.set(a, v); });
+    const actualizar = () => { cajaMarcas.replaceChildren(...marcas()); pintarBloqueo(); programarSimulacion(); };
+    const nombre = campo("Alimento", a.nombre, "text", repintar(aplicar("nombre", conversiones.nombre)));
+    // unit 019: the name is the search box; what is chosen keeps its kcal (shown here, worked out on the server)
+    const lista = buscador({ entrada: nombre.entrada, alElegir: ({ tipo, cosa }) => elegirEnRevision(a, tipo, cosa) });
+    const cosa = esElegido(a) ? cosaGuardada(a.guardado) : null;
+    let campos;
+    let cajaCuanto;
+    let por100 = null;
+    if (cosa) {
+      nombre.entrada.readOnly = true;
+      campos = { nombre, dia: campo("Día", a.dia, "date", repintar(aplicar("dia"))) };
+      const caja = cajaElegida({
+        tipo: a.guardado.tipo, cosa, cantidad: a.cantidad, unidad: a.unidad,
+        alCambiar: (c) => { Object.assign(a, { cantidad: c.cantidad, unidad: c.unidad, kcal: c.kcal, provisional: c.provisional }); actualizar(); },
+        alSoltar: () => {
+          for (const leer of lectores) leer();
+          lectores = [];
+          Object.assign(a, { guardado: null, origen: null, provisional: false });
+          pintarRevision();
+        },
+      });
+      cajaCuanto = caja.caja;
+    } else {
+      campos = {
+        nombre,
+        cantidad: campo("Cantidad", a.cantidad, "number", repintar(aplicar("cantidad", comoNumero)), numerico),
+        unidad: campo("Unidad", a.unidad, "text", repintar(aplicar("unidad", conversiones.unidad))),
+        kcal: campo("kcal", a.kcal, "number", repintar(aplicar("kcal", comoNumero)), numerico),
+        dia: campo("Día", a.dia, "date", repintar(aplicar("dia"))),
+      };
+      // unit 013 (R-56): kcal/100 g, kept per food while the review lives (never sent, never saved)
+      por100 = kcalPor100(porCien.get(a) ?? null, (k) => {
+        campos.kcal.entrada.value = String(k);
+        aplicar("kcal", comoNumero)(campos.kcal.entrada.value);
+        actualizar();
+      }, (v) => { if (v === null) porCien.delete(a); else porCien.set(a, v); });
+      cajaCuanto = el("div", { className: "cuanto" }, el("div", { className: "fila" }, campos.cantidad, campos.unidad, campos.kcal), por100.caja);
+    }
     // Typing keeps the model, the marks and the block reason current without repainting the cards.
     for (const [clave, c] of Object.entries(campos)) {
       c.entrada.addEventListener("input", () => {
+        if (c.entrada.readOnly) return;
         aplicar(clave, conversiones[clave])(c.entrada.value);
-        if (clave === "cantidad" || clave === "unidad") por100.cambiar(a.cantidad, a.unidad);
-        cajaMarcas.replaceChildren(...marcas());
-        pintarBloqueo();
-        programarSimulacion();
+        if (por100 && (clave === "cantidad" || clave === "unidad")) por100.cambiar(a.cantidad, a.unidad);
+        actualizar();
       });
     }
-    por100.cambiar(a.cantidad, a.unidad);
+    if (por100) por100.cambiar(a.cantidad, a.unidad);
     // R9: on "Confirmar", what is in the inputs at that moment is what gets saved.
     lectores.push(() => {
       for (const [clave, c] of Object.entries(campos)) aplicar(clave, conversiones[clave])(c.entrada.value);
@@ -912,8 +978,8 @@ function pintarRevision() {
       cajaMarcas,
       propuesta,
       campos.nombre,
-      el("div", { className: "fila" }, campos.cantidad, campos.unidad, campos.kcal),
-      por100.caja,
+      lista,
+      cajaCuanto,
       campos.dia,
       a.supuestos.length && !a.propuesta ? el("p", { className: "supuestos", textContent: `Supuestos: ${a.supuestos.join("; ")}` }) : null,
       el("div", { className: "acciones" }, cuanto, quitar), respuesta,
@@ -923,6 +989,26 @@ function pintarRevision() {
   $("piezas").replaceChildren(...tarjetasPiezas());
   pintarBloqueo();
   programarSimulacion();
+}
+
+// Unit 019 (R5): a saved recipe or ingredient chosen on a review card. What is typed in the other cards is kept;
+// this card's quantity stays only if it fits what was chosen (grams of a weighed recipe, the unit of an ingredient).
+function elegirEnRevision(a, tipo, cosa) {
+  for (const leer of lectores) leer();
+  lectores = []; // …and this card's old inputs are not read back over the choice
+  const propia = tipo === "fijo" ? unidadPropia(cosa) : "g";
+  const sirve = a.cantidad > 0 && a.unidad === propia && (tipo === "fijo" || !cuenta(tipo, cosa, a.cantidad, "g").problema);
+  const c = sirve ? cuenta(tipo, cosa, a.cantidad, propia) : null;
+  Object.assign(a, {
+    nombre: cosa.nombre, guardado: { tipo, id: cosa.id }, cantidad: sirve ? a.cantidad : null, unidad: sirve ? propia : null,
+    kcal: c ? c.kcal : null, estimado: false, dudoso: false, supuestos: [], propuesta: null, kcal_estimada: null,
+    coincidencia: null, origen: origenDe(tipo, cosa), provisional: c ? c.provisional : false,
+    proteina_g: null, hidratos_g: null, grasa_g: null,
+  });
+  pintarRevision();
+  const tarjeta = $("lista").children[revision.alimentos.indexOf(a)];
+  const foco = tarjeta && tarjeta.querySelector(".elegida input, .elegida button.fraccion");
+  if (foco) foco.focus();
 }
 
 // Unit 011 (R4): «you said X: I propose your recipe Y», and the way back to Claude's estimate.
@@ -1009,6 +1095,7 @@ function motivoBloqueo() {
   const dudosos = nombres((a) => a.dudoso);
   const sinKcal = nombres((a) => !a.dudoso && a.nombre && a.cantidad !== null && a.kcal === null);
   const malos = nombres((a) => a.nombre && ((a.cantidad !== null && !(a.cantidad > 0)) || Number.isNaN(a.kcal) || !a.dia));
+  const sinCuanto = nombres((a) => esElegido(a) && !(a.cantidad > 0)); // unit 019: chosen, only how much is missing
   const { peso, objetivo, dudosas } = revision;
   if (dudosas.length) return `No sé dónde poner ${dudosas.map((d) => `«${d}»`).join(", ")}: quítalo para poder confirmar.`;
   if (!lista.length && !peso && !objetivo) return "No queda nada que guardar.";
@@ -1021,6 +1108,7 @@ function motivoBloqueo() {
   if (!lista.length) return "";
   if (lista.some((a) => !a.nombre)) return "Hay un alimento sin nombre: ponle nombre o quítalo para poder confirmar.";
   if (dudosos.length) return `No entiendo ${dudosos.join(", ")}: corrígelo o quítalo para poder confirmar.`;
+  if (sinCuanto.length) return `Pon cuánto has cogido de ${sinCuanto.join(", ")}.`;
   if (malos.length) return `Revisa la cantidad, las kcal o el día de ${malos.join(", ")}.`;
   if (sinKcal.length) return `Pon las kcal de ${sinKcal.join(", ")}.`;
   return "";
@@ -1190,6 +1278,7 @@ function mostrarPestana() {
     diaPedido = null;
     irA(fecha);
   } else if (actual === "hoy" && pestanaVista !== null && pestanaVista !== "hoy" && diaVisto) cargarDia(diaVisto);
+  if (pestanaVista === "recetas" && actual !== "recetas") cargarGuardado({ otraVez: true }); // unit 019: the search box
   pestanaVista = actual;
   if (actual === "balance") pintarBalance($("balance-contenido"), irADia);
   if (actual === "peso") pintarPeso($("peso-contenido"));

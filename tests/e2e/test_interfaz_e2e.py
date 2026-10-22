@@ -528,10 +528,10 @@ def test_recetas_vacia(servidor, abrir):  # R11
     seccion = p.locator("section#recetas")
     # unit 011 replaced the empty placeholder by the real tab: its three sections, each one empty
     # with its own add button, and no «próximamente» any more
-    for texto in ("Recetas", "Taras", "Alimentos fijos"):
+    for texto in ("Recetas", "Taras", "Ingredientes"):
         expect(seccion).to_contain_text(texto)
     expect(seccion.locator(".vacio-apartado")).to_have_count(3)
-    for boton in ("＋ Añadir receta", "＋ Añadir tara", "＋ Añadir alimento fijo"):
+    for boton in ("＋ Añadir receta", "＋ Añadir tara", "＋ Añadir ingrediente"):
         expect(seccion.get_by_role("button", name=boton)).to_be_enabled()
     expect(seccion.get_by_text("próximamente")).to_have_count(0)
     p.wait_for_timeout(300)

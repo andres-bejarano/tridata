@@ -11,10 +11,14 @@
     POST /api/recetas/N/borrar        delete it; only with {"confirmado": true} (R-53)
     POST /api/fijos, /api/fijos/N, /api/fijos/N/borrar   add, change, delete a fixed food
     POST /api/ollas, /api/ollas/N, /api/ollas/N/borrar   add, change, delete a pot
-    POST /api/recetas/N/apuntar       unit 013: {"cantidad": n} grams of that recipe, logged today as eaten
+    POST /api/recetas/N/apuntar       unit 013: {"cantidad": n} grams of that recipe, logged today as eaten. Unit
+                                      019: {"cantidad": f, "unidad": "receta"} a fraction of it (1 the whole
+                                      recipe, 0.5 half…), also not weighed (then provisional)
     POST /api/fijos/N/apuntar         {"cantidad": n} grams (per 100 g) or units (per unit) of that fixed food,
                                       logged today as eaten. Both answer {"alimento": the saved row}; the kcal
-                                      are worked out here with what is saved, never taken from the page (R-57)
+                                      are worked out here with what is saved, never taken from the page (R-57).
+                                      Both read an optional "unidad" ("g", "unidad" or "receta"; none is the
+                                      thing's own): one that does not fit is a 422 and nothing is saved
 
 Every other route answers the whole listing plus the thing touched ("receta", "fijo" or "olla").
 400 malformed data, 422 a business rule (its text says why), 404 it does not exist. The kcal of
@@ -34,7 +38,7 @@ from starlette.routing import Route
 from ..nutricion.recetas import ErrorDatos, Recetario, YaEsReceta, _numero
 from ..nutricion.registro import Alimento, RegistroComidas
 
-NO_ESTA = {"receta": "Esa receta ya no está guardada.", "fijo": "Ese alimento fijo ya no está guardado.",
+NO_ESTA = {"receta": "Esa receta ya no está guardada.", "fijo": "Ese ingrediente ya no está guardado.",
            "olla": "Esa tara ya no está guardada."}
 
 
@@ -99,14 +103,17 @@ def rutas(recetario: Recetario, hoy: Callable[[], date], registro: RegistroComid
         return JSONResponse(recetario.listado())
 
     def apuntar(que: str) -> Callable[[Request], Any]:
-        """R-57, R-58: only the quantity is read from the page; anything else it sends is ignored."""
+        """R-57, R-58: only the quantity and its unit are read from the page; anything else it sends is ignored."""
         async def ruta(request: Request) -> Response:
             cuerpo = await _cuerpo(request)
             if cuerpo is None:
                 return _error("Lo enviado no se entiende: no se ha guardado nada.", 400)
             try:
                 cantidad = _numero(cuerpo, "cantidad")
-                datos = recetario.para_apuntar(que, request.path_params["id"], cantidad)
+                unidad = cuerpo.get("unidad")
+                if unidad is not None and not isinstance(unidad, str):
+                    raise ErrorDatos("unidad no válida")
+                datos = recetario.para_apuntar(que, request.path_params["id"], cantidad, unidad or None)
             except KeyError:
                 return _error(NO_ESTA[que], 404)
             except ErrorDatos as exc:

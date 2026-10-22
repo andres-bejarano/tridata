@@ -167,7 +167,7 @@ def test_alimento_fijo_por_unidad_con_alias(rec):  # R3, R-49, C-54
                     "nota": "no la fruta"})
     r = rec.resolver(dicho("guayaba", 2, unidad="unidad", kcal=120, guardado="guayaba", coincidencia="exacta"))
     assert (r["nombre"], r["cantidad"], r["kcal"], r["estimado"]) == ("dulce de guayaba de ciclismo", 2, 180, False)
-    assert r["origen"] == "de tu alimento fijo «dulce de guayaba de ciclismo»"
+    assert r["origen"] == "de tu ingrediente «dulce de guayaba de ciclismo»"
 
 
 def test_lo_desconocido_se_estima_como_siempre(rec):  # R4, C-45

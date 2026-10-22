@@ -59,7 +59,7 @@ def _apartado(p, cual: str):
 
 def _nuevo_fijo(p, nombre, kcal, por="por 100 g", alias=""):
     apartado = _apartado(p, "fijos")
-    apartado.get_by_role("button", name="＋ Añadir alimento fijo").click()
+    apartado.get_by_role("button", name="＋ Añadir ingrediente").click()
     ficha = apartado.locator(".ficha-fijo")
     ficha.get_by_label("Nombre").fill(nombre)
     ficha.get_by_label("kcal").fill(str(kcal))
@@ -105,7 +105,7 @@ def _garbanzos(p, capturar=None, sufijo=""):
 def test_recetas_vacia_tres_apartados(servidor, abrir, capturar):  # R11
     p = abrir(servidor, "/#recetas")
     for cual, titulo, boton in (("recetas", "Recetas", "＋ Añadir receta"), ("taras", "Taras", "＋ Añadir tara"),
-                                ("fijos", "Alimentos fijos", "＋ Añadir alimento fijo")):
+                                ("fijos", "Ingredientes", "＋ Añadir ingrediente")):
         apartado = _apartado(p, cual)
         expect(apartado).to_contain_text(titulo)
         expect(apartado.locator(".vacio-apartado")).to_be_visible()

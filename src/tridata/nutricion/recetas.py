@@ -460,7 +460,7 @@ class Recetario:
             tipo, ident, nombre = dueno
             if tipo == "receta" and propio == ("receta", None):
                 raise YaEsReceta(nombre, ident)
-            que = {"receta": "tu receta", "fijo": "tu alimento fijo", "olla": "tu olla"}[tipo]
+            que = {"receta": "tu receta", "fijo": "tu ingrediente", "olla": "tu olla"}[tipo]  # S-21: «ingrediente» on screen
             raise ValueError(f"«{normalizar(n)}» ya es {que} «{nombre}»")
 
     # -- fixed foods ----------------------------------------------------------------------------------
@@ -729,7 +729,7 @@ class Recetario:
             if kcal is None:
                 como = "por 100 g: dilo en gramos" if cosa["por"] == "100g" else "por unidad: dilo en unidades"
                 return {"problema": f"«{cosa['nombre']}» está guardado {como}", "dudoso": False}
-            return {"kcal": kcal, "origen": f"de tu alimento fijo «{cosa['nombre']}»", "provisional": False}
+            return {"kcal": kcal, "origen": f"de tu ingrediente «{cosa['nombre']}»", "provisional": False}
         v = cosa["en_uso"]
         tanda = f" (tanda {v['numero']})" if len(cosa["versiones"]) > 1 else ""
         origen = f"de tu receta «{cosa['nombre']}»{tanda}"
@@ -753,33 +753,37 @@ class Recetario:
         return {"problema": f"«{cosa['nombre']}» está guardada por gramos o por fracción de la receta: dilo así",
                 "dudoso": False}
 
-    def para_apuntar(self, tipo: str, ident: int, cantidad: float | None) -> dict:
-        """Unit 013 (R-57, R-58): what «Apuntar en hoy» logs for `cantidad` of a saved recipe or fixed food.
+    def para_apuntar(self, tipo: str, ident: int, cantidad: float | None, unidad: str | None = None) -> dict:
+        """Units 013 and 019 (R-57, R-58): what is logged for `cantidad` of a saved recipe or fixed food.
 
-        Grams for a recipe and for a fixed food per 100 g, units for one per unit. The kcal come from
-        `_calcular` with what is saved, never from the page. `ValueError` with the text for Andrés if it
-        cannot be worked out (no quantity, not weighed and no approximate kcal/100 g, a doubtful
-        ingredient); `KeyError` if it does not exist.
+        `unidad` None is the thing's own: grams for a recipe and for a fixed food per 100 g, units for one per
+        unit. A recipe also goes by fractions (`unidad="receta"`, `cantidad` > 0: ½ is 0.5), weighed or not: not
+        weighed it is provisional; only by grams does it need its weight or approximate kcal/100 g. The kcal
+        come from `_calcular` with what is saved, never from the page. `ValueError` with the text for Andrés if
+        it cannot be worked out (no quantity, another unit, not weighed by grams, a doubtful ingredient, a recipe
+        to review); `KeyError` if it does not exist.
         """
         with self._connect() as conn:
             if tipo == "fijo":
                 cosa = self._fijo_fila(self._leer(conn, "alimento_fijo", ident))
-                unidad = "g" if cosa["por"] == "100g" else "unidad"
+                unidad = unidad or ("g" if cosa["por"] == "100g" else "unidad")
             elif tipo == "receta":
                 cosa = self._receta_de(conn, self._leer(conn, "receta", ident))
-                unidad = "g"
+                unidad = unidad or "g"
             else:
                 raise KeyError(tipo)
         if cantidad is None or cantidad <= 0:
             raise ValueError("escribe cuánto has cogido")
         if tipo == "receta":
             v = cosa["en_uso"]
+            if cosa["por_revisar"]:
+                raise ValueError(f"corrige la receta «{cosa['nombre']}» en la pestaña Recetas: está por revisar")
             if v is None or v["estado"] == "sin_kcal":
                 raise ValueError(f"corrige la receta «{cosa['nombre']}»: tiene un ingrediente dudoso y no se puede calcular")
-            if v["kcal_100g"] is None and v["kcal_100g_aprox"] is None:
+            if unidad == "g" and v["kcal_100g"] is None and v["kcal_100g_aprox"] is None:
                 raise ValueError(f"«{cosa['nombre']}» no está pesada: pésala o pon sus kcal/100 g aproximadas")
         calculo = self._calcular(tipo, cosa, cantidad, unidad)
-        if "problema" in calculo:  # cannot happen with the unit chosen above; said all the same
+        if "problema" in calculo:  # another unit than its own (or a fraction of a fixed food)
             raise ValueError(calculo["problema"] or "no se puede calcular")
         return {"nombre": cosa["nombre"], "cantidad": cantidad, "unidad": unidad, "kcal": calculo["kcal"],
                 "origen": calculo["origen"], "provisional": calculo["provisional"]}
@@ -820,7 +824,7 @@ class Recetario:
                       proteina_g=None, hidratos_g=None, grasa_g=None, supuestos=[], origen=calculo["origen"],
                       provisional=calculo["provisional"])
         if coincidencia == "parecida":
-            que = "tu receta" if tipo == "receta" else "tu alimento fijo"
+            que = "tu receta" if tipo == "receta" else "tu ingrediente"
             salida["propuesta"] = {"dicho": nombre, "guardado": cosa["nombre"]}
             salida["kcal_estimada"] = alimento.get("kcal")
             salida["supuestos"] = [f"has dicho «{nombre}»: te propongo {que} «{cosa['nombre']}»"]

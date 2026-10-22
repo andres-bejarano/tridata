@@ -315,6 +315,12 @@ class RegistroComidas:
             ).fetchall()
         return [self._fila(f) for f in filas]
 
+    def primer_dia(self) -> date | None:
+        """The oldest day with any food logged (unit 017: where «Todo» starts); None with nothing logged."""
+        with self._connect() as conn:
+            fila = conn.execute("SELECT MIN(dia) FROM alimento_apuntado").fetchone()
+        return date.fromisoformat(fila[0]) if fila and fila[0] else None
+
     def interpretaciones(self) -> list[dict]:
         with self._connect() as conn:
             filas = conn.execute(

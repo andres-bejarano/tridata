@@ -21,6 +21,11 @@
   --ico-receta: #fff1e2;
   --ico-tara: #e6efff;
   --ico-fijo: #e5f6ea;
+  /* unit 017: what is done now in the bar of Hoy, and the deficit / surplus bars of the chart and the week */
+  --real: #8fd0a2;
+  --deficit: #1f8f4e;
+  --superavit: #d4621a;
+  --objetivo-peso: #7a4fc9;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -45,6 +50,10 @@
     --ico-receta: #3a2a14;
     --ico-tara: #1c2b44;
     --ico-fijo: #173322;
+    --real: #2f6b45;
+    --deficit: #4cc26b;
+    --superavit: #ff9a4d;
+    --objetivo-peso: #b79cff;
   }
 }
 
@@ -261,13 +270,13 @@ dialog.hoja::backdrop { background: rgba(10, 14, 20, .45); }
 .datos .tarjeta { padding: 12px 14px; margin: 0; gap: 0; display: block; }
 .datos span { display: block; font-size: .85rem; color: var(--suave); }
 .datos strong { font-size: 1.3rem; }
-.grafica { padding: 14px 10px 8px; display: block; }
+.grafica { padding: 14px 4px 8px; display: block; }
 .cabeza-grafica { padding: 0 6px 6px; }
 .grafica .leyenda { font-size: .85rem; margin: 0; }
 .grafica svg { width: 100%; height: auto; display: block; }
 .grafica .rejilla { stroke: var(--borde); stroke-width: 1; }
 .grafica .eje { fill: var(--suave); font-size: 11px; }
-.grafica .linea-objetivo { stroke: var(--bien); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.grafica .linea-objetivo { stroke: var(--objetivo-peso); stroke-width: 1.5; stroke-dasharray: 4 4; }
 .grafica .texto-objetivo { fill: var(--bien); font-size: 11px; }
 .grafica .linea-media { fill: none; stroke: var(--acento); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .grafica .punto-peso { fill: var(--planeado); }
@@ -390,3 +399,70 @@ button.cerrar-dia { margin-top: 10px; }
 .aviso-cierre p { flex: 1 1 14em; margin: 0; font-size: .95rem; }
 .aviso-cierre button { min-height: 44px; flex-shrink: 0; }
 .desglose .calibracion { margin: 6px 0 0; color: var(--suave); }
+
+/* -- unit 017: the bar of Hoy in two layers -------------------------------------------------------- */
+.barra-real { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--real); border-radius: 999px 0 0 999px; }
+.barra-leyenda-real { margin: 6px 0 0; font-size: .85rem; color: var(--suave); }
+.barra-leyenda-real .ley-hecho, .barra-leyenda-real .ley-plan { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; color: transparent; overflow: hidden; }
+.barra-leyenda-real .ley-hecho { background: var(--real); }
+.barra-leyenda-real .ley-plan { background: var(--pista); box-shadow: inset 0 0 0 1px var(--borde); }
+.barra-real-texto { margin: 6px 0 0; font-size: .92rem; color: var(--texto); }
+
+/* -- unit 017: the weight-and-deficit chart (grafica.js), in Peso and Balance ----------------------- */
+.grafica .cabeza-grafica { padding: 0 10px 6px; }
+.grafica .titulo-eje { fill: var(--texto); font-size: 12px; font-weight: 700; }
+.grafica .barra-deficit { fill: var(--deficit); }
+.grafica .barra-superavit { fill: var(--superavit); }
+.grafica .rayado-fondo { fill: var(--tarjeta); }
+.grafica .rayado-linea { stroke: var(--suave); stroke-width: 2.5; }
+.grafica .barra-kcal.provisional { stroke: var(--suave); stroke-width: 1; }
+.grafica .linea-cero { stroke: var(--texto); stroke-width: 1.2; }
+.grafica .eje-x { stroke: var(--borde); stroke-width: 1; }
+.grafica .marca-x { stroke: var(--suave); stroke-width: 1; }
+.grafica .etiqueta-x { fill: var(--suave); font-size: 11px; }
+.leyenda-grafica { margin: 6px 10px 2px; font-size: .85rem; color: var(--suave); line-height: 1.5; }
+.leyenda-grafica .ley-peso { color: var(--planeado); }
+.leyenda-grafica .ley-media { color: var(--acento); font-weight: 800; }
+.leyenda-grafica .ley-objetivo { color: var(--objetivo-peso); font-weight: 800; }
+.leyenda-grafica .ley-deficit { color: var(--deficit); }
+.leyenda-grafica .ley-superavit { color: var(--superavit); }
+.rangos { margin: 0 6px 8px; }
+
+/* -- unit 017: the Balance tab (balance.js) -------------------------------------------------------- */
+.semana-balance { padding: 10px 0 12px; gap: 6px; }
+.semana-cab { display: flex; align-items: center; gap: 4px; padding: 0 6px; }
+.semana-cab h2 { flex: 1; min-width: 0; margin: 0; text-align: center; font-size: 1.02rem; display: block; }
+.semana-cab .flecha { width: 48px; height: 48px; min-height: 48px; padding: 0; border: 0; background: transparent; border-radius: 14px; font-size: 1.15rem; color: var(--acento); }
+.filas-semana { display: grid; }
+.fila-dia {
+  display: grid; grid-template-columns: 1fr auto 26px; align-items: center; gap: 10px; width: 100%; min-height: 56px;
+  padding: 8px 14px; border: 0; border-top: 1px solid var(--borde); border-radius: 0; background: transparent; text-align: left;
+  font-weight: 400; color: var(--texto);
+}
+.fila-dia:first-child { border-top: 0; }
+.fila-dia .que { min-width: 0; display: grid; }
+.fila-dia .que strong { font-weight: 600; font-size: 1rem; }
+.fila-dia .que span { font-size: .88rem; color: var(--suave); }
+.fila-dia .objetivo-fila { color: var(--acento); font-weight: 600; }
+.fila-dia .cifra-dia { font-weight: 700; font-size: .95rem; text-align: right; display: grid; justify-items: end; }
+.fila-dia .cifra-dia span { white-space: nowrap; }
+.fila-dia .cifra-dia small { font-weight: 500; font-size: .82rem; color: var(--suave); white-space: nowrap; }
+.fila-dia.provisional { background: repeating-linear-gradient(-45deg, transparent 0 8px, var(--acento-suave) 8px 12px); }
+.fila-dia.provisional .cifra-dia { color: var(--suave); }
+.barra-dia { position: relative; width: 18px; height: 48px; justify-self: center; }
+.barra-dia-cero { position: absolute; left: -4px; right: -4px; top: 50%; height: 2px; margin-top: -1px; background: var(--texto); opacity: .55; }
+.barra-dia-relleno { position: absolute; left: 0; right: 0; border-radius: 3px; }
+.barra-dia.superavit .barra-dia-relleno { bottom: 50%; background: var(--superavit); }
+.barra-dia.deficit .barra-dia-relleno { top: 50%; background: var(--deficit); }
+.fila-dia.provisional .barra-dia-relleno { background: repeating-linear-gradient(-45deg, var(--deficit) 0 3px, transparent 3px 6px); border: 1px solid var(--deficit); }
+.fila-dia.provisional .barra-dia.superavit .barra-dia-relleno { background: repeating-linear-gradient(-45deg, var(--superavit) 0 3px, transparent 3px 6px); border-color: var(--superavit); }
+.resumen-semana { margin: 4px 14px 0; padding-top: 10px; border-top: 1px solid var(--borde); font-weight: 650; font-size: .95rem; }
+.semana-balance > button, .semana-balance > .reparto, .semana-balance > .confirmar-borrado, .semana-balance > p:not(.resumen-semana) { margin: 4px 14px 0; }
+.semana-balance > button.ancho { width: auto; }
+.reparto p { margin: 0; }
+.vacio-balance { margin: 8px 4px; }
+.lista.semanas .semana {
+  display: block; width: 100%; min-height: 56px; padding: 10px 14px; border: 0; border-top: 1px solid var(--borde); border-radius: 0;
+  background: transparent; text-align: left; font-weight: 500; font-size: .92rem; color: var(--texto); line-height: 1.35;
+}
+.lista.semanas .semana:first-child { border-top: 0; }

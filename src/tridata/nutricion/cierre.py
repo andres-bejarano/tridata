@@ -34,7 +34,7 @@ from ..exporters import MarkdownExporter
 from ..storage import DEFAULT_DB_PATH
 from .ajustes import Ajustes, AjustesDelDia
 from .gasto import estimar_gasto
-from .margen import PASOS_POR_DEFECTO, ConfigGasto, config_del_dia, total_del_dia
+from .margen import PASOS_POR_DEFECTO, ConfigGasto, config_del_dia, kcal_enteras, total_del_dia
 from .objetivo_dia import ObjetivosDia
 from .peso import BasalDelDia, RegistroPeso, basal_del_dia
 from .registro import RegistroComidas
@@ -94,6 +94,12 @@ def _kcal(n: float) -> str:
 
 def _con_signo(n: float) -> str:
     return ("+" if n > 0 else "−" if n < 0 else "") + _kcal(n)
+
+
+def _entero_con_signo(n: float) -> str:
+    """Unit 017 (R13): −1789.8 -> «−1.790»; never «−0»."""
+    entero = round(float(n))
+    return ("+" if entero > 0 else "−" if entero < 0 else "") + kcal_enteras(n)
 
 
 def _pct(p: float | None) -> str:
@@ -340,23 +346,30 @@ class Cierres:
         media = media_semana(dias)
         n = media["dias"]
         if n:
-            texto = (f"media de la semana {_con_signo(media['balance_medio_kcal'])} kcal/día "
+            texto = (f"media de la semana {_entero_con_signo(media['balance_medio_kcal'])} kcal/día "
                      f"({_pct(media['balance_pct'])} %), {n} {'día' if n == 1 else 'días'}")
         else:
             texto = "media de la semana: aún no hay ningún día con la comida cerrada"
         return {"desde": lunes.isoformat(), "hasta": domingo.isoformat(), **media, "texto": texto}
 
-    def bloque_del_dia(self, dia: date, comido_kcal: float, gasto_estimado_kcal: float) -> dict:
-        """The `cierre` block of the day screen (and of unit 015): state, its text, balance, trail and week."""
+    def bloque_del_dia(self, dia: date, comido_kcal: float, gasto_estimado_kcal: float, *,
+                       semanas: dict[date, dict] | None = None) -> dict:
+        """The `cierre` block of the day screen (and of unit 015): state, its text, balance, trail and week.
+
+        `semanas` (unit 017) is a dictionary that lives only during ONE request that composes many days: the
+        week of each Monday is computed once and the other days of that week take it from there (it is the
+        same for every day of the week). Nothing is kept after the request.
+        """
         fila = self.del_dia(dia)
         estado = fila["estado"] if fila else "abierto"
         real = fila["gasto_real"] if fila and estado == "cerrado_garmin" else None
         espera = fila["espera_motivo"] if fila and estado == "comida_cerrada" else None
         gasto = real if real is not None else gasto_estimado_kcal
         b = balance(comido_kcal, gasto)
-        cifras = f"{_con_signo(b['kcal'])} kcal ({_pct(b['pct'])} %)"
+        cifras = f"{_entero_con_signo(b['kcal'])} kcal ({_pct(b['pct'])} %)"
         if estado == "cerrado_garmin":
-            texto = f"Cerrado con Garmin: gasto real {_kcal(gasto)} (estimado {_kcal(gasto_estimado_kcal)})"
+            texto = (f"Cerrado con Garmin: gasto real {kcal_enteras(gasto)} "
+                     f"(estimado {kcal_enteras(gasto_estimado_kcal)})")
             balance_texto = f"balance {cifras}, con el gasto real de Garmin"
         elif estado == "comida_cerrada":
             texto = TEXTO_ESPERA if espera else "Comida cerrada · gasto estimado"
@@ -373,8 +386,18 @@ class Cierres:
             "motivo_cierre": fila["motivo_cierre"] if fila else None,
             "cerrado_garmin_en": fila["cerrado_garmin_en"] if fila else None,
             "rastro": [{k: v for k, v in r.items() if k not in ("id", "visto")} for r in self.rastro(dia)],
-            "semana": self.semana(dia, comido_kcal, gasto) if fila else self.semana(dia),
+            "semana": self._semana_del_dia(dia, comido_kcal, gasto, fila is not None, semanas),
         }
+
+    def _semana_del_dia(self, dia: date, comido_kcal: float, gasto: float, cerrado: bool,
+                        semanas: dict[date, dict] | None) -> dict:
+        lunes = dia - timedelta(days=dia.weekday())
+        if semanas is not None and lunes in semanas:
+            return dict(semanas[lunes])
+        semana = self.semana(dia, comido_kcal, gasto) if cerrado else self.semana(dia)
+        if semanas is not None:
+            semanas[lunes] = semana
+        return dict(semana)
 
     # -- writing ----------------------------------------------------------------------------------
 

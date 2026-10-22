@@ -440,18 +440,18 @@ def test_pestanas_hash_y_atras(servidor, abrir):  # R8, R6
     p = abrir(servidor)
     _listo(p)
     pestanas = p.locator("nav.pestanas .pestana")
-    assert _textos(pestanas) == ["Hoy", "Peso", "Recetas", "Ajustes"]
+    assert _textos(pestanas) == ["Hoy", "Balance", "Peso", "Recetas", "Ajustes"]
     assert round(p.locator("nav.pestanas .pestana").first.bounding_box()["height"]) >= 56
     expect(pestanas.nth(0)).to_have_attribute("aria-current", "page")
     expect(p.get_by_text("Ajustes ▸")).to_have_count(0)
 
-    pestanas.nth(1).click()
+    pestanas.nth(2).click()
     expect(p).to_have_url(servidor.url + "/#peso")
     expect(p.locator("section#peso")).to_be_visible()
     expect(p.locator("section#hoy")).to_be_hidden()
-    expect(pestanas.nth(1)).to_have_attribute("aria-current", "page")
+    expect(pestanas.nth(2)).to_have_attribute("aria-current", "page")
     expect(p.locator("#entrada")).to_be_visible()
-    pestanas.nth(2).click()
+    pestanas.nth(3).click()
     expect(p.locator("section#recetas")).to_be_visible()
     expect(p.locator("#entrada")).to_be_hidden()
     p.go_back()
@@ -465,14 +465,14 @@ def test_pestanas_hash_y_atras(servidor, abrir):  # R8, R6
     pestanas.nth(0).click()
     expect(p.locator("#titulo")).to_have_text("Hoy")
 
-    pestanas.nth(3).click()
+    pestanas.nth(4).click()
     expect(p).to_have_url(servidor.url + "/ajustes")
     en_ajustes = p.locator("nav.pestanas .pestana")
-    assert _textos(en_ajustes) == ["Hoy", "Peso", "Recetas", "Ajustes"]
-    expect(en_ajustes.nth(3)).to_have_attribute("aria-current", "page")
+    assert _textos(en_ajustes) == ["Hoy", "Balance", "Peso", "Recetas", "Ajustes"]
+    expect(en_ajustes.nth(4)).to_have_attribute("aria-current", "page")
     expect(p.get_by_text("◀ Hoy")).to_have_count(0)
     expect(p.locator("#entrada")).to_have_count(0)
-    en_ajustes.nth(1).click()
+    en_ajustes.nth(2).click()
     expect(p).to_have_url(servidor.url + "/#peso")
     expect(p.locator("section#peso")).to_be_visible()
 

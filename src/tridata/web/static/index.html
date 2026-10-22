@@ -39,6 +39,7 @@
         <p id="queda-objetivo" class="marca-objetivo" hidden>objetivo del día</p>
         <section id="barra" class="barra" aria-label="Lo comido frente al objetivo del día">
           <div class="barra-pista" id="barra-pista">
+            <div class="barra-real" id="barra-real" hidden></div>
             <div class="barra-planeado" id="barra-planeado" hidden></div>
             <div class="barra-relleno" id="barra-relleno"></div>
             <div class="barra-limite" id="barra-limite" hidden></div>
@@ -47,6 +48,8 @@
             <span><strong id="barra-pct" class="num"></strong> <span id="barra-quedan"></span></span>
             <span id="barra-leyenda-planeado" hidden>▨ planeado</span>
           </div>
+          <p id="barra-leyenda-real" class="barra-leyenda-real" hidden><span class="ley-hecho" aria-hidden="true">▮</span> con lo hecho · <span class="ley-plan" aria-hidden="true">▮</span> si cumples el plan</p>
+          <p id="barra-real-texto" class="barra-real-texto" hidden></p>
           <p id="barra-aviso" class="aviso" hidden></p>
         </section>
         <div id="otros" class="otros" aria-label="Otros niveles: toca uno para mirarlo"></div>
@@ -104,6 +107,12 @@
       <div id="anadir-ficha"></div>
       <button id="anadir" type="button" class="anadir">Añadir</button>
       <button id="cerrar-dia" type="button" class="principal grande cerrar-dia" hidden>Cerrar el día</button>
+    </section>
+
+    <!-- ================= BALANCE (balance.js, unit 017) ================= -->
+    <section id="balance" class="pantalla" data-pestana="balance" aria-label="Balance" hidden>
+      <h1 class="titulo-pantalla">Balance</h1>
+      <div id="balance-contenido"><p class="suave">Cargando…</p></div>
     </section>
 
     <!-- ================= PESO (peso.js) ================= -->
@@ -217,6 +226,8 @@
     <nav class="pestanas" aria-label="Pantallas">
       <a class="pestana" href="#hoy" data-ir="hoy">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><path d="M12 8v4l2.5 2"/></svg>Hoy</a>
+      <a class="pestana" href="#balance" data-ir="balance">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h16"/><path d="M7 12V6"/><path d="M12 12v4"/><path d="M17 12V8"/><path d="M4 20h16"/></svg>Balance</a>
       <a class="pestana" href="#peso" data-ir="peso">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M7.5 11a4.5 4.5 0 0 1 9 0"/><path d="M12 11l1.8-2.6"/><path d="M8 16h8"/></svg>Peso</a>
       <a class="pestana" href="#recetas" data-ir="recetas">

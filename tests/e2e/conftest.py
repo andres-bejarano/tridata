@@ -5,6 +5,7 @@ interpreter, the Whisper transcriber and «Actualizar Garmin» are `MagicMock`s 
 are a temporary `DataStore` with one invented activity. «Today» is fixed on the server and on the
 phone's clock. Every value is invented. Unit 014: `Servidor.cierres` is the close of the day the app uses.
 Unit 016: `servidor.hoy = …` moves the server's «today» (`HOY` by default).
+Unit 017: `semana_de_prueba()`, `historial_de_prueba(desde)` and `hoy_con_garmin(pasos, previsto_kcal)`.
 
 Optional: needs the `e2e` extra (`python -m pip install -e ".[dev,e2e]"` and, once,
 `python -m playwright install chromium`). Without Playwright these tests are skipped by
@@ -24,7 +25,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from tridata.ia import AlimentoInterpretado, Interpretacion, ObjetivoDiaInterpretado, PesoInterpretado
-from tridata.models import Activity
+from tridata.models import Activity, DailyStats
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, Cierres, ObjetivosDia, RegistroComidas, RegistroPeso
 from tridata.storage import DataStore
 from tridata.web import crear_app
@@ -124,6 +125,37 @@ class Servidor:
         """72,4 today, 72,6 yesterday, 73,0 ten days ago and 74,1 forty days ago."""
         for hace, kg in ((40, 74.1), (10, 73.0), (1, 72.6), (0, 72.4)):
             self.pesos.apuntar(HOY - timedelta(days=hace), kg, hoy=HOY)
+
+    # -- unit 017 ---------------------------------------------------------------------------------
+
+    def semana_de_prueba(self) -> None:
+        """The test week of unit 017: healthy limit 25 %, «Triatlón de prueba» on Sunday 25 with one maintenance
+        day; Monday 19 with 2,650 eaten closed with Garmin (2,500 real, 2,400 estimated with 20,000 steps),
+        Tuesday 20 with 2,150 and its food closed, and today the test day (760 eaten, open)."""
+        lunes, martes = HOY - timedelta(days=2), HOY - timedelta(days=1)
+        self.ajustes.cambiar({"limite_saludable_pct": 25}, desde=DESDE_SIEMPRE)
+        self.ajustes.anadir_carrera("Triatlón de prueba", (HOY + timedelta(days=4)).isoformat(), 1)
+        self.apuntar("Comida del lunes", lunes, None, 2650, hoy=lunes)
+        self.store.save_daily_stats(DailyStats(stat_date=lunes, steps=20000, total_calories=2500))
+        self.apuntar("Comida del martes", martes, None, 2150, hoy=martes)
+        self.dia_de_prueba()
+        self.cierres.al_dia(HOY)
+
+    def historial_de_prueba(self, desde: date) -> None:
+        """One «total del día (importado)» line per day from `desde` to today (deficits and surpluses) and a
+        weight every other day; the past days with their food closed."""
+        for i in range((HOY - desde).days + 1):
+            dia = desde + timedelta(days=i)
+            self.apuntar("total del día (importado)", dia, None, 2000 + (i % 7) * 120 - 420, hoy=HOY)
+            if i % 2 == 0:
+                self.pesos.apuntar(dia, round(76 - i * 0.02, 1), hoy=HOY)
+        self.cierres.al_dia(HOY)
+
+    def hoy_con_garmin(self, pasos: int, previsto_kcal: float) -> None:
+        """Today's Garmin steps (no total yet) and a planned swim of `previsto_kcal` in `objetivo_dia`."""
+        self.store.save_daily_stats(DailyStats(stat_date=HOY, steps=pasos, total_calories=None))
+        self.objetivos.cambiar(HOY, previsto={"actividad_id": "e2e-natacion", "nombre": "Natación", "minutos": 40,
+                                              "kcal": previsto_kcal, "tipo": "lap_swimming"})
 
 
 @pytest.fixture

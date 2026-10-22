@@ -29,6 +29,7 @@
 
 import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
+import { pintarBalance } from "./balance.js";
 import { pintarPeso } from "./peso.js";
 import { pintarRecetas } from "./recetas.js";
 
@@ -46,7 +47,7 @@ const etiquetaNivel = (n) => (n === 0 ? "Mantenimiento" : `${signo(n)} %`);
 const conSignoKcal = (n) => (Math.round(n) < 0 ? `−${kcalEnteras(-n)}` : kcalEnteras(Math.max(n, 0)));
 const signoKcal = (n) => (Math.round(n) > 0 ? "+" : Math.round(n) < 0 ? "−" : "") + kcalEnteras(Math.abs(n));
 const MINUTO_MS = 60_000; // unit 016 (R3): how often the day is asked again while it is in sight
-const PESTANAS = ["hoy", "peso", "recetas"];
+const PESTANAS = ["hoy", "balance", "peso", "recetas"];
 const CLAVE_NIVEL = "tridata.nivel-que-miras"; // a screen preference of this phone, never the objective
 const PESO_MIN = 30;
 const PESO_MAX = 250;
@@ -66,6 +67,7 @@ let esperada = null; // id of the recording just made: its list opens by itself 
 let textoDeLista = null; // a list whose interpretation failed (502), its text put in the box, and its day
 const porCien = new WeakMap(); // unit 013: the kcal/100 g typed on a review card, by food (never saved)
 let pestanaVista = null; // the tab on screen, to reload the day when coming back to Hoy (unit 013)
+let diaPedido = null; // unit 017: a day tapped in Balance, opened when Hoy shows up
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -415,6 +417,34 @@ function pintarBarra(dia) {
   const aviso = lim && lim.aviso ? lim.aviso : "";
   $("barra-aviso").textContent = aviso;
   $("barra-aviso").hidden = !aviso;
+  pintarBarraReal(dia, escala);
+}
+
+// Unit 017 (R-23, asked on 2026-10-22): in the same bar, in another colour, up to the objective with what is
+// already done according to Garmin (its steps and the activities it has, no planned training); the rest of
+// the track up to the big number is what depends on the plan. One layer on a day closed with Garmin or to come.
+function pintarBarraReal(dia, escala) {
+  const r = dia.barra.real;
+  $("barra-real").hidden = !r;
+  $("barra-leyenda-real").hidden = !r;
+  const texto = $("barra-real-texto");
+  if (!r) {
+    texto.textContent = dia.gasto.origen === "garmin" ? "Con el gasto real de Garmin." : "";
+    texto.hidden = !texto.textContent;
+    return;
+  }
+  $("barra-real").style.width = `${Math.min(r.objetivo_kcal / escala * 100, 100)}%`;
+  const h = r.hecho;
+  const partes = [r.pasado_kcal > 0 ? `te has pasado ${kcalEnteras(r.pasado_kcal)} kcal` : `te quedan ${kcalEnteras(r.quedan_kcal)} kcal`];
+  if (h.pasos_hechos !== null) partes.push(`${enteras.format(h.pasos_hechos)} de ${enteras.format(h.pasos_del_dia)} pasos`);
+  if (h.previsto_kcal > 0) {
+    const nombre = h.previsto_nombre ? `${h.previsto_nombre.charAt(0).toLowerCase()}${h.previsto_nombre.slice(1)} prevista` : "entreno previsto";
+    partes.push(`${nombre} ${kcalEnteras(h.previsto_kcal)} kcal aún no está en Garmin`);
+  }
+  if (h.aviso) partes.push(h.aviso);
+  texto.textContent = `Con lo hecho ahora: ${partes.join(" · ")}`;
+  texto.hidden = false;
+  $("barra-real").title = `con lo hecho ahora (gasto ${kcal(h.kcal)}): objetivo ${kcal(r.objetivo_kcal)}`;
 }
 
 function linea(etiqueta, valor) {
@@ -1132,6 +1162,13 @@ function pestanaActual() {
   return PESTANAS.includes(h) ? h : "hoy";
 }
 
+// Unit 017: from Balance, a day opens in Hoy (its list of foods, its margin).
+function irADia(fecha) {
+  diaPedido = fecha;
+  if (pestanaActual() === "hoy") mostrarPestana();
+  else location.hash = "hoy";
+}
+
 function irAPestanaHoy() {
   if (pestanaActual() !== "hoy") location.hash = "hoy";
 }
@@ -1143,13 +1180,18 @@ function mostrarPestana() {
     if (a.dataset.ir === actual) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
-  $("entrada").hidden = actual === "recetas"; // the box is for Hoy and Peso
+  $("entrada").hidden = actual === "recetas" || actual === "balance"; // the box is for Hoy and Peso
   if ($("hoja").open) $("hoja").close();
   if (actual === "hoy") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
   else document.title = `TriData · ${mayuscula(actual)}`;
   // unit 013: back in Hoy from another tab, the day is asked again (what was logged from Recetas shows)
-  if (actual === "hoy" && pestanaVista !== null && pestanaVista !== "hoy" && diaVisto) cargarDia(diaVisto);
+  if (actual === "hoy" && diaPedido) { // unit 017: a day tapped in Balance
+    const fecha = diaPedido;
+    diaPedido = null;
+    irA(fecha);
+  } else if (actual === "hoy" && pestanaVista !== null && pestanaVista !== "hoy" && diaVisto) cargarDia(diaVisto);
   pestanaVista = actual;
+  if (actual === "balance") pintarBalance($("balance-contenido"), irADia);
   if (actual === "peso") pintarPeso($("peso-contenido"));
   if (actual === "recetas") pintarRecetas($("recetas"));
   window.scrollTo(0, 0);

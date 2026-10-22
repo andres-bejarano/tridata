@@ -117,3 +117,27 @@ def estimar_gasto(
         "avisos": avisos,
         "garmin": {"hay_datos": hay_datos, "texto": texto},
     }
+
+
+def gasto_hecho(estimado: Mapping[str, Any], *, cuando: str = "de hoy") -> dict:
+    """Unit 017 (R-23, asked on 2026-10-22): what is spent with what is already DONE, from the breakdown alone.
+
+    basal + steps done × kcal/step + kcal of the activities Garmin already has: no assumed steps and no
+    planned training. It reads nothing and adds no steps of its own, so it is never above `estimado["kcal"]`.
+    The basal counts the whole day (it is not split by hours). With Garmin's steps incomplete (the «⚠
+    incompleto» rule above) or without Garmin data it counts no steps and says so in `aviso`.
+    """
+    d = estimado["desglose"]
+    pasos = d["pasos_hechos"]
+    aviso = None
+    if not estimado.get("garmin", {}).get("hay_datos", True):
+        aviso = f"sin datos de Garmin {cuando}: lo hecho es solo el basal"
+    elif d["pasos_garmin"] is not None and pasos is None:
+        aviso = f"los pasos de Garmin {cuando} están incompletos: lo hecho no cuenta pasos"
+    elif d["pasos_garmin"] is None:
+        aviso = f"Garmin aún no trae los pasos {cuando}: lo hecho no cuenta pasos"
+    kcal = d["basal_kcal"] + (pasos or 0) * d["kcal_por_paso"] + d["entreno_hecho_kcal"]
+    previsto = d.get("previsto") or {}
+    return {"kcal": round(min(kcal, estimado["kcal"]), 1), "pasos_hechos": pasos, "pasos_del_dia": d["pasos_del_dia"],
+            "entreno_hecho_kcal": d["entreno_hecho_kcal"], "previsto_kcal": d["previsto_kcal"],
+            "previsto_nombre": previsto.get("nombre"), "aviso": aviso}

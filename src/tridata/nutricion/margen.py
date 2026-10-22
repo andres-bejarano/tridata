@@ -86,6 +86,11 @@ def _texto_numero(n: float) -> str:
     return f"{n:g}".replace(".", ",")
 
 
+def kcal_enteras(n: float) -> str:
+    """Unit 017 (R13): whole kcal with a thousands point, no sign: 1800 -> «1.800», 1789.8 -> «1.790»."""
+    return f"{round(abs(float(n))):,}".replace(",", ".")
+
+
 def config_del_dia(config: ConfigGasto, basal: Any = None, objetivo_dia: Mapping[str, Any] | None = None) -> ConfigGasto:
     """The expenditure config of a day: the basal of `basal_del_dia` and the planned steps of unit 007."""
     pasos_previstos = objetivo_dia.get("pasos") if objetivo_dia else None
@@ -139,7 +144,7 @@ def barra(objetivo_kcal: float, comido: float, limite: Mapping[str, Any] | None 
     pct = round(comido / objetivo_kcal * 100) if objetivo_kcal > 0 else 0
     resto = round(objetivo_kcal - comido, 1)
     quedan, pasado = max(resto, 0.0), max(-resto, 0.0)
-    texto = f"te has pasado {_texto_numero(pasado)} kcal" if pasado else f"quedan {_texto_numero(quedan)} kcal"
+    texto = f"te has pasado {kcal_enteras(pasado)} kcal" if pasado else f"quedan {kcal_enteras(quedan)} kcal"
     return {"objetivo_kcal": round(objetivo_kcal, 1), "comido_kcal": round(comido, 1), "pct": pct,
             "quedan_kcal": quedan, "pasado_kcal": pasado, "texto": texto,
             "limite": dict(limite) if limite is not None else None}

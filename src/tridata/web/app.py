@@ -54,6 +54,19 @@
                                   is planned becomes eaten and the food is closed; returns the day
     POST /api/aviso-cierre/N/visto  «Entendido» on the warning of a Garmin correction (marked seen, never
                                   deleted); returns the warnings still pending
+    GET  /api/balance/semana      unit 017 (nutricion/balance.py): the week (Monday to Sunday) of ?fecha= (default
+                                  today), its rows, sum, what is above the objective and the week of unit 014;
+                                  `reparto_posible` (true or why not) only for the week of today
+    GET  /api/balance             ?rango=4s|3m|todo: the bars of the balance (by day, or by week past 91 days),
+                                  the weights and their 7-day means and the weight goal; another range is 400
+    GET  /api/balance/semanas     every week from today's back to the first day with data, newest first
+    POST /api/balance/repartir    {"aplicar": false} -> the proposal to spread what is above the objective, saving
+                                  NOTHING; {"aplicar": true, "propuesta": {...}} recomputes it: if it changed, 409
+                                  with the new one and nothing saved, else the % of each day goes to `objetivo_dia`
+    POST /api/balance/volver-al-plan  {"confirmado": true}: the days that are left lose the % set for them
+                                  (also one set by hand); without it 400 and nothing changes
+Every Balance route sends only totals (no food, no names) and computes each day ONCE per request with the
+same `resumen_completo` as /api/dia. Unit 017 also adds `barras` (the 30 days, by day) to /api/peso.
 
 Unit 016: every day the screen gets also says `hoy` (today on the server), so the page sees midnight pass.
 
@@ -98,8 +111,12 @@ from starlette.staticfiles import StaticFiles
 from ..garmin_client import GarminAuthError
 from ..ia import ErrorInterpretacion, ErrorTranscripcion
 from ..nutricion import (
-    Ajustes, Alimento, Cierres, ObjetivosDia, RegistroComidas, RegistroPeso, gramos_que_caben, kcal_previstas,
+    DESDE_SIEMPRE, Ajustes, Alimento, Cierres, ObjetivosDia, RegistroComidas, RegistroPeso, gramos_que_caben, kcal_previstas,
     objetivo_valido, peso_valido, Recetario, media_7_dias, simular,
+)
+from ..nutricion.balance import (
+    NADA, SIN_DIAS, dias_que_quedan, lunes_de, proponer_reparto, semana as semana_balance, semanas, serie,
+    texto_reparto,
 )
 from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
 from ..storage import DataStore
@@ -112,6 +129,7 @@ NO_ESTA = "Ese alimento ya no está apuntado."
 NO_ESTA_CARRERA = "Esa carrera ya no está en tus ajustes."
 DIAS_RECIENTES = 14  # the planned training is chosen among the activities of the last 14 days (R-15)
 DIAS_GRAFICA_PESO = 30  # the weight chart of the Peso tab (unit 010, R10)
+RANGOS_BALANCE = {"4s": 28, "3m": 91, "todo": None}  # unit 017: the 28 or 91 days that end today, or all
 FALTA_GARMIN = "Faltan GARMIN_EMAIL / GARMIN_PASSWORD en .env: no puedo traer Garmin."
 # unit 016 (R6): a fixed text; the library's exception (it may carry the e-mail) never reaches the screen or the log
 SESION_GARMIN = ("La sesión de Garmin ha fallado. Prueba otra vez y, si sigue, revisa GARMIN_EMAIL y "
@@ -233,6 +251,57 @@ def crear_app(
         except Exception:  # noqa: BLE001 - logged, and the day is shown as it is
             log.exception("could not bring the closed days up to date")
 
+    # -- unit 017: Balance ------------------------------------------------------------------------
+
+    def _resumenes() -> Callable[[date], dict | None]:
+        """`fecha -> resumen_completo` (None without settings that day), each day computed ONCE per request."""
+        hechos: dict[date, dict | None] = {}
+        de_la_semana: dict = {}  # the week of unit 014 of each Monday, once per request (Cierres.bloque_del_dia)
+        dia_hoy = hoy()
+
+        def resumen(fecha: date) -> dict | None:
+            if fecha not in hechos:
+                try:
+                    hechos[fecha] = resumen_completo(fecha, registro=registro, pesos=pesos, ajustes=ajustes,
+                                                     objetivos=objetivos, store=store, cierres=cierres, hoy=dia_hoy,
+                                                     semanas=de_la_semana)
+                except FaltanAjustes:
+                    hechos[fecha] = None
+            return hechos[fecha]
+
+        return resumen
+
+    def _primer_dia() -> date | None:
+        """The first day with something eaten or a weight (where «Todo» starts)."""
+        candidatos = [d for d in (registro.primer_dia(),) if d is not None]
+        primer_peso = pesos.entre(DESDE_SIEMPRE, hoy())
+        if primer_peso:
+            candidatos.append(date.fromisoformat(primer_peso[0]["dia"]))
+        return min(candidatos) if candidatos else None
+
+    def _propuesta(resumen: Callable[[date], dict | None], s: dict) -> dict:
+        dia_hoy = hoy()
+        propuesta = proponer_reparto(s["por_encima_kcal"], dias_que_quedan(dia_hoy, s, ajustes),
+                                     ajustes.vigentes(dia_hoy).limite_saludable_pct)
+        return {**propuesta, "desde": s["desde"], "texto": texto_reparto(propuesta)}
+
+    def _vista_semana(fecha: date, resumen: Callable[[date], dict | None] | None = None) -> dict:
+        resumen = resumen or _resumenes()
+        dia_hoy = hoy()
+        s = semana_balance(fecha, resumen=resumen)
+        es_actual = s["desde"] == lunes_de(dia_hoy).isoformat()
+        primer = _primer_dia()
+        vista = {**s, "hoy": dia_hoy.isoformat(), "es_actual": es_actual, "vacio": primer is None,
+                 "primer_dia": primer.isoformat() if primer else None, "reparto_posible": None,
+                 "volver_al_plan": False}
+        if es_actual:
+            propuesta = _propuesta(resumen, s)
+            vista["reparto_posible"] = True if propuesta["motivo"] is None else (
+                NADA if propuesta["motivo"] == "nada_que_repartir" else SIN_DIAS)
+            quedan = {q["dia"] for q in dias_que_quedan(dia_hoy, s, ajustes)}
+            vista["volver_al_plan"] = any(f["dia"] in quedan and f.get("objetivo_origen") == "dia" for f in s["filas"])
+        return vista
+
     def _vista_ajustes(fecha: date) -> dict:
         vigentes = ajustes.vigentes(fecha)
         return {
@@ -351,12 +420,85 @@ def crear_app(
             if media is not None:
                 medias.append({"dia": dia_i.isoformat(), **media.como_dict()})
         meta = ajustes.vigentes(hasta).objetivo_peso
+        barras = (await run_in_threadpool(serie, desde, hasta, resumen=_resumenes(), pesos=[], hoy=hoy()))["barras"]
         return JSONResponse({
             "hasta": hasta.isoformat(), "dias": DIAS_GRAFICA_PESO,
             "pesos": [{"dia": p["dia"], "kg": p["kg"], "nota": p["nota"]} for p in todos if p["dia"] >= desde.isoformat()],
             "medias": medias,
             "objetivo": {"kg": meta.kg, "fecha": meta.fecha.isoformat()} if meta is not None else None,
+            "barras": barras,  # unit 017 (R12): the balance of each of those days, for the chart
         })
+
+    async def balance_semana(request: Request) -> Response:
+        texto = request.query_params.get("fecha")
+        try:
+            fecha = date.fromisoformat(texto) if texto else hoy()
+        except ValueError:
+            return _error(f"Fecha no válida: {texto!r}", 400)
+        return JSONResponse(await run_in_threadpool(_vista_semana, fecha))
+
+    def _serie(rango: str) -> dict:
+        dia_hoy = hoy()
+        primer = _primer_dia()
+        objetivo = ajustes.vigentes(dia_hoy).objetivo_peso
+        meta = {"kg": objetivo.kg, "fecha": objetivo.fecha.isoformat()} if objetivo else None
+        if primer is None:
+            return {"rango": rango, "vacio": True, "desde": None, "hasta": dia_hoy.isoformat(), "agrupado": "dia",
+                    "barras": [], "pesos": [], "medias": [], "objetivo": meta}
+        dias = RANGOS_BALANCE[rango]
+        desde = primer if dias is None else max(primer, dia_hoy - timedelta(days=dias - 1))
+        datos = serie(desde, dia_hoy, resumen=_resumenes(), pesos=pesos.entre(desde - timedelta(days=6), dia_hoy),
+                      hoy=dia_hoy)
+        return {"rango": rango, "vacio": False, **datos, "objetivo": meta}
+
+    async def balance_serie(request: Request) -> Response:
+        rango = request.query_params.get("rango")
+        if rango not in RANGOS_BALANCE:
+            return _error(f"Rango no válido: {rango!r} (4s, 3m o todo).", 400)
+        return JSONResponse(await run_in_threadpool(_serie, rango))
+
+    def _semanas() -> dict:
+        dia_hoy = hoy()
+        primer = _primer_dia()
+        if primer is None:
+            return {"hoy": dia_hoy.isoformat(), "semanas": []}
+        return {"hoy": dia_hoy.isoformat(),
+                "semanas": semanas(primer, dia_hoy, resumen=_resumenes(), pesos=pesos.entre(primer, dia_hoy))}
+
+    async def balance_semanas(request: Request) -> Response:
+        return JSONResponse(await run_in_threadpool(_semanas))
+
+    async def balance_repartir(request: Request) -> Response:
+        """Propose (saves nothing) or apply the proposal Andrés looked at, only if it is still the same (R-20)."""
+        cuerpo = await _cuerpo(request) or {}
+        dia_hoy = hoy()
+        resumen = _resumenes()
+        propuesta = _propuesta(resumen, semana_balance(dia_hoy, resumen=resumen))
+        if cuerpo.get("aplicar") is not True:
+            return JSONResponse({"propuesta": propuesta})
+        enviada = cuerpo.get("propuesta")
+        if not isinstance(enviada, dict):
+            return _error("Falta la propuesta que has mirado: no se ha cambiado nada.", 400)
+        if enviada != propuesta:
+            return _error("La semana ha cambiado desde la propuesta: mírala otra vez. No se ha cambiado nada.", 409,
+                          propuesta=propuesta)
+        if not propuesta["dias"]:
+            return _error(f"No se ha cambiado nada: {propuesta['texto']}.", 422, propuesta=propuesta)
+        for x in propuesta["dias"]:
+            objetivos.cambiar(date.fromisoformat(x["dia"]), porcentaje=x["nuevo_pct"])
+        return JSONResponse({"semana": _vista_semana(dia_hoy), "dia": _dia(dia_hoy)})
+
+    async def balance_volver(request: Request) -> Response:
+        if (await _cuerpo(request) or {}).get("confirmado") is not True:
+            return _error("Hay que confirmar antes de volver al plan: no se ha cambiado nada.", 400)
+        dia_hoy = hoy()
+        s = semana_balance(dia_hoy, resumen=_resumenes())
+        for q in dias_que_quedan(dia_hoy, s, ajustes):
+            dia_q = date.fromisoformat(q["dia"])
+            actual = objetivos.del_dia(dia_q)
+            if actual is not None and actual.get("porcentaje") is not None:
+                objetivos.cambiar(dia_q, porcentaje=None)
+        return JSONResponse({"semana": _vista_semana(dia_hoy), "dia": _dia(dia_hoy)})
 
     async def _interpretacion(texto: str, dia: date) -> dict:
         """What /api/interpretar answers for `texto` with «hoy» = `dia`. Raises ErrorInterpretacion."""
@@ -616,6 +758,11 @@ def crear_app(
         Route("/api/dia/cerrar", cerrar_dia, methods=["POST"]),
         Route("/api/aviso-cierre/{id:int}/visto", aviso_visto, methods=["POST"]),
         Route("/api/peso", peso),
+        Route("/api/balance", balance_serie),
+        Route("/api/balance/semana", balance_semana),
+        Route("/api/balance/semanas", balance_semanas),
+        Route("/api/balance/repartir", balance_repartir, methods=["POST"]),
+        Route("/api/balance/volver-al-plan", balance_volver, methods=["POST"]),
         Route("/api/actividades-recientes", actividades_recientes),
         Route("/api/simular", simular_lista, methods=["POST"]),
         Route("/api/garmin/actualizar", actualizar, methods=["POST"]),

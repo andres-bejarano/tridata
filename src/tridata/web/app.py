@@ -12,7 +12,8 @@
                                   nothing; a doubtful phrase blocks it; returns today (R-4, R-5, R-32).
                                   Unit 016: optional `dia` of the list, where the objective of the day goes
                                   (after today or not a date: 400, nothing saved)
-    POST /api/alimento            add a food by hand (no AI, no interpretation); body with `dia`
+    POST /api/alimento            add a food by hand (no AI, no interpretation); body with `dia`; unit 019:
+                                  or chosen from the saved ones (`guardado`, see below)
     POST /api/alimento/N          change a saved food (name, quantity, unit, kcal; `dia` optional
                                   moves it, with the planned/eaten rule)
     POST /api/alimento/N/borrar   delete a saved food; only with {"confirmado": true} (R-11)
@@ -47,7 +48,8 @@
     POST /api/recetas[/N[/version|/borrar]]   fixed foods and pots; new recipe or batch, correct the one
     POST /api/fijos[/N[/borrar]]  in use, choose a batch, delete with {"confirmado": true}; add, change and
     POST /api/ollas[/N[/borrar]]  delete fixed foods and pots
-    POST /api/recetas/N/apuntar   unit 013: {"cantidad": n} of that recipe or fixed food, logged today as eaten
+    POST /api/recetas/N/apuntar   unit 013: {"cantidad": n} of that recipe or fixed food, logged today as eaten;
+                                  unit 019: optional "unidad" ("receta": a fraction of the recipe)
     POST /api/fijos/N/apuntar     with the kcal worked out on the server with what is saved (R-57)
     POST /api/dia/cerrar          unit 014: «Cerrar el día» {"fecha"?} (today by default, or a past day still
                                   open with something logged; a future day or one with nothing is 422): what
@@ -85,6 +87,14 @@ and fixed foods (`Recetario.resolver`): `origen` («de tu receta …»), `provis
 was said and the saved one proposed, when it is only alike) and `kcal_estimada` (Claude's, to go
 back to it). /api/confirmar keeps `origen` and `provisional` in the row, and /api/dia shows them.
 
+Unit 019 (R-93, R-57): a food of /api/alimento or /api/confirmar chosen from the saved ones carries
+`guardado: {"tipo": "receta"|"fijo", "id": N}` with its `cantidad` and `unidad` ("g", "unidad", or "receta" for a
+fraction of a recipe). It goes through `Recetario.para_apuntar` before anything else: its name, quantity, unit,
+kcal, origin and provisional are the server's (never the page's kcal), not estimated nor doubtful; its day stays.
+Gone is 422 «"…" ya no está guardado», one that cannot be worked out is 422 with why, a malformed one is 400, and
+nothing is saved (in /api/confirmar, nothing of the list: every one is resolved before writing). A `guardado` that
+is not an object (the name Claude matched, unit 011) is not a choice and is ignored as before.
+
 Every /api/alimento route answers {"alimento": ..., "dia": ...}, where `dia` is the day the food
 was in BEFORE the action (the screen being looked at; for an added food, its day).
 404 if the food does not exist, 400 malformed data, 422 a business rule. A settings value that
@@ -119,6 +129,7 @@ from ..nutricion.balance import (
     texto_reparto,
 )
 from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
+from ..nutricion.recetas import ErrorDatos, _numero
 from ..storage import DataStore
 from .recetas import rutas as rutas_recetas
 
@@ -172,6 +183,41 @@ def _sin_lo_vacio(alimento: dict) -> dict:
     if alimento.get("origen") or alimento.get("propuesta") or alimento.get("provisional"):
         return alimento
     return {k: v for k, v in alimento.items() if k not in _NUEVAS or v not in (None, False)}
+
+
+class NoSeGuarda(Exception):
+    """Unit 019: a chosen saved thing that cannot be logged; `estado` 400 (malformed) or 422, and why."""
+
+    def __init__(self, mensaje: str, estado: int) -> None:
+        super().__init__(mensaje)
+        self.estado = estado
+
+
+def _con_lo_guardado(recetario: Recetario, crudo: Any) -> Any:
+    """Unit 019 (R-93, R-57): a food chosen from the saved ones with the server's kcal, origin and name.
+
+    Anything without `guardado` as an object goes back as it came. Raises `NoSeGuarda`.
+    """
+    if not isinstance(crudo, dict) or not isinstance(crudo.get("guardado"), dict):
+        return crudo
+    elegido = crudo["guardado"]
+    tipo, ident = elegido.get("tipo"), elegido.get("id")
+    nombre = crudo.get("nombre") if isinstance(crudo.get("nombre"), str) and crudo["nombre"].strip() else "lo elegido"
+    try:
+        if tipo not in ("receta", "fijo") or isinstance(ident, bool) or not isinstance(ident, int):
+            raise ErrorDatos(f"«{nombre}» no es una receta ni un ingrediente guardado")
+        unidad = crudo.get("unidad")
+        if unidad is not None and not isinstance(unidad, str):
+            raise ErrorDatos(f"{nombre}: unidad no válida")
+        datos = recetario.para_apuntar(tipo, ident, _numero(crudo, "cantidad", f"{nombre}: cantidad"), unidad or None)
+    except KeyError:
+        raise NoSeGuarda(f"«{nombre}» ya no está guardado: no se ha guardado nada.", 422) from None
+    except ErrorDatos as exc:
+        raise NoSeGuarda(f"{exc}: no se ha guardado nada.", 400) from None
+    except ValueError as exc:
+        raise NoSeGuarda(f"«{nombre}»: {exc}; no se ha guardado nada.", 422) from None
+    return {**crudo, **datos, "estimado": False, "dudoso": False, "supuestos": [], "proteina_g": None,
+            "hidratos_g": None, "grasa_g": None}
 
 
 def _sin_estimacion_suelta(alimento: dict) -> dict:
@@ -589,6 +635,10 @@ def crear_app(
         if dudosas:
             frases = ", ".join(f"«{d}»" for d in dudosas)
             return _error(f"No sé dónde poner {frases}: quítalo antes de confirmar. No se ha guardado nada.", 422)
+        try:  # unit 019: every chosen one is worked out before anything is written
+            crudos = [_con_lo_guardado(recetario, a) for a in crudos]
+        except NoSeGuarda as exc:
+            return _error(str(exc), exc.estado)
         try:
             alimentos = [Alimento.desde_dict(a) for a in crudos]
         except ValueError as exc:
@@ -621,7 +671,10 @@ def crear_app(
                              "dia": _dia(dia_hoy)})
 
     async def anadir(request: Request) -> Response:
-        cuerpo = await _cuerpo(request) or {}
+        try:  # unit 019: chosen from the saved ones, the kcal are the server's
+            cuerpo = _con_lo_guardado(recetario, await _cuerpo(request) or {})
+        except NoSeGuarda as exc:
+            return _error(str(exc), exc.estado)
         try:
             alimento = Alimento.desde_dict({**cuerpo, "estimado": False, "dudoso": False, "supuestos": []})
         except ValueError as exc:

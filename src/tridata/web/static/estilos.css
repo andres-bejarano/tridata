@@ -466,3 +466,35 @@ button.cerrar-dia { margin-top: 10px; }
   background: transparent; text-align: left; font-weight: 500; font-size: .92rem; color: var(--texto); line-height: 1.35;
 }
 .lista.semanas .semana:first-child { border-top: 0; }
+
+/* unit 019: the search box of saved recipes and ingredients (buscador.js): its own list under the field, with
+   its own scroll and a maximum height so it fits over the keyboard; options and fraction buttons of 44 px or more */
+.desplegable {
+  list-style: none; margin: 4px 0 0; padding: 4px; display: grid; gap: 2px;
+  max-height: min(16rem, 42vh); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--tarjeta); border: 1px solid var(--acento); border-radius: 12px; box-shadow: var(--sombra);
+}
+.desplegable .grupo { padding: 8px 10px 2px; font-size: .78rem; font-weight: 650; color: var(--suave); text-transform: uppercase; letter-spacing: .04em; }
+.desplegable .opcion { min-height: 48px; padding: 6px 10px; border-radius: 10px; display: grid; align-content: center; cursor: pointer; overflow-wrap: anywhere; }
+.desplegable .opcion strong { display: block; font-weight: 600; color: var(--texto); }
+.desplegable .opcion span { display: block; font-size: .85rem; color: var(--suave); }
+.desplegable .opcion.activa, .desplegable .opcion:hover { background: var(--acento-suave); }
+.desplegable .opcion.no-elegible { cursor: not-allowed; }
+.desplegable .opcion.no-elegible strong { color: var(--suave); }
+.desplegable .opcion.no-elegible span { color: var(--alerta); }
+input[role="combobox"][readonly] { background: var(--acento-suave); border-color: var(--acento); }
+.cuanto { display: grid; gap: 8px; }
+label:has(> input[role="combobox"]) { scroll-margin-top: 12px; }
+.elegida { display: grid; gap: 8px; padding: 10px 12px; border-radius: 14px; background: var(--acento-suave); }
+.elegida .origen-elegido { margin: 0; font-size: .9rem; font-weight: 600; color: var(--bien); overflow-wrap: anywhere; }
+.elegida .sin-pesar { margin: 0; }
+.fila-elegida { display: flex; align-items: center; gap: 10px; }
+.kcal-elegido { flex: 1; margin: 0; min-height: 48px; display: flex; align-items: center; font-size: 1.25rem; font-weight: 700; }
+.fracciones { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+button.fraccion { min-height: 48px; padding: 0 6px; font-size: 1.05rem; }
+button.fraccion[aria-pressed="true"] { background: var(--acento); color: var(--acento-texto); border-color: var(--acento); }
+.fila.cuanto-linea { grid-template-columns: minmax(0, 1fr) auto; }
+.kcal-linea { margin: 0; min-height: 48px; display: flex; align-items: center; font-weight: 650; white-space: nowrap; }
+.ingrediente.elegido { border-color: var(--acento); }
+.ingrediente .acciones { justify-content: space-between; }
+button.anadir-linea { margin-top: 0; }

@@ -64,7 +64,7 @@ def test_cuenta_para_apuntar_fijos(recetario):  # R1 · R-57, C-68
     rec, ids = recetario
     datiles = rec.para_apuntar("fijo", ids["dátiles de prueba"], 6)
     assert (datiles["kcal"], datiles["unidad"], datiles["origen"], datiles["provisional"]) == (
-        16.8, "g", "de tu alimento fijo «dátiles de prueba»", False)
+        16.8, "g", "de tu ingrediente «dátiles de prueba»", False)
     gel = rec.para_apuntar("fijo", ids["gel de prueba"], 2)
     assert (gel["nombre"], gel["cantidad"], gel["unidad"], gel["kcal"]) == ("gel de prueba", 2, "unidad", 180)
 
@@ -154,7 +154,7 @@ def test_apuntar_receta_en_hoy_con_lo_guardado(e):  # R2 · R-57, C-67 — crite
 def test_apuntar_fijos_en_hoy(e):  # R2 · R-57, C-68
     datiles = e.ok(f"/api/fijos/{e.ids['dátiles de prueba']}/apuntar", {"cantidad": 6})["alimento"]
     assert (datiles["cantidad"], datiles["unidad"], datiles["kcal"], datiles["origen"]) == (
-        6, "g", 16.8, "de tu alimento fijo «dátiles de prueba»")
+        6, "g", 16.8, "de tu ingrediente «dátiles de prueba»")
     gel = e.ok(f"/api/fijos/{e.ids['gel de prueba']}/apuntar", {"cantidad": 2, "kcal": 1})["alimento"]
     assert (gel["cantidad"], gel["unidad"], gel["kcal"], gel["estado"]) == (2, "unidad", 180, "comido")
     assert e.dia()["total_kcal"] == 196.8

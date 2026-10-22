@@ -254,7 +254,7 @@ def test_editar_fijo_y_olla(e):  # R18
                                   "alias": ["guayaba"]})["fijo"]
     ayer = {"nombre": "dulce de guayaba de ciclismo", "cantidad": 2, "unidad": "unidad", "dia": AYER.isoformat(),
             "kcal": 180, "estimado": False, "dudoso": False, "supuestos": [],
-            "origen": "de tu alimento fijo «dulce de guayaba de ciclismo»"}
+            "origen": "de tu ingrediente «dulce de guayaba de ciclismo»"}
     e.ok("/api/confirmar", {"texto": "2 guayabas", "alimentos": [ayer]})
     cambiado = e.ok(f"/api/fijos/{guayaba['id']}", {"nombre": "dulce de guayaba de ciclismo", "kcal": 95,
                                                     "por": "unidad", "alias": ["guayaba"]})["fijo"]

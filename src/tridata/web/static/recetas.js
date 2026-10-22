@@ -1,6 +1,6 @@
 // The Recetas tab (unit 011). Plain ES module, no build step. app.js only tells it when the tab is shown.
 // Three sections, as in the 010 mockup: Recetas, Taras (the pots and tupperware, with their tare) and
-// Alimentos fijos. Tapping a row opens its card to change or delete it; «＋ Añadir …» opens an empty one.
+// Ingredientes (unit 019: the screen name of what the code and the data call «fijo» / alimento_fijo). Tapping a row opens its card to change or delete it; «＋ Añadir …» opens an empty one.
 // A recipe's ingredients are written or dictated in its own box and interpreted like a meal
 // (/api/interpretar, /api/dictado: the same interpreter, nothing saved), then reviewed here. The server
 // does every sum that is saved (fixed foods with THEIR kcal, kcal/100 g); this only shows and sends.
@@ -11,9 +11,14 @@
 // kcal of the whole recipe on top and a big «Pesar ahora», which weighs the batch in use whenever.
 // Unit 016: kcal are shown whole (calculator, «Apuntado en hoy», the whole recipe); kcal/100 g, kcal of a fixed
 // food and every input keep their decimal (Q-9, C-65).
+// Unit 019: the calculator of a recipe also goes by «Entera · ½ · ⅓ · ¼» (sent as `unidad: "receta"`), not weighed
+// too (provisional); «Añadir ingrediente» opens an empty line, and the name of every line is the search box of
+// buscador.js with only ingredients: choosing one leaves its grams or units and its kcal (the server recomputes
+// them with what is saved). `cuenta()` lives in buscador.js, the same for every screen.
 
 import { fechaLocal } from "./cola.js";
 import { grabar, puedeGrabar } from "./dictado.js";
+import { buscador, cuenta, fracciones, ponerGuardado, textoReceta, unidadPropia } from "./buscador.js";
 
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1, useGrouping: "always" });
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -91,17 +96,19 @@ export async function pintarRecetas(contenedor) {
   if (mio !== turno) return;
   if (!ok) { mensaje(respuesta.error ?? "No he podido cargar tus recetas.", "error"); return; }
   datos = respuesta;
+  ponerGuardado(datos);
   pintar();
 }
 
 function poner(respuesta) {
   datos = { recetas: respuesta.recetas, fijos: respuesta.fijos, ollas: respuesta.ollas };
+  ponerGuardado(datos);
 }
 
 function pintar() {
   pintarApartado("recetas", datos.recetas, filaReceta, "receta", "Aún no hay recetas.", "＋ Añadir receta");
   pintarApartado("taras", datos.ollas, filaOlla, "olla", "Aún no hay taras.", "＋ Añadir tara");
-  pintarApartado("fijos", datos.fijos, filaFijo, "fijo", "Aún no hay alimentos fijos.", "＋ Añadir alimento fijo");
+  pintarApartado("fijos", datos.fijos, filaFijo, "fijo", "Aún no hay ingredientes.", "＋ Añadir ingrediente");
 }
 
 function pintarApartado(cual, lista, fila, tipo, vacio, textoAnadir) {
@@ -270,13 +277,13 @@ function fichaOlla(o) {
 
 // -- the recipe card ------------------------------------------------------------------------------
 
-const MARCAS = { guardado: "alimento fijo", estimado: "estimado", dudoso: "dudoso: corrígelo o quítalo" };
+const MARCAS = { guardado: "ingrediente", estimado: "estimado", dudoso: "dudoso: corrígelo o quítalo" };
 
 // An interpreted food as an ingredient: doubtful, a fixed food (the server recomputes it) or estimated.
 function comoIngrediente(a) {
   let estado = "estimado";
   if (a.dudoso || a.kcal === null) estado = "dudoso";
-  else if (a.origen && a.origen.startsWith("de tu alimento fijo")) estado = "guardado";
+  else if (a.origen && (a.origen.startsWith("de tu ingrediente ") || a.origen.startsWith("de tu alimento fijo "))) estado = "guardado";
   return { nombre: a.nombre, cantidad: a.cantidad, unidad: a.unidad, kcal: estado === "dudoso" ? null : a.kcal, estado };
 }
 
@@ -292,6 +299,12 @@ function fichaReceta(r) {
   const dictar = el("button", { type: "button", className: "dictar", textContent: "🎤 Dictar" });
   dictar.setAttribute("aria-label", "Dictar lo que lleva");
   const lista = el("div", { className: "ingredientes" });
+  const anadirLinea = el("button", { type: "button", className: "anadir anadir-linea", textContent: "Añadir ingrediente" });
+  anadirLinea.addEventListener("click", () => {
+    modelo.ingredientes.push({ nombre: "", cantidad: null, unidad: null, kcal: null, estado: "dudoso", aMano: true });
+    pintarIngredientes();
+    lista.lastElementChild.querySelector("input").focus();
+  });
   const total = el("p", { className: "total-receta" });
   const ollas = [["", "Sin olla: escribo el peso neto"], ...datos.ollas.map((o) => [String(o.id), `${o.nombre} (${numero.format(o.tara_g)} g)`])];
   const olla = seleccion("Olla", ollas, v && v.olla_id && datos.ollas.some((o) => o.id === v.olla_id) ? String(v.olla_id) : "");
@@ -327,11 +340,25 @@ function fichaReceta(r) {
   function pintarIngredientes() {
     lista.replaceChildren(...modelo.ingredientes.map((i, n) => {
       const nombreI = campo("Ingrediente", i.nombre);
+      // unit 019: the name is the search box, only ingredients; choosing one leaves its grams or units
+      const desplegable = buscador({ entrada: nombreI.entrada, solo: "fijo", alElegir: ({ cosa }) => {
+        const propia = unidadPropia(cosa);
+        const sirve = i.cantidad > 0 && i.unidad === propia;
+        Object.assign(i, { nombre: cosa.nombre, elegido: cosa, estado: "guardado", aMano: false, unidad: propia,
+          cantidad: sirve ? i.cantidad : null, kcal: sirve ? cuenta("fijo", cosa, i.cantidad).kcal : null });
+        pintarIngredientes();
+        const linea = lista.children[n];
+        if (linea) linea.querySelector(".cuanto-linea input").focus();
+      } });
+      const quitar = el("button", { type: "button", className: "quitar", textContent: "Quitar" });
+      quitar.addEventListener("click", () => { modelo.ingredientes.splice(n, 1); pintarIngredientes(); });
+      if (i.elegido) return lineaElegida(i, nombreI, desplegable, quitar);
       const cant = campo("Cantidad", i.cantidad, "text", numerico);
       const unidad = campo("Unidad", i.unidad);
       const kcal = campo("kcal", i.kcal, "text", numerico);
       const leer = () => {
         const nuevo = comoNumero(kcal.entrada.value);
+        if (i.aMano) i.estado = nuevo !== null && !Number.isNaN(nuevo) ? "estimado" : "dudoso";
         if (nuevo !== i.kcal && nuevo !== null && !Number.isNaN(nuevo) && i.estado === "dudoso") i.estado = "estimado";
         if (nombreI.entrada.value.trim() !== i.nombre && i.estado === "dudoso" && nuevo !== null) i.estado = "estimado";
         Object.assign(i, { nombre: nombreI.entrada.value.trim(), cantidad: comoNumero(cant.entrada.value), unidad: unidad.entrada.value.trim() || null, kcal: nuevo });
@@ -339,13 +366,37 @@ function fichaReceta(r) {
       };
       for (const c of [nombreI, cant, unidad, kcal]) c.entrada.addEventListener("input", leer);
       kcal.entrada.addEventListener("change", pintarIngredientes);
-      const quitar = el("button", { type: "button", className: "quitar", textContent: "Quitar" });
-      quitar.addEventListener("click", () => { modelo.ingredientes.splice(n, 1); pintarIngredientes(); });
-      const marca = el("span", { className: `marca${i.estado === "dudoso" ? " alerta" : ""}`, textContent: MARCAS[i.estado] });
-      return el("div", { className: `ingrediente${i.estado === "dudoso" ? " dudosa" : ""}` },
-        el("div", { className: "marcas" }, marca), nombreI, el("div", { className: "fila" }, cant, unidad, kcal), quitar);
+      // a line written by hand without kcal yet is not «doubtful»: it says what it needs
+      const sinKcal = i.aMano && i.estado === "dudoso";
+      const marca = el("span", { className: `marca${i.estado === "dudoso" && !sinKcal ? " alerta" : ""}`,
+        textContent: sinKcal ? "escribe sus kcal o elige uno guardado" : MARCAS[i.estado] });
+      return el("div", { className: `ingrediente${i.estado === "dudoso" && !sinKcal ? " dudosa" : ""}` },
+        el("div", { className: "marcas" }, marca), nombreI, desplegable, el("div", { className: "fila" }, cant, unidad, kcal), quitar);
     }));
     pintarTotal();
+  }
+  // Unit 019 (R6): an ingredient chosen from the saved ones: its grams or units and its kcal, shown at once.
+  function lineaElegida(i, nombreI, desplegable, quitar) {
+    nombreI.entrada.readOnly = true;
+    const cant = campo(i.unidad === "unidad" ? "Unidades" : "Gramos", i.cantidad === null ? "" : String(i.cantidad), "text", numerico);
+    const kcalLinea = el("p", { className: "kcal-linea num" });
+    const pintarKcal = () => { kcalLinea.textContent = `${i.kcal === null ? "—" : kcalEnteras(i.kcal)} kcal · ingrediente`; };
+    cant.entrada.addEventListener("input", () => {
+      const n = comoNumero(cant.entrada.value);
+      i.cantidad = n;
+      i.kcal = n !== null && !Number.isNaN(n) && n > 0 ? cuenta("fijo", i.elegido, n).kcal : null;
+      pintarKcal();
+      pintarTotal();
+    });
+    pintarKcal();
+    const cambiar = el("button", { type: "button", className: "cambiar", textContent: "Cambiar" });
+    cambiar.addEventListener("click", () => {
+      Object.assign(i, { elegido: null, aMano: true, estado: i.kcal === null ? "dudoso" : "estimado" });
+      pintarIngredientes();
+    });
+    return el("div", { className: "ingrediente elegido" },
+      el("div", { className: "marcas" }, el("span", { className: "marca", textContent: MARCAS.guardado })), nombreI, desplegable,
+      el("div", { className: "fila dos cuanto-linea" }, cant, kcalLinea), el("div", { className: "acciones" }, cambiar, quitar));
   }
   const avisar = (texto) => { aviso.textContent = texto; aviso.hidden = !texto; };
 
@@ -431,7 +482,7 @@ function fichaReceta(r) {
     return respuesta.error ?? "No se ha podido guardar.";
   }
 
-  const nodos = [nombre, caja, el("div", { className: "acciones" }, interpretar, dictar), lista, total,
+  const nodos = [nombre, caja, el("div", { className: "acciones" }, interpretar, dictar), lista, anadirLinea, total,
     el("div", { className: "fila dos" }, olla, peso), aprox, calculo, alias_, nota];
   const { tarjeta, acciones } = armazon({
     clase: "ficha-receta", aviso, textoGuardar: r ? "Guardar cambios" : "Guardar receta", nodos,
@@ -484,20 +535,7 @@ function versiones(r, avisar) {
 
 // -- unit 013: how much was taken, logged today, and weighing later ---------------------------------
 
-const redondear = (n) => Math.round(n * 10) / 10;
 const sinPesar = (r) => !r.por_revisar && r.en_uso && r.en_uso.estado === "provisional";
-
-// The kcal of `n` of a saved thing, only to show them (G-31, G-32): the server works them out again.
-function cuenta(tipo, cosa, n) {
-  if (tipo === "fijo") {
-    return { kcal: redondear(cosa.por === "unidad" ? n * cosa.kcal : n * cosa.kcal / 100), provisional: false };
-  }
-  const v = cosa.en_uso;
-  if (!v || v.estado === "sin_kcal") return { problema: "Corrige la receta: tiene un ingrediente dudoso y no se puede calcular." };
-  if (v.kcal_100g !== null) return { kcal: redondear(n * v.kcal_100g / 100), provisional: false };
-  if (v.kcal_100g_aprox !== null) return { kcal: redondear(n * v.kcal_100g_aprox / 100), provisional: true };
-  return { problema: "Sin pesar: pésala o pon sus kcal/100 g aproximadas." };
-}
 
 function calculadora(tipo, cosa) {
   const porUnidad = tipo === "fijo" && cosa.por === "unidad";
@@ -507,34 +545,39 @@ function calculadora(tipo, cosa) {
   const aviso = el("p", { className: "aviso-calc", hidden: true });
   const apuntar = el("button", { type: "button", className: "principal", textContent: "Apuntar en hoy" });
   const avisar = (texto) => { aviso.textContent = texto; aviso.hidden = !texto; };
+  let fraccion = null; // unit 019: «Entera · ½ · ⅓ · ¼» of a recipe, instead of grams
+  const fr = tipo === "receta" ? fracciones((f) => { fraccion = f; cuanto.entrada.value = ""; pintarResultado(); }) : null;
   const leer = () => {
+    if (fraccion !== null) return { n: fraccion, unidad: "receta", ...cuenta(tipo, cosa, fraccion, "receta") };
     const n = comoNumero(cuanto.entrada.value);
     if (n === null || Number.isNaN(n) || n <= 0) return { n, problema: "Escribe cuánto has cogido.", vacio: true };
     return { n, ...cuenta(tipo, cosa, n) };
   };
-  const pintarResultado = () => {
+  function pintarResultado() {
     const c = leer();
     resultado.textContent = c.problema ? "— kcal" : `${kcalEnteras(c.kcal)} kcal${c.provisional ? " · provisional" : ""}`;
     avisar(c.problema && !c.vacio ? c.problema : "");
-  };
-  cuanto.entrada.addEventListener("input", pintarResultado);
+  }
+  cuanto.entrada.addEventListener("input", () => { fraccion = null; if (fr) fr.marcar(null); pintarResultado(); });
   apuntar.addEventListener("click", async () => {
     const c = leer();
     if (c.problema) { avisar(c.problema); return; }
     apuntar.disabled = true;
     avisar("");
     const ruta = `/api/${tipo === "fijo" ? "fijos" : "recetas"}/${cosa.id}/apuntar`;
-    const { ok, datos: r } = await api(ruta, { cantidad: c.n });
+    const { ok, datos: r } = await api(ruta, c.unidad ? { cantidad: c.n, unidad: c.unidad } : { cantidad: c.n });
     apuntar.disabled = false;
     if (!ok) { avisar(r.error ?? "No se ha podido apuntar: no se ha guardado nada."); return; }
     const a = r.alimento;
     const unidad = a.unidad === "unidad" ? (a.cantidad === 1 ? "unidad" : "unidades") : a.unidad;
-    cerrar(`Apuntado en hoy: ${a.nombre}, ${numero.format(a.cantidad)} ${unidad}, ${kcalEnteras(a.kcal)} kcal${a.provisional ? " (provisional)" : ""}.`);
+    const cuantoFue = a.unidad === "receta" ? textoReceta(a.cantidad) : `${numero.format(a.cantidad)} ${unidad}`;
+    cerrar(`Apuntado en hoy: ${a.nombre}, ${cuantoFue}, ${kcalEnteras(a.kcal)} kcal${a.provisional ? " (provisional)" : ""}.`);
   });
   const caja = el("div", { className: "calculadora" });
   if (tipo === "receta" && cosa.en_uso && cosa.en_uso.estado === "definitiva") {
     caja.append(el("p", { className: "estado-receta num", textContent: textoEstado(cosa.en_uso) }));
   }
+  if (fr) caja.append(fr.caja);
   caja.append(el("div", { className: "fila-calc" }, cuanto, resultado), aviso, apuntar);
   return caja;
 }

@@ -221,7 +221,8 @@ def test_sw_en_la_raiz_sin_cache_y_solo_el_cascaron(entorno):  # R7
                           "/static/peso.js", "/static/manifest.json", "/static/icono.svg", "/static/icono-32.png",
                           "/static/icono-180.png", "/static/icono-512.png", "/ajustes", "/static/ajustes.js",
                           "/static/recetas.js",  # unit 011: the Recetas tab
-                          "/static/balance.js", "/static/grafica.js"}  # unit 017: the Balance tab and its chart
+                          "/static/balance.js", "/static/grafica.js",  # unit 017: the Balance tab and its chart
+                          "/static/buscador.js"}  # unit 019: picking from what is saved
     assert '"/api/"' in r.text  # the fetch handler leaves /api/* to the network
     for ruta in rutas:
         assert entorno.cliente.get(ruta).status_code == 200

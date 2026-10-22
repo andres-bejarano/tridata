@@ -4,7 +4,7 @@
 // from a cache and nothing that is not a GET is touched. Served from the root (/sw.js) so its
 // scope is the whole app.
 
-const VERSION = "tridata-cascaron-v5"; // change it when the list below changes (v5: unit 017, Balance and its chart)
+const VERSION = "tridata-cascaron-v6"; // change it when the list below changes (v6: unit 019, the search box)
 const CASCARON = [
   "/", "/static/app.js", "/static/cola.js", "/static/dictado.js", "/static/estilos.css",
   // unit 010: the Peso tab, the settings page and the home-screen icon
@@ -14,6 +14,8 @@ const CASCARON = [
   "/static/recetas.js",
   // unit 017: the Balance tab and the weight-and-deficit chart
   "/static/balance.js", "/static/grafica.js",
+  // unit 019: the search box of saved recipes and ingredients
+  "/static/buscador.js",
 ];
 const ESPERA_RED_MS = 4000; // a PC that is off over Tailscale may hang instead of failing
 

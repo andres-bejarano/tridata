@@ -307,6 +307,44 @@ class RegistroComidas:
                 )
         return len(alimentos)
 
+    def sustituir_total_importado(self, dia: date, alimentos: list[Alimento], total: float, nombre_total: str) -> bool:
+        """Bug 020 (R5): replace the imported total line(s) of `dia` by `alimentos`, in ONE transaction.
+
+        Inside the transaction it checks again that every line of the day is `nombre_total` without an
+        interpretation and that they add up `total`; if not, it writes nothing and returns False. The new
+        lines keep the state of the old ones and must add up exactly `total` (else ValueError, nothing written).
+        """
+        if not alimentos:
+            return False
+        self.validar(alimentos)
+        ahora = datetime.now().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            filas = conn.execute("SELECT id, nombre, kcal, estado, interpretacion_id FROM alimento_apuntado "
+                                 "WHERE dia = ? ORDER BY id", (dia.isoformat(),)).fetchall()
+            if (not filas or any(f["interpretacion_id"] is not None or f["nombre"] != nombre_total for f in filas)
+                    or abs(sum(f["kcal"] or 0 for f in filas) - total) > 1e-6):
+                return False
+            if abs(sum(a.kcal or 0 for a in alimentos) - total) > 1e-6:
+                raise ValueError(f"{dia}: las líneas nuevas no suman lo mismo que el total ({total:g} kcal)")
+            estado = filas[0]["estado"]
+            conn.execute("DELETE FROM alimento_apuntado WHERE dia = ?", (dia.isoformat(),))
+            for a in alimentos:
+                conn.execute(
+                    "INSERT INTO alimento_apuntado (dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, "
+                    "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado, origen, "
+                    "provisional) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+                    (
+                        dia.isoformat(), a.nombre, a.cantidad, a.unidad, a.kcal, a.proteina_g, a.hidratos_g,
+                        a.grasa_g, estado, int(a.estimado), json.dumps(a.supuestos, ensure_ascii=False),
+                        int(a.pendiente_cantidad), ahora, a.origen, int(a.provisional),
+                    ),
+                )
+            nueva = conn.execute("SELECT SUM(kcal) FROM alimento_apuntado WHERE dia = ?", (dia.isoformat(),)).fetchone()
+            if abs((nueva[0] or 0) - total) > 1e-6:
+                raise ValueError(f"{dia}: el día no suma lo mismo después de sustituir: no se ha guardado")
+        return True
+
     def apuntes_del_dia(self, dia: date) -> list[dict]:
         with self._connect() as conn:
             filas = conn.execute(

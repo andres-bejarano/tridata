@@ -50,7 +50,8 @@ _SUBTOTAL = re.compile(rf"[=→]\s*~?\s*({_NUM})\s*(?:kcal)?", re.I)
 _ETIQUETA_NUMERADA = re.compile(r"\d+\s*[ªº]?\s*comida\s*(?:\([^)]*\))?\s*:", re.I)
 _ETIQUETA = re.compile(r"\b(?:desayuno|comida|cena|merienda|postre|real)\s*:", re.I)
 _TROZOS = re.compile(r"\s+/\s+|\s+\+\s+|;")
-_TROZO = re.compile(rf"^(.*?)\s*~?\s*({_NUM})\s*(?:kcal)?\s*$", re.I)
+# bug 020 (R8): «−480» / «-480» after a space is a negative kcal (an «ajuste hasta el total del día»)
+_TROZO = re.compile(rf"^(.*?)\s*~?\s*(?:(?<=\s)([-−]))?({_NUM})\s*(?:kcal)?\s*$", re.I)
 _CANTIDAD = re.compile(r"(\d+(?:[.,]\d+)?)\s*(g|ml)\b", re.I)
 _FECHA_DMA = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
 _FECHA_ISO = re.compile(r"^\d{4}-\d{1,2}-\d{1,2}$")
@@ -175,7 +176,8 @@ def _detalle(texto: str, dia: date) -> list[Alimento] | Duda:
         if len(cantidades) == 1:
             cantidad, unidad = float(cantidades[0][0].replace(",", ".")), cantidades[0][1].lower()
             nombre = " ".join(_CANTIDAD.sub(" ", nombre).split())
-        alimentos.append(Alimento(nombre=nombre, dia=dia, cantidad=cantidad, unidad=unidad, kcal=_kcal(m.group(2)),
+        kcal = -_kcal(m.group(3)) if m.group(2) else _kcal(m.group(3))
+        alimentos.append(Alimento(nombre=nombre, dia=dia, cantidad=cantidad, unidad=unidad, kcal=kcal,
                                   estimado=True, supuestos=[SUPUESTO]))
     suma = sum(a.kcal or 0 for a in alimentos)
     if not alimentos or not completo or (total is not None and abs(suma - total) > TOLERANCIA_DETALLE * total):
@@ -443,6 +445,361 @@ def filas_de_recetas(md_texto: str) -> FilasRecetas:
     secciones = _secciones(md_texto)
     return FilasRecetas(referencias=_tabla(_seccion(secciones, REFERENCIAS, False)),
                         taras=_tabla(_seccion(secciones, TARAS, False)))
+
+
+# -- bug 020: the foods of a day that was imported as one total line ---------------------------------
+#
+# `tridata importar-detalle` re-reads the «Registro diario» and, only on the days whose lines in the base are
+# all the single imported total, puts one line per food plus an «ajuste hasta el total del día» so the day
+# adds up exactly what it did. Read by rules, no AI (contract R3).
+
+AJUSTE = "ajuste hasta el total del día"
+SIN_KCAL = "sin kcal en el registro"
+
+_EMPIEZA_NUMERO = re.compile(r"^~?\s*\d")
+_EMPIEZA_EN_CURSO = re.compile(r"^en\s+curso\b", re.I)
+_NUMERO_INICIAL = re.compile(rf"^~?\s*({_NUM})")
+_KCAL_FINAL = re.compile(rf"(?:~\s*({_NUM})\s*(?:kcal)?|({_NUM})\s*kcal)\s*$", re.I)
+_KCAL_ANTES_DE_BARRA = re.compile(rf"(?:~\s*{_NUM}\s*(?:kcal)?|{_NUM}\s*kcal)$", re.I)
+_ETIQUETA_LIBRE = re.compile(r"^([^\d:()\[\]~]+?)\s*(\([^\d()\[\]]*\))?\s*:\s*")
+_ETIQUETA_NUMERO = re.compile(r"^\d+\s*[ªº]?\s*comida\s*(?:\([^)]*\))?\s*:\s*", re.I)
+_ABREN, _CIERRAN = "([", ")]"
+
+
+def _primer_parentesis(texto: str) -> tuple[str, str] | None:
+    """The inside of the first top-level «(…)» (nested ones counted) and what follows it; None without one."""
+    profundidad, inicio = 0, None
+    for i, c in enumerate(texto):
+        if c in _ABREN:
+            if profundidad == 0 and c == "(" and inicio is None:
+                inicio = i
+            profundidad += 1
+        elif c in _CIERRAN and profundidad:
+            profundidad -= 1
+            if profundidad == 0 and inicio is not None:
+                return texto[inicio + 1:i], texto[i + 1:]
+    return (texto[inicio + 1:], "") if inicio is not None else None
+
+
+def _partir(lista: str) -> list[str]:
+    """R3.2: the pieces of the list, only at the top level: «;», « / », « + » and «/» right after kcal."""
+    trozos, actual, profundidad, i = [], "", 0, 0
+    while i < len(lista):
+        c = lista[i]
+        if c in _ABREN:
+            profundidad += 1
+        elif c in _CIERRAN and profundidad:
+            profundidad -= 1
+        elif profundidad == 0:
+            if c == ";":
+                trozos.append(actual)
+                actual, i = "", i + 1
+                continue
+            if c in "/+" and lista[i - 1:i] == " " and lista[i + 1:i + 2] == " ":
+                trozos.append(actual)
+                actual, i = "", i + 2
+                continue
+            siguiente = lista[i + 1:i + 2]
+            if (c == "/" and _KCAL_ANTES_DE_BARRA.search(actual) and siguiente and not siguiente.isspace()
+                    and not siguiente.isdigit()):
+                trozos.append(actual)
+                actual, i = "", i + 1
+                continue
+        actual += c
+        i += 1
+    trozos.append(actual)
+    return [t.strip() for t in trozos if t.strip()]
+
+
+def _sin_etiqueta(trozo: str) -> str:
+    """R3.3: «desayuno:», «plato de prueba (comida/cena):», «1ª comida (14:30):» … out of the start."""
+    for _ in range(3):
+        m = _ETIQUETA_NUMERO.match(trozo)
+        if not m:
+            m = _ETIQUETA_LIBRE.match(trozo)
+            if m and len(m.group(1).split()) > 5:
+                m = None
+        if not m:
+            break
+        trozo = trozo[m.end():]
+    return trozo
+
+
+def _hasta_subtotal(trozo: str) -> str:
+    """R3.3: cut at the first top-level «=» or «→»: what follows is a subtotal."""
+    profundidad = 0
+    for i, c in enumerate(trozo):
+        if c in _ABREN:
+            profundidad += 1
+        elif c in _CIERRAN and profundidad:
+            profundidad -= 1
+        elif profundidad == 0 and c in "=→":
+            return trozo[:i]
+    return trozo
+
+
+def _sin_parentesis(trozo: str) -> tuple[str, list[str]]:
+    """The text without its top-level «(…)» and «[…]», and their insides (for the assumptions)."""
+    fuera, dentros, actual, profundidad = "", [], "", 0
+    for c in trozo:
+        if c in _ABREN:
+            if profundidad:
+                actual += c
+            profundidad += 1
+        elif c in _CIERRAN and profundidad:
+            profundidad -= 1
+            if profundidad:
+                actual += c
+            else:
+                dentros.append(actual.strip())
+                actual = ""
+                fuera += " "
+        elif profundidad:
+            actual += c
+        else:
+            fuera += c
+    if profundidad:  # an unclosed bracket: its text goes with the assumptions too
+        dentros.append(actual.strip())
+    return fuera, [x for x in dentros if x]
+
+
+def _nombre_limpio(texto: str) -> str:
+    return " ".join(texto.split()).strip(" ,.;:-—–~*")
+
+
+@dataclass
+class _Trozo:
+    texto: str  # without label, subtotal nor kcal: what goes to the assumptions
+    nombre: str
+    cantidad: float | None
+    unidad: str | None
+    kcal: float | None
+    dentro: list[str]
+
+
+def _leer_trozo(crudo: str) -> _Trozo | None:
+    trozo = _hasta_subtotal(_sin_etiqueta(crudo.replace("**", "").strip())).strip()
+    fuera, dentro = _sin_parentesis(trozo)
+    kcal = None
+    m = _KCAL_FINAL.search(fuera)
+    if m:
+        kcal = _kcal(m.group(1) or m.group(2))
+        fuera = fuera[:m.start()]
+        resto = _KCAL_FINAL.search(trozo)
+        trozo = trozo[:resto.start()] if resto else trozo
+    texto = _nombre_limpio(trozo)
+    nombre = _nombre_limpio(fuera)
+    if not texto and kcal is None:
+        return None
+    cantidad, unidad = None, None
+    cantidades = _CANTIDAD.findall(nombre)
+    if len(cantidades) == 1:
+        cantidad, unidad = float(cantidades[0][0].replace(",", ".")), cantidades[0][1].lower()
+        nombre = _nombre_limpio(_CANTIDAD.sub(" ", nombre))
+    return _Trozo(texto, nombre or "sin nombre", cantidad, unidad, kcal, dentro)
+
+
+def _lista(celda: str) -> tuple[str, str | None] | None:
+    """R3.1: the list of a cell and the comment after it; None when the cell has no list at all."""
+    texto = _limpia(celda)
+    parentesis = _primer_parentesis(texto)
+    if _EMPIEZA_NUMERO.match(texto) or _EMPIEZA_EN_CURSO.match(texto):
+        if parentesis is None:
+            return None
+        lista, despues = parentesis
+        comentario = _nombre_limpio(despues)
+        return lista, comentario or None
+    return texto, None
+
+
+def total_del_fichero(celda: str) -> float | None:
+    """R4: the total the registry gives a day: the number at the start, else the last «TOTAL ~N»."""
+    texto = _limpia(celda)
+    m = _NUMERO_INICIAL.match(texto)
+    if m:
+        return _kcal(m.group(1))
+    totales = _TOTAL_DETALLE.findall(texto)
+    return _kcal(totales[-1]) if totales else None
+
+
+def lineas_del_detalle(celda: str, dia: date, total: float, supuestos_previos: list[str]) -> list[Alimento] | None:
+    """R3: the food lines of the cell plus the «ajuste hasta el total del día» to `total`; None without detail.
+
+    `supuestos_previos` are those of the line it replaces: beyond «importado de deficit.md», they go (with the
+    comment after the list and the pieces without kcal) to the adjustment, or to the first line without one.
+    """
+    lista = _lista(celda)
+    if lista is None:
+        return None
+    crudos = _partir(lista[0])
+    trozos = [t for t in (_leer_trozo(c) for c in crudos) if t is not None]
+    if len(trozos) < 2 or not any(t.kcal is not None for t in trozos):
+        return None
+
+    def linea(nombre: str, cantidad: float, unidad: str, kcal: float, supuestos: list[str]) -> Alimento:
+        return Alimento(nombre=nombre, dia=dia, cantidad=cantidad, unidad=unidad, kcal=kcal, estimado=True,
+                        supuestos=[SUPUESTO, *supuestos])
+
+    lineas: list[Alimento] = []
+    sin_kcal: list[tuple[int, str]] = []
+    pendientes: list[tuple[int, _Trozo]] = []
+    for i, t in enumerate(trozos):
+        if t.kcal is None:
+            if t.cantidad is not None:
+                pendientes.append((i, t))
+            else:
+                sin_kcal.append((i, t.texto))
+            continue
+        if pendientes:
+            juntos = [p for _, p in pendientes] + [t]
+            lineas.append(linea(" + ".join(p.nombre for p in juntos), 1, "ración", t.kcal,
+                                [" + ".join(p.texto for p in juntos), *(x for p in juntos for x in p.dentro)]))
+            pendientes = []
+        elif t.cantidad is not None and t.unidad is not None:
+            lineas.append(linea(t.nombre, t.cantidad, t.unidad, t.kcal, t.dentro))
+        else:
+            lineas.append(linea(t.nombre, 1, "ración", t.kcal, t.dentro))
+    sin_kcal += [(i, p.texto) for i, p in pendientes]
+
+    extra = [s for s in supuestos_previos if s != SUPUESTO]
+    if lista[1]:
+        extra.append(lista[1])
+    if sin_kcal:
+        extra.append(f"{SIN_KCAL}: " + " · ".join(texto for _, texto in sorted(sin_kcal)))
+    ajuste = total - sum(a.kcal or 0 for a in lineas)
+    if abs(ajuste) > 1e-9:
+        lineas.append(linea(AJUSTE, 1, "ración", ajuste, extra))
+    elif extra:
+        lineas[0].supuestos += extra
+    return lineas
+
+
+# what happens to each day (R2, R4)
+CAMBIA = "cambia"
+SIN_DETALLE = "sigue igual: sin detalle"
+CON_APP = "no se toca: algo apuntado en la app"
+YA_DETALLE = "no se toca: ya tiene sus alimentos"
+NO_COINCIDE = "no se toca"
+NO_EN_BASE = "no está en la base: no se añade"
+CAMBIADO_ENTRETANTO = "no se toca: ha cambiado en la base mientras tanto, se queda como estaba"
+
+
+def _kcal_texto(n: float, signo: bool = False) -> str:
+    entero = int(abs(float(n)) + 0.5)
+    prefijo = ("+" if n > 0 else "−" if n < 0 else "") if signo else ("−" if n < 0 and entero else "")
+    return prefijo + f"{entero:,}".replace(",", ".")
+
+
+@dataclass
+class DiaDetalle:
+    dia: date
+    resultado: str
+    total: float | None = None  # the kcal the day has in the base
+    fichero: float | None = None  # the total the registry or the dubious decision gives
+    lineas: list[Alimento] = field(default_factory=list)
+
+    def texto(self) -> str:
+        if self.resultado == NO_COINCIDE:
+            return (f"{self.dia} · no se toca: el total del fichero ({_kcal_texto(self.fichero or 0) if self.fichero is not None else '—'}) "
+                    f"no es el de la base ({_kcal_texto(self.total or 0)})")
+        if self.resultado != CAMBIA:
+            return f"{self.dia} · {self.resultado}"
+        filas = [f"{self.dia} · cambia: {len(self.lineas)} líneas, suman {_kcal_texto(self.total or 0)} kcal "
+                 "(igual que antes)"]
+        for a in self.lineas:
+            cantidad = f"{numero(a.cantidad)} {a.unidad}" if a.unidad in ("g", "ml") else "1 ración"
+            supuestos = [s for s in a.supuestos if s != SUPUESTO]
+            filas.append(f"    {a.nombre} · {cantidad} · {_kcal_texto(a.kcal or 0, signo=a.nombre == AJUSTE)} kcal"
+                         + (f" — {' · '.join(supuestos)}" if supuestos else ""))
+        return "\n".join(filas)
+
+
+@dataclass
+class PlanDetalle:
+    dias: list[DiaDetalle]
+
+    def cambian(self) -> list[DiaDetalle]:
+        return [x for x in self.dias if x.resultado == CAMBIA]
+
+    def resumen(self) -> str:
+        cuenta = {r: sum(x.resultado == r for x in self.dias) for r in (SIN_DETALLE, CON_APP, YA_DETALLE, NO_COINCIDE)}
+        cambian = self.cambian()
+        ajustes = sum(a.nombre == AJUSTE for x in cambian for a in x.lineas)
+        alimentos = sum(len(x.lineas) for x in cambian) - ajustes
+        return (f"Detalle: {len(cambian)} días cambiados ({alimentos} alimentos, {ajustes} ajustes) · "
+                f"{cuenta[SIN_DETALLE]} sin detalle siguen igual · no se tocan: {cuenta[CON_APP]} con algo de la app, "
+                f"{cuenta[YA_DETALLE]} que ya tenía sus alimentos, {cuenta[NO_COINCIDE]} cuyo total no coincide")
+
+
+def solo_total_importado(lineas: list[dict]) -> bool:
+    """R4: every line of the day is the imported total, without an interpretation."""
+    return bool(lineas) and all(x["interpretacion_id"] is None and x["nombre"] == TOTAL_IMPORTADO for x in lineas)
+
+
+def _de_la_app(lineas: list[dict]) -> bool:
+    return any(x["interpretacion_id"] is not None or SUPUESTO not in json.loads(x["supuestos"] or "[]")
+               for x in lineas)
+
+
+def lineas_de_la_base(db_path: Path | str) -> dict[date, list[dict]]:
+    """Every food line of the base by day, read-only (the dry run never writes)."""
+    conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        existe = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='alimento_apuntado'").fetchone()
+        filas = conn.execute("SELECT id, dia, nombre, kcal, supuestos, interpretacion_id FROM alimento_apuntado "
+                             "ORDER BY id").fetchall() if existe else []
+    finally:
+        conn.close()
+    por_dia: dict[date, list[dict]] = {}
+    for f in filas:
+        por_dia.setdefault(date.fromisoformat(f["dia"]), []).append(dict(f))
+    return por_dia
+
+
+def decididos(ultima: Mapping | None) -> dict[date, float]:
+    """R4: the total Andrés accepted or corrected for each dubious day of the «Registro diario»."""
+    resultado: dict[date, float] = {}
+    for x in ((ultima or {}).get("resumen") or {}).get("dudosos") or []:
+        if x.get("apartado") == REGISTRO and x.get("decision") in (ACEPTADO, CORREGIDO) and x.get("dia") \
+                and x.get("valor") is not None:
+            resultado[date.fromisoformat(x["dia"])] = float(x["valor"])
+    return resultado
+
+
+def planear_detalle(md_texto: str, base: Mapping[date, list[dict]], decisiones: Mapping[date, float]) -> PlanDetalle:
+    """What `importar-detalle` would do with each day of the registry. `ErrorImportacion` without the section."""
+    texto = _seccion(_secciones(md_texto), REGISTRO, True)
+    celdas: dict[date, str] = {}
+    for fila in _tabla(texto):
+        fecha = _limpia(fila[0]) if fila else ""
+        if len(fila) < 4 or not _FECHA_ISO.match(fecha):
+            continue
+        try:
+            celdas[date.fromisoformat(fecha)] = fila[3]  # repeated rows: the last one, as unit 009
+        except ValueError:
+            continue
+    dias = []
+    for dia, celda in sorted(celdas.items()):
+        lineas = base.get(dia, [])
+        if not lineas:
+            dias.append(DiaDetalle(dia, NO_EN_BASE))
+            continue
+        if not solo_total_importado(lineas):
+            dias.append(DiaDetalle(dia, CON_APP if _de_la_app(lineas) else YA_DETALLE))
+            continue
+        total = sum(x["kcal"] or 0 for x in lineas)
+        supuestos = list(dict.fromkeys(s for x in lineas for s in json.loads(x["supuestos"] or "[]")))
+        nuevas = lineas_del_detalle(celda, dia, total, supuestos)
+        if nuevas is None:
+            dias.append(DiaDetalle(dia, SIN_DETALLE, total))
+            continue
+        fichero = decisiones.get(dia, total_del_fichero(celda))
+        if fichero is None or abs(fichero - total) > 1e-6:
+            dias.append(DiaDetalle(dia, NO_COINCIDE, total, fichero))
+            continue
+        dias.append(DiaDetalle(dia, CAMBIA, total, fichero, nuevas))
+    return PlanDetalle(dias)
 
 
 # -- decisions and writing ---------------------------------------------------------------------

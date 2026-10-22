@@ -37,6 +37,10 @@ Examples:
     # Load the recipes, fixed foods and pot tares of deficit.md into the Recetas tab (once)
     tridata importar-recetas --md deficit.md --simular
     tridata importar-recetas --md deficit.md
+
+    # Give back their foods to the days imported as one total line (bug 020); the totals do not change
+    tridata importar-detalle --md deficit.md --simular
+    tridata importar-detalle --md deficit.md
 """
 from __future__ import annotations
 
@@ -209,6 +213,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Dry run: show what would be loaded, write nothing.",
     )
 
+    detalle_cmd = sub.add_parser(
+        "importar-detalle",
+        help="Put the foods of deficit.md into the days imported as one total line (the totals do not change)",
+    )
+    detalle_cmd.add_argument("--md", type=Path, required=True, help="The deficit.md file.")
+    detalle_cmd.add_argument(
+        "--simular", action="store_true", default=False,
+        help="Dry run: show what each day would get, write nothing.",
+    )
+
     return parser
 
 
@@ -224,6 +238,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_importar(args.md, args.html, args.simular)
     if args.command == "importar-recetas":
         return _cmd_importar_recetas(args.md, args.simular)
+    if args.command == "importar-detalle":
+        return _cmd_importar_detalle(args.md, args.simular, db_path=DEFAULT_DB_PATH, backup_dir=DEFAULT_BACKUP_DIR)
     if args.command == "export-nutricion":
         return _cmd_export_nutricion(args.out)
 
@@ -577,6 +593,75 @@ def _cmd_importar_recetas(md: Path, simular: bool, *, db_path: Path = DEFAULT_DB
     nuevas = sum(estado == "nueva" for _, estado in resultado)
     print(f"Guardado: {nuevas} nuevas · {sum(estado == 'ya estaba' for _, estado in resultado)} ya estaban "
           "(no se tocan). Lo que está «por revisar» no se usa al dictar hasta que lo abras y lo guardes.")
+    return 0
+
+
+def _cmd_importar_detalle(md: Path, simular: bool, *, db_path: Path = DEFAULT_DB_PATH,
+                          backup_dir: Path = DEFAULT_BACKUP_DIR,
+                          preguntar: Callable[[str], str] | None = None) -> int:
+    """`tridata importar-detalle` (bug 020): read the «Registro diario» → what happens to each day and its new
+    lines → (dry run ends) → «¿Guardar?» → backup → replace day by day → summary.
+
+    Only the days whose lines are all the imported total change, and each one keeps its total. Everything it
+    prints goes to the terminal only (never to sync.log): it is Andrés's health data.
+    """
+    from .nutricion import RegistroComidas
+    from .nutricion import importar_deficit as imp
+
+    preguntar = preguntar or input
+    md_bytes = _leer_fichero(md, "--md")
+    if md_bytes is None:
+        return 1
+    if not db_path.is_file():
+        print(f"No hay base de datos en {db_path}: no hay días importados que completar.", file=sys.stderr)
+        return 1
+    try:
+        plan = imp.planear_detalle(md_bytes.decode("utf-8"), imp.lineas_de_la_base(db_path),
+                                   imp.decididos(imp.Importaciones(db_path).ultima()))
+    except imp.ErrorImportacion as exc:
+        print(f"No se puede completar el detalle: {exc}.", file=sys.stderr)
+        return 1
+    except UnicodeDecodeError:
+        print("No se puede completar el detalle: el fichero tiene que estar en UTF-8.", file=sys.stderr)
+        return 1
+
+    for dia in plan.dias:
+        print(dia.texto())
+    print(plan.resumen())
+    if simular:
+        print("Simulación: no se ha guardado nada.")
+        return 0
+    if not plan.cambian():
+        print("No hay ningún día que cambiar: no se ha guardado nada.")
+        return 0
+    try:
+        if preguntar("¿Guardar? [s/N] ").strip().lower() != "s":
+            print("No se ha guardado nada.")
+            return 0
+    except (EOFError, KeyboardInterrupt):
+        print("\nNo se ha guardado nada.")
+        return 1
+
+    try:
+        codigo = _cmd_backup(_SoloCopia(db_path), backup_dir, 14, [md])
+    except Exception as exc:  # any failure of the copy stops before writing
+        print(f"La copia de seguridad ha fallado ({exc}): no se ha guardado nada.", file=sys.stderr)
+        return 1
+    if codigo != 0:
+        print("La copia de seguridad ha fallado: no se ha guardado nada.", file=sys.stderr)
+        return 1
+
+    registro = RegistroComidas(db_path)
+    for dia in plan.cambian():
+        try:
+            hecho = registro.sustituir_total_importado(dia.dia, dia.lineas, dia.total or 0, imp.TOTAL_IMPORTADO)
+        except ValueError as exc:
+            print(f"  {dia.dia}: {exc}", file=sys.stderr)
+            hecho = False
+        if not hecho:
+            dia.resultado = imp.CAMBIADO_ENTRETANTO
+            print(dia.texto())
+    print(plan.resumen())
     return 0
 
 

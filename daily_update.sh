@@ -33,15 +33,27 @@ WIDE_MARKER="${WIDE_MARKER:-/home/ankalagon/.tridata/last_wide_sync}"
 # después funciona) — reintentamos antes de rendirnos. Esto también evita
 # que un barrido amplio pierda su única oportunidad de la semana por un
 # hipo pasajero: si falla incluso tras los reintentos, no se actualiza
-# WIDE_MARKER y mañana se vuelve a intentar automáticamente.
+# WIDE_MARKER y se vuelve a intentar en la pasada de la hora siguiente (o
+# mañana, pasadas las 14:00).
+#
+# Unidad 018 (G-6, G-45): la espera se dobla en cada intento (60 s y 120 s). Si
+# `tridata sync` sale con 75, Garmin está limitando las peticiones (un 429): la
+# base pasa a RATE_LIMIT_DELAY_SECONDS (300 s y 600 s). Nunca más de 3 inicios
+# de sesión por pasada; la pasada siguiente es una hora después (el timer).
 MAX_ATTEMPTS=3
 RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-60}"
+RATE_LIMIT_DELAY_SECONDS="${RATE_LIMIT_DELAY_SECONDS:-300}"
+RATE_LIMIT_EXIT=75
+RETRY_MESSAGE="se reintenta en la próxima hora (hasta las 14:00)"
 
 run_step() {
     local label="$1"; shift
     local attempt=1
+    local code wait base
     while true; do
-        if "$@" >> "$LOG" 2>&1; then
+        code=0
+        "$@" >> "$LOG" 2>&1 || code=$?
+        if [ "$code" -eq 0 ]; then
             if [ "$attempt" -gt 1 ]; then
                 echo "$label OK (intento $attempt/$MAX_ATTEMPTS)" >> "$LOG"
             else
@@ -53,8 +65,16 @@ run_step() {
         if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
             return 1
         fi
+        base="$RETRY_DELAY_SECONDS"
+        if [ "$code" -eq "$RATE_LIMIT_EXIT" ]; then
+            base="$RATE_LIMIT_DELAY_SECONDS"
+        fi
+        wait=$(( base * (1 << (attempt - 1)) ))
+        if [ "$code" -eq "$RATE_LIMIT_EXIT" ]; then
+            echo "$label: Garmin limita las peticiones (429), espero $wait s" >> "$LOG"
+        fi
         attempt=$((attempt + 1))
-        sleep "$RETRY_DELAY_SECONDS"
+        sleep "$wait"
     done
 }
 
@@ -73,21 +93,55 @@ export_nutricion() {
     fi
 }
 
+# --- Reintento el mismo día (unidad 018, R-92) ---------------------------
+# El timer lanza esta rutina cada hora en punto de 08:00 a 14:00. ROUTINE_MARKER
+# guarda «AAAA-MM-DD copia» cuando la copia de seguridad sale bien y
+# «AAAA-MM-DD hecha» al escribir «Done.». Si hoy ya está hecha, una línea y
+# fuera, sin llamar a `tridata`; si hoy ya hay copia, no se repite (así los
+# reintentos no se comen las 14 copias que se guardan). `--forzar` corre siempre.
+ROUTINE_MARKER="${ROUTINE_MARKER:-$HOME/.tridata/last_routine}"
+TODAY="$(date '+%Y-%m-%d')"
+FORZAR=false
+if [ "${1:-}" = "--forzar" ]; then
+    FORZAR=true
+fi
+routine_state=""
+if [ -s "$ROUTINE_MARKER" ]; then
+    read -r marker_day marker_state < "$ROUTINE_MARKER" || true
+    if [ "${marker_day:-}" = "$TODAY" ]; then
+        routine_state="${marker_state:-}"
+    fi
+fi
+mark_routine() {
+    mkdir -p "$(dirname "$ROUTINE_MARKER")"
+    echo "$TODAY $1" > "$ROUTINE_MARKER"
+}
+if [ "$FORZAR" = false ] && [ "$routine_state" = "hecha" ]; then
+    echo "Rutina ya hecha hoy ($TODAY): nada que hacer" >> "$LOG"
+    exit 0
+fi
+
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
 
 # --- Copia de seguridad, antes de tocar nada -----------------------------
 # Copia verificada de la base de datos (y del diario de déficit, que no se
 # puede volver a bajar de Garmin) en ~/.tridata/backups/, guardando 14.
 # Va antes del sync para que un sync que estropee algo no arrastre también
-# la copia. Si falla, se avisa pero no se bloquea el resto.
-BACKUP_EXTRAS=()
-for f in deficit/deficit.md deficit/grafica_peso_deficit.html; do
-    [ -f "$f" ] && BACKUP_EXTRAS+=(--extra "$f")
-done
-if "$TRIDATA" backup "${BACKUP_EXTRAS[@]}" >> "$LOG" 2>&1; then
-    echo "backup OK" >> "$LOG"
+# la copia. Si falla, se avisa pero no se bloquea el resto (y se vuelve a
+# intentar en el reintento de la hora siguiente).
+if [ "$FORZAR" = false ] && [ "$routine_state" = "copia" ]; then
+    echo "backup: ya hecha hoy" >> "$LOG"
 else
-    echo "backup FAILED (exit $?) — se sigue con el sync" >> "$LOG"
+    BACKUP_EXTRAS=()
+    for f in deficit/deficit.md deficit/grafica_peso_deficit.html; do
+        [ -f "$f" ] && BACKUP_EXTRAS+=(--extra "$f")
+    done
+    if "$TRIDATA" backup "${BACKUP_EXTRAS[@]}" >> "$LOG" 2>&1; then
+        echo "backup OK" >> "$LOG"
+        mark_routine copia
+    else
+        echo "backup FAILED (exit $?) — se sigue con el sync" >> "$LOG"
+    fi
 fi
 
 # Antes del sync y sin depender de él: si falla, se avisa y se sigue.
@@ -115,13 +169,13 @@ if [ "$do_wide" = true ]; then
         mkdir -p "$(dirname "$WIDE_MARKER")"
         date -u '+%Y-%m-%d' > "$WIDE_MARKER"
     else
-        echo "sync (wide) FAILED tras $MAX_ATTEMPTS intentos — se reintentará mañana" >> "$LOG"
+        echo "sync (wide) FAILED tras $MAX_ATTEMPTS intentos — $RETRY_MESSAGE" >> "$LOG"
         exit 1
     fi
 else
     echo "Barrido amplio: no (último hace $days_since día(s); toca cada $WIDE_INTERVAL_DAYS)" >> "$LOG"
     if ! run_step "sync" "$TRIDATA" sync; then
-        echo "sync FAILED tras $MAX_ATTEMPTS intentos" >> "$LOG"
+        echo "sync FAILED tras $MAX_ATTEMPTS intentos — $RETRY_MESSAGE" >> "$LOG"
         exit 1
     fi
 fi
@@ -191,3 +245,4 @@ if ! export_nutricion; then
 fi
 
 echo "Done." >> "$LOG"
+mark_routine hecha

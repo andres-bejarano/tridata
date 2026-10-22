@@ -114,13 +114,14 @@ def objetivo_del_dia(objetivo_dia: Mapping[str, Any] | None, plan: Mapping[str, 
     if propio is not None:
         de_plan = "" if del_plan is None else f" (el plan decía {_pct_texto(del_plan)})"
         return {"porcentaje": propio, "origen": "dia", "plan_pct": del_plan,
+                "repartido": bool(objetivo_dia and objetivo_dia.get("repartido")),  # unit 018: from the spread
                 "texto": f"Objetivo de hoy: {_pct_texto(propio)}, cambiado para este día{de_plan}."}
     if del_plan is not None:
         motivo = (plan or {}).get("motivo") or "ajuste"
         por = f" por la {motivo}" if motivo.startswith("carrera ") else " del plan"
-        return {"porcentaje": del_plan, "origen": "plan", "plan_pct": del_plan,
+        return {"porcentaje": del_plan, "origen": "plan", "plan_pct": del_plan, "repartido": False,
                 "texto": f"Objetivo de hoy: {_pct_texto(del_plan)}{por}."}
-    return {"porcentaje": 0, "origen": "sin_plan", "plan_pct": None,
+    return {"porcentaje": 0, "origen": "sin_plan", "plan_pct": None, "repartido": False,
             "texto": "Sin plan en Ajustes: el objetivo de hoy es mantenimiento."}
 
 

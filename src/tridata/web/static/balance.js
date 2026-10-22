@@ -2,6 +2,8 @@
 // The week from Monday to Sunday (◀ ▶ by weeks), what is above the objective and «Repartir lo que llevo»
 // (saves nothing until «Aplicar»), the weight-and-deficit chart of grafica.js with its three ranges and the
 // list of every week. The server does every sum (nutricion/balance.py); this only draws and asks.
+// Unit 018: a fourth button, «Fechas…», draws the same chart between two dates (/api/balance?desde=&hasta=); its
+// form (`formularioFechas`) and `delAl` are shared with the Peso tab. «repartido» only on the days of the spread.
 
 import { graficaPesoDeficit, leyendaPesoDeficit } from "./grafica.js";
 
@@ -15,8 +17,12 @@ const RANGOS = [["4s", "4 semanas"], ["3m", "3 meses"], ["todo", "Todo"]];
 
 let turno = 0; // drops a late answer when the tab is painted twice quickly
 let semanaVista = null; // the Monday on screen (ISO), null = this week
-let rango = "4s";
+let rango = "4s"; // the pressed button: "4s" | "3m" | "todo" | "fechas"
 let ultimo = null; // { contenedor, irADia }
+let fechas = null; // unit 018: { desde, hasta } last drawn between dates (kept in this module, never saved)
+let enElFormulario = null; // unit 018: { desde, hasta } as typed, kept when going to another range and back
+let hoyBalance = null;
+let datosGrafica = null; // what the chart shows now
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -36,7 +42,7 @@ const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`;
 const mes = (iso, fmt) => fmt.format(comoFecha(iso)).replace(".", "");
 
 // «del 19 al 25 de octubre» / «del 28 de septiembre al 4 de octubre»; short: «del 12 al 18 oct».
-function delAl(desde, hasta, corto = false) {
+export function delAl(desde, hasta, corto = false) {
   const fmt = corto ? mesCorto : mesLargo;
   const de = corto ? " " : " de ";
   const d1 = comoFecha(desde).getDate(), d2 = comoFecha(hasta).getDate();
@@ -60,8 +66,10 @@ async function pedir(ruta, cuerpo) {
 export async function pintarBalance(contenedor, irADia) {
   ultimo = { contenedor, irADia };
   const yo = ++turno;
+  // unit 018 (the R12 family): while the tab is asked again, what it showed before cannot be tapped
+  for (const b of contenedor.querySelectorAll("button")) b.disabled = true;
   const ruta = semanaVista ? `/api/balance/semana?fecha=${semanaVista}` : "/api/balance/semana";
-  const [s, g, l] = await Promise.all([pedir(ruta), pedir(`/api/balance?rango=${rango}`), pedir("/api/balance/semanas")]);
+  const [s, g, l] = await Promise.all([pedir(ruta), pedir(rutaGrafica()), pedir("/api/balance/semanas")]);
   if (yo !== turno) return;
   if (!s.ok || !g.ok || !l.ok) {
     contenedor.replaceChildren(el("p", { className: "aviso", textContent: "No he podido cargar tu balance: no hay conexión con el PC." }));
@@ -73,9 +81,15 @@ export async function pintarBalance(contenedor, irADia) {
   }
   const tarjetaSemana = el("article", { id: "balance-semana", className: "tarjeta semana-balance" });
   pintarSemana(tarjetaSemana, s.datos, irADia);
+  hoyBalance = s.datos.hoy;
   const tarjetaGrafica = el("article", { id: "balance-grafica", className: "tarjeta grafica" });
   contenedor.replaceChildren(tarjetaSemana, tarjetaGrafica, el("h2", { textContent: "Tus semanas" }), listaSemanas(l.datos.semanas, contenedor));
   pintarGrafica(tarjetaGrafica, g.datos);
+}
+
+function rutaGrafica() {
+  if (rango === "fechas" && fechas) return `/api/balance?desde=${fechas.desde}&hasta=${fechas.hasta}`;
+  return `/api/balance?rango=${rango === "fechas" ? "4s" : rango}`;
 }
 
 function repintar() {
@@ -86,7 +100,7 @@ function repintar() {
 
 function textoObjetivo(f) {
   if (f.objetivo_pct === undefined) return "";
-  if (f.objetivo_origen === "dia") return `${pctSigno(f.objetivo_pct)} · repartido`;
+  if (f.repartido) return `${pctSigno(f.objetivo_pct)} · repartido`; // unit 018: only the days of the spread
   if (f.motivo && f.motivo.startsWith("carrera ")) return `${pctSigno(f.objetivo_pct)} · carrera`;
   return pctSigno(f.objetivo_pct);
 }
@@ -171,7 +185,7 @@ function reparto(s) {
     const pintarPropuesta = (p) => {
       propuesta = p;
       const aplicar = el("button", { type: "button", id: "reparto-aplicar", className: "principal", textContent: "Aplicar" });
-      const no = el("button", { type: "button", id: "reparto-no", textContent: "No, déjalo" });
+      const no = el("button", { type: "button", id: "reparto-no", textContent: p.dias.length ? "No, déjalo" : "Entendido" });
       aplicar.disabled = !p.dias.length;
       no.addEventListener("click", () => { caja.hidden = true; boton.hidden = false; mensaje.hidden = true; });
       aplicar.addEventListener("click", async () => {
@@ -186,8 +200,10 @@ function reparto(s) {
         if (!r.ok) { aplicar.disabled = false; mensaje.textContent = r.datos.error ?? "No se ha podido aplicar."; mensaje.hidden = false; return; }
         repintar();
       });
-      caja.replaceChildren(el("p", { id: "reparto-texto", textContent: p.texto }), el("p", { className: "suave", textContent: "Aún no se ha cambiado nada: solo si lo aplicas." }),
-        el("div", { className: "acciones" }, aplicar, no));
+      // unit 018: nothing to propose (already spread): only the reason, nothing to apply
+      caja.replaceChildren(el("p", { id: "reparto-texto", textContent: p.texto }),
+        p.dias.length ? el("p", { className: "suave", textContent: "Aún no se ha cambiado nada: solo si lo aplicas." }) : null,
+        el("div", { className: "acciones" }, p.dias.length ? aplicar : null, no));
     };
     boton.addEventListener("click", async () => {
       boton.disabled = true;
@@ -209,7 +225,7 @@ function reparto(s) {
     const si = el("button", { type: "button", id: "volver-si", className: "principal", textContent: "Sí, volver al plan" });
     const no = el("button", { type: "button", id: "volver-no", textContent: "No" });
     const confirmar = el("div", { id: "volver-confirmar", className: "confirmar-borrado", hidden: true },
-      el("p", { textContent: "Los días que quedan de esta semana vuelven al % de tu plan: también quita un % puesto a mano en esos días." }),
+      el("p", { textContent: "Los días que quedan de esta semana vuelven al % de tu plan: también quita un % puesto a mano en esos días. Los días de mantenimiento antes de una carrera se quedan como están." }),
       el("div", { className: "acciones" }, si, no));
     volver.addEventListener("click", () => { confirmar.hidden = false; volver.hidden = true; });
     no.addEventListener("click", () => { confirmar.hidden = true; volver.hidden = false; });
@@ -227,7 +243,52 @@ function reparto(s) {
 
 // -- the chart and its ranges ----------------------------------------------------------------------
 
+const fechaLarga = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "long" });
+
+// Unit 018: «Desde», «Hasta» (type=date, between `min` and `max`) and «Ver», shared with the Peso tab. «Ver» with
+// the start after the end only says so: nothing is asked and the chart stays. `alVer(desde, hasta)` asks.
+export function formularioFechas({ prefijo, desde, hasta, min, max, alVer, alEscribir }) {
+  const campo = (id, texto, valor) => {
+    const entrada = el("input", { type: "date", id: `${prefijo}-${id}`, value: valor ?? "" });
+    if (min) entrada.min = min;
+    if (max) entrada.max = max;
+    entrada.addEventListener("input", () => alEscribir?.({ desde: inicio.value, hasta: fin.value }));
+    return [entrada, el("label", { className: "campo-fecha", htmlFor: `${prefijo}-${id}` }, el("span", { textContent: texto }), entrada)];
+  };
+  const [inicio, etiquetaInicio] = campo("desde", "Desde", desde);
+  const [fin, etiquetaFin] = campo("hasta", "Hasta", hasta);
+  const ver = el("button", { type: "button", id: `${prefijo}-ver`, className: "principal", textContent: "Ver" });
+  const error = el("p", { id: `${prefijo}-fechas-error`, className: "aviso", role: "alert", hidden: true });
+  ver.addEventListener("click", () => {
+    error.hidden = true;
+    if (!inicio.value || !fin.value) { error.textContent = "Elige las dos fechas."; error.hidden = false; return; }
+    if (inicio.value > fin.value) { error.textContent = "La fecha de inicio tiene que ser anterior o igual a la de fin"; error.hidden = false; return; }
+    alVer(inicio.value, fin.value, error);
+  });
+  return el("div", { id: `${prefijo}-fechas`, className: "fechas-grafica" },
+    el("div", { className: "fechas-campos" }, etiquetaInicio, etiquetaFin, ver), error);
+}
+
+// Unit 018: under the chart, what a range between dates needs to say (the data start later, or there are none).
+export function notaFechas(prefijo, pedido, datos) {
+  if (datos.vacio) return el("p", { id: `${prefijo}-fechas-nota`, className: "suave", textContent: "No hay días con datos entre esas fechas" });
+  if (pedido && datos.desde && pedido.desde < datos.desde) {
+    return el("p", { id: `${prefijo}-fechas-nota`, className: "suave", textContent: `Tus datos empiezan el ${fechaLarga.format(comoFecha(datos.desde))}` });
+  }
+  return null;
+}
+
+async function verEntreFechas(tarjeta, desde, hasta, error) {
+  const r = await pedir(`/api/balance?desde=${desde}&hasta=${hasta}`);
+  if (!r.ok) { error.textContent = r.datos.error ?? "No he podido cargar esas fechas."; error.hidden = false; return; }
+  if (rango !== "fechas") return;
+  fechas = { desde, hasta };
+  pintarGrafica(tarjeta, r.datos);
+}
+
 function pintarGrafica(tarjeta, datos) {
+  datosGrafica = datos;
+  if (datos.hasta && !hoyBalance) hoyBalance = datos.hasta;
   const botones = RANGOS.map(([clave, texto]) => {
     const b = el("button", { type: "button", textContent: texto });
     b.setAttribute("aria-pressed", String(clave === rango));
@@ -239,12 +300,38 @@ function pintarGrafica(tarjeta, datos) {
     });
     return b;
   });
+  const deFechas = el("button", { type: "button", id: "balance-fechas-boton", textContent: "Fechas…" });
+  deFechas.setAttribute("aria-pressed", String(rango === "fechas"));
+  deFechas.addEventListener("click", async () => {
+    if (rango === "fechas") return;
+    rango = "fechas";
+    if (fechas) {
+      const r = await pedir(rutaGrafica());
+      if (r.ok && rango === "fechas") { pintarGrafica(tarjeta, r.datos); return; }
+    }
+    pintarGrafica(tarjeta, datosGrafica);
+  });
   const ancho = tarjeta.clientWidth ? tarjeta.clientWidth - 10 : undefined;
   const que = datos.agrupado === "semana" ? "media diaria de cada semana" : "un día por barra";
-  tarjeta.replaceChildren(
-    el("div", { className: "dato-fila cabeza-grafica" }, el("strong", { textContent: "Peso y déficit" }), el("span", { className: "suave leyenda", textContent: que })),
-    el("div", { id: "balance-rangos", className: "segmentado rangos", role: "group", ariaLabel: "Rango de la gráfica" }, ...botones),
-    graficaPesoDeficit(datos, ancho), leyendaPesoDeficit(datos.objetivo));
+  const entreFechas = rango === "fechas" && fechas && !datos.rango;
+  const nodos = [
+    el("div", { className: "dato-fila cabeza-grafica" }, el("strong", { textContent: "Peso y déficit" }),
+      entreFechas && datos.desde ? el("span", { id: "balance-periodo", className: "periodo", textContent: delAl(datos.desde, datos.hasta, true) }) : null,
+      el("span", { className: "suave leyenda", textContent: que })),
+    el("div", { id: "balance-selector", className: "segmentado rangos", role: "group", ariaLabel: "Rango de la gráfica" },
+      el("div", { id: "balance-rangos", className: "rangos-fijos" }, ...botones), deFechas),
+  ];
+  if (rango === "fechas") {
+    const valores = enElFormulario ?? fechas ?? { desde: datos.desde, hasta: datos.hasta };
+    nodos.push(formularioFechas({
+      prefijo: "balance", desde: valores.desde, hasta: valores.hasta, min: datos.primer_dia, max: hoyBalance,
+      alEscribir: (v) => { enElFormulario = v; },
+      alVer: (desde, hasta, error) => { enElFormulario = { desde, hasta }; verEntreFechas(tarjeta, desde, hasta, error); },
+    }));
+    if (entreFechas) nodos.push(notaFechas("balance", fechas, datos));
+  }
+  if (!(entreFechas && datos.vacio)) nodos.push(graficaPesoDeficit(datos, ancho), leyendaPesoDeficit(datos.objetivo));
+  tarjeta.replaceChildren(...nodos.filter(Boolean));
 }
 
 // -- every week ------------------------------------------------------------------------------------

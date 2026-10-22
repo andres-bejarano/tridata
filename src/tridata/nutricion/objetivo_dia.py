@@ -8,6 +8,9 @@ Unit 008 extends this table, not another one: column `previsto` (JSON: the activ
 screen as planned training, its minutes and its scaled kcal, which DO add to the expenditure), and
 `cambiar(dia, **campos)` to change the %, the levels or the planned training of one day without
 losing the rest. Levels: 1 to 5, each −50..+50 %; every change replaces the one before that day.
+
+Unit 018 extends it again (no new table): column `repartido`, set by «Aplicar» of the Balance spread
+(`cambiar(dia, porcentaje=…, repartido=True)`); any other change of the % of that day, or `guardar`, clears it.
 """
 from __future__ import annotations
 
@@ -27,7 +30,7 @@ PASOS = (0, 50_000)
 NIVELES_MAX = 5
 CAMPOS = ("tipo", "porcentaje", "niveles", "entreno", "pasos")
 CAMBIABLES = ("porcentaje", "niveles", "previsto")
-_COLUMNAS = "dia, tipo, porcentaje, niveles, entreno, pasos, previsto, creado"
+_COLUMNAS = "dia, tipo, porcentaje, niveles, entreno, pasos, previsto, repartido, creado"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS objetivo_dia (
@@ -116,6 +119,8 @@ class ObjetivosDia:
             columnas = {fila["name"] for fila in conn.execute("PRAGMA table_info(objetivo_dia)")}
             if "previsto" not in columnas:  # the table as unit 007 created it (idempotent)
                 conn.execute("ALTER TABLE objetivo_dia ADD COLUMN previsto TEXT")
+            if "repartido" not in columnas:  # unit 018: the % comes from the spread (idempotent)
+                conn.execute("ALTER TABLE objetivo_dia ADD COLUMN repartido INTEGER")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -140,7 +145,7 @@ class ObjetivosDia:
                 "INSERT INTO objetivo_dia (dia, tipo, porcentaje, niveles, entreno, pasos, creado) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(dia) DO UPDATE SET tipo = excluded.tipo, "
                 "porcentaje = excluded.porcentaje, niveles = excluded.niveles, entreno = excluded.entreno, "
-                "pasos = excluded.pasos, creado = excluded.creado",
+                "pasos = excluded.pasos, repartido = NULL, creado = excluded.creado",
                 (dia.isoformat(), limpio["tipo"], limpio["porcentaje"],
                  None if limpio["niveles"] is None else json.dumps(limpio["niveles"]),
                  limpio["entreno"], limpio["pasos"], ahora),
@@ -158,14 +163,18 @@ class ObjetivosDia:
         datos["previsto"] = None if datos["previsto"] is None else json.loads(datos["previsto"])
         if datos["porcentaje"] is not None:
             datos["porcentaje"] = _entero_si_puede(float(datos["porcentaje"]))
+        datos["repartido"] = bool(datos["repartido"])
         return datos
 
-    def cambiar(self, dia: date, **campos: Any) -> dict:
+    def cambiar(self, dia: date, *, repartido: bool = False, **campos: Any) -> dict:
         """Change the %, the levels and/or the planned training of `dia`, keeping the rest (unit 008).
 
         Each one given replaces the one before for that day (`None` clears it: the plan's %, the
         default levels, no planned training). Everything is checked first: a `ValueError` changes nothing.
+        Unit 018: a % given with `repartido=True` comes from the Balance spread; a % given without it does not.
         """
+        if repartido and "porcentaje" not in campos:
+            raise ValueError("solo un % del objetivo del día puede venir del reparto")
         if not campos:
             raise ValueError("no hay nada que cambiar en el objetivo del día")
         desconocidos = sorted(set(campos) - set(CAMBIABLES))
@@ -174,6 +183,7 @@ class ObjetivosDia:
         valores: dict[str, Any] = {}
         if "porcentaje" in campos:
             valores["porcentaje"] = _porcentaje(campos["porcentaje"], "el % del objetivo del día")
+            valores["repartido"] = 1 if repartido and valores["porcentaje"] is not None else None
         if "niveles" in campos:
             valores["niveles"] = None if campos["niveles"] is None else json.dumps(niveles_validos(campos["niveles"]))
         if "previsto" in campos:

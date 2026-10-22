@@ -21,13 +21,14 @@
     <!-- ================= HOY ================= -->
     <section id="hoy" class="pantalla" data-pestana="hoy" aria-label="Hoy">
       <nav class="dias" aria-label="Cambiar de día">
-        <button id="anterior" type="button" class="flecha" aria-label="Día anterior">◀</button>
+        <!-- unit 018 (R12): ◀ ▶ and «Volver a hoy» wait for the first day painted (app.js enables them) -->
+        <button id="anterior" type="button" class="flecha" aria-label="Día anterior" disabled>◀</button>
         <div class="dia-visto">
           <h1 id="titulo">Hoy</h1>
           <p id="fecha"></p>
-          <button id="ir-hoy" type="button" class="volver-hoy" hidden>Volver a hoy</button>
+          <button id="ir-hoy" type="button" class="volver-hoy" hidden disabled>Volver a hoy</button>
         </div>
-        <button id="siguiente" type="button" class="flecha" aria-label="Día siguiente">▶</button>
+        <button id="siguiente" type="button" class="flecha" aria-label="Día siguiente" disabled>▶</button>
       </nav>
 
       <article id="queda" class="tarjeta queda" aria-label="Lo que te queda">

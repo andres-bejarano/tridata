@@ -195,6 +195,9 @@ function pintarDia(dia) {
   if (dia.fecha !== diaVisto) { editando = null; anadiendo = false; }
   diaVisto = dia.fecha;
   ultimoDia = dia;
+  // unit 018 (R12): until a day is painted ◀ ▶ have no day to move from; then the page says which one it shows
+  for (const id of ["anterior", "siguiente", "ir-hoy"]) $(id).disabled = false;
+  document.body.dataset.dia = dia.fecha;
   const esHoy = dia.fecha === hoyISO;
   $("titulo").textContent = nombreDelDia(dia.fecha);
   if (pestanaActual() === "hoy") document.title = `TriData · ${nombreDelDia(dia.fecha)}`;
@@ -210,6 +213,19 @@ function pintarDia(dia) {
   pintarHoja(dia, esHoy);
   pintarLista(dia);
   pintarCierre(dia, esHoy);
+  pintarAvisoSync(dia, esHoy);
+}
+
+// -- unit 018: Garmin is not synced (R-91) -------------------------------------------------------
+
+function pintarAvisoSync(dia, esHoy) {
+  for (const viejo of $("avisos").querySelectorAll(".aviso-sync")) viejo.remove();
+  const s = dia.garmin_sync;
+  if (!esHoy || !s || !s.aviso) return;
+  const boton = el("button", { type: "button", id: "aviso-sync-actualizar", className: "boton", textContent: "Actualizar Garmin" });
+  boton.addEventListener("click", actualizarGarmin);
+  $("avisos").prepend(el("div", { className: "aviso-sync", role: "status" },
+    el("p", { textContent: s.texto }), boton, el("p", { id: "aviso-sync-error", className: "suave error", hidden: true })));
 }
 
 // -- unit 014: the close of the day -------------------------------------------------
@@ -549,19 +565,31 @@ async function cambiarObjetivo(cuerpo, idError) {
   return true;
 }
 
+let actualizandoGarmin = false;
+
+// The button of the sheet and the one of the Garmin warning (unit 018) do the same, one at a time.
 async function actualizarGarmin() {
   const boton = $("actualizar-garmin");
-  if (boton.disabled) return; // one at a time
+  if (actualizandoGarmin) return; // one at a time
+  actualizandoGarmin = true;
+  const delAviso = document.getElementById("aviso-sync-actualizar");
   boton.disabled = true;
   boton.textContent = "Actualizando…";
+  if (delAviso) { delAviso.disabled = true; delAviso.textContent = "Actualizando…"; }
   $("garmin-estado").textContent = "";
   $("garmin-estado").className = "suave";
   const { ok, datos } = await api("/api/garmin/actualizar", {});
+  actualizandoGarmin = false;
   boton.disabled = false;
   boton.textContent = "↻ Actualizar Garmin";
+  const aviso = document.getElementById("aviso-sync-actualizar");
+  if (aviso) { aviso.disabled = false; aviso.textContent = "Actualizar Garmin"; }
   if (!ok) { // the data that were there stay as they were
-    $("garmin-estado").textContent = datos.error ?? "No se ha podido conectar con Garmin.";
+    const texto = datos.error ?? "No se ha podido conectar con Garmin.";
+    $("garmin-estado").textContent = texto;
     $("garmin-estado").className = "suave error";
+    const error = document.getElementById("aviso-sync-error");
+    if (error) { error.textContent = texto; error.hidden = false; }
     return;
   }
   $("garmin-estado").textContent = "Garmin actualizado.";

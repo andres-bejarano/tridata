@@ -6,7 +6,9 @@ out what's missing since the last run and only fetches that.
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from collections.abc import Mapping
+from datetime import date, datetime, timedelta
+from typing import Any
 
 from .garmin_client import GarminClient
 from .storage import DataStore
@@ -26,6 +28,66 @@ SWIMMING_TYPES = (
 )
 GYM_TYPES = ("strength_training",)
 ALL_SPORT_TYPES = RUNNING_TYPES + CYCLING_TYPES + SWIMMING_TYPES + GYM_TYPES
+
+# -- unit 018: the last good sync, the warning of today and what «Actualizar Garmin» brings (R-90, R-91) --
+HORAS_AVISO = 26  # one day plus the margin of the routine: older than this, today's screen warns
+REINTENTO_HASTA = 14  # the routine tries again every hour until 14:00 (the timer says 08..14)
+MAX_DIAS_ATRAS = 45  # «Actualizar Garmin» brings at most these days, the same window as `tridata sync`
+MOTIVOS = {"sesion": "Garmin no dejó iniciar sesión", "limite": "Garmin estaba limitando las peticiones",
+           "conexion": "se cortó la conexión"}
+_DIAS_SEMANA = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+_MESES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
+          "noviembre", "diciembre")
+
+
+def _cuando(momento: datetime, ahora: datetime) -> str:
+    """«hoy», «el martes 20» within the 6 days before, «el 12 de octubre» further back; with its time."""
+    atras = (ahora.date() - momento.date()).days
+    if atras == 0:
+        dia = "hoy"
+    elif 0 < atras <= 6:
+        dia = f"el {_DIAS_SEMANA[momento.weekday()]} {momento.day}"
+    else:
+        dia = f"el {momento.day} de {_MESES[momento.month - 1]}"
+    return f"{dia} a las {momento:%H:%M}"
+
+
+def aviso_sync(estado: Mapping[str, str | None] | None, ahora: datetime) -> dict:
+    """Pure (R-91): whether today's screen warns that Garmin is not synced, and what it says.
+
+    It warns when the last good sync is older than `HORAS_AVISO`, or when the last attempt failed after it.
+    Without any record there is no warning. The second sentence says when the routine tries again.
+    """
+    estado = dict(estado or {})
+    ok_en, fallo_en, motivo = estado.get("ok_en"), estado.get("fallo_en"), estado.get("fallo_motivo")
+    bloque: dict[str, Any] = {"ok_en": ok_en, "fallo_en": fallo_en, "fallo_motivo": motivo, "aviso": False,
+                              "texto": None}
+    ok = datetime.fromisoformat(ok_en) if ok_en else None
+    fallo = datetime.fromisoformat(fallo_en) if fallo_en else None
+    if ok is None and fallo is None:
+        return bloque
+    viejo = ok is not None and ahora - ok > timedelta(hours=HORAS_AVISO)
+    fallido = fallo is not None and (ok is None or fallo > ok)
+    if not (viejo or fallido):
+        return bloque
+    reintento = (f"Se vuelve a intentar sola cada hora hasta las {REINTENTO_HASTA}:00." if ahora.hour < REINTENTO_HASTA
+                 else "Se vuelve a intentar mañana a las 08:00.")
+    if ok is not None:
+        texto = f"Garmin no se ha sincronizado desde {_cuando(ok, ahora)}. {reintento}"
+    elif fallo is not None:
+        porque = MOTIVOS.get(motivo or "", "falló")
+        texto = f"Garmin no se ha sincronizado: el último intento, {_cuando(fallo, ahora)}, {porque}. {reintento}"
+    return {**bloque, "aviso": True, "texto": texto}
+
+
+def desde_para_actualizar(estado: Mapping[str, str | None] | None, hoy: date) -> date:
+    """Pure (R-90): «Actualizar Garmin» asks from the day of the last good sync to today, at most
+    `MAX_DIAS_ATRAS` days; without a record, only today (as before unit 018)."""
+    ok_en = (estado or {}).get("ok_en")
+    if not ok_en:
+        return hoy
+    desde = datetime.fromisoformat(ok_en).date()
+    return min(hoy, max(desde, hoy - timedelta(days=MAX_DIAS_ATRAS - 1)))
 
 
 class SyncService:

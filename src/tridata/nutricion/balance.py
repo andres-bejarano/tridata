@@ -11,6 +11,10 @@ What counts in the sum and the mean: the days with the food closed (R-24). What 
 objective of the day in kcal) of those days, over the days that are left this week (today if its food is
 still open, and the next ones up to Sunday), never the maintenance days before a race and never past the
 healthy limit (−50 % without one). Nothing ever passes to the next week (R-19).
+
+Unit 018: only what is still pending is spread again. Already spread = Σ (objective with the plan's % −
+objective now) of the days of the week whose % came from «Aplicar» (`repartido`); pending = what is above −
+already spread. «Volver al plan» and the spread never touch the maintenance days before a race.
 """
 from __future__ import annotations
 
@@ -28,6 +32,8 @@ TOPE_SIN_LIMITE = 50  # without a healthy limit, the range of the objectives (�
 CUENTAN = ("comida_cerrada", "cerrado_garmin")
 NADA = "Vas en tu objetivo o por debajo esta semana: no hay nada que repartir"
 SIN_DIAS = "No quedan días esta semana para repartirlo; la semana que viene empieza de cero"
+YA_REPARTIDO = "Lo que llevas por encima ya está repartido en los días que quedan."
+REDONDEO_KCAL = 10  # unit 018: less than this pending after a spread is its rounding to less deficit, not new kcal
 _DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
 Resumen = Callable[[date], "Mapping[str, Any] | None"]
@@ -50,7 +56,18 @@ def fila_del_dia(resumen: Mapping[str, Any]) -> dict:
         "objetivo_pct": objetivo["porcentaje"], "objetivo_kcal": objetivo["kcal"],
         "objetivo_origen": objetivo["origen"], "motivo": (resumen.get("plan") or {}).get("motivo"),
         "cuenta": cierre["estado"] in CUENTAN,
+        **({"repartido": True} if objetivo.get("repartido") else {}),  # unit 018: only the days of the spread
     }
+
+
+def _ya_repartido(fila: Mapping[str, Any], resumen: Mapping[str, Any] | None) -> float:
+    """What the spread took off this day: (objective with the plan's % − objective now) in kcal."""
+    if resumen is None or not fila.get("repartido"):
+        return 0.0
+    plan_pct = resumen["objetivo"].get("plan_pct")
+    if plan_pct is None:
+        return 0.0
+    return (plan_pct - fila["objetivo_pct"]) * fila["gasto_kcal"] / 100
 
 
 def _filas(desde: date, hasta: date, resumen: Resumen) -> list[tuple[dict, Mapping[str, Any] | None]]:
@@ -70,11 +87,15 @@ def semana(lunes: date, *, resumen: Resumen) -> dict:
     filas = _filas(desde, desde + timedelta(days=6), resumen)
     cuentan = [f for f, _ in filas if f["cuenta"]]
     de_014 = next((r["cierre"]["semana"] for _, r in filas if r is not None), None)
+    por_encima = round(sum(f["comido_kcal"] - f["objetivo_kcal"] for f in cuentan), 1)
+    ya_repartido = round(sum(_ya_repartido(f, r) for f, r in filas), 1)
     return {
         "desde": desde.isoformat(), "hasta": (desde + timedelta(days=6)).isoformat(),
         "filas": [f for f, _ in filas],
         "acumulado_kcal": round(sum(f["balance_kcal"] for f in cuentan), 1),
-        "por_encima_kcal": round(sum(f["comido_kcal"] - f["objetivo_kcal"] for f in cuentan), 1),
+        "por_encima_kcal": por_encima,
+        "ya_repartido_kcal": ya_repartido,  # unit 018
+        "pendiente_kcal": round(por_encima - ya_repartido, 1),
         "semana": de_014,
     }
 
@@ -224,6 +245,23 @@ def proponer_reparto(por_encima_kcal: float, dias: Iterable[Mapping[str, Any]], 
             else sin_repartir}
 
 
+def reparto_de_la_semana(s: Mapping[str, Any], dias: Iterable[Mapping[str, Any]], limite_pct: float | None) -> dict:
+    """Unit 018 (R-20): the proposal over what is still PENDING this week (`semana()`), not over all that is above.
+
+    When nothing is pending because it is already spread on the days that are left, `motivo` is "ya_repartido".
+    """
+    ya = s.get("ya_repartido_kcal", 0) or 0
+    pendiente = s.get("pendiente_kcal", s["por_encima_kcal"])
+    if ya > 0 and pendiente < REDONDEO_KCAL:
+        pendiente = 0
+    propuesta = proponer_reparto(pendiente, dias, limite_pct)
+    if ya > 0:
+        propuesta = {**propuesta, "ya_repartido_kcal": ya}
+        if propuesta["motivo"] == "nada_que_repartir":
+            propuesta["motivo"] = "ya_repartido"
+    return propuesta
+
+
 def _pct(n: float) -> str:
     texto = f"{abs(n):g}".replace(".", ",")
     return f"{'−' if n < 0 else '+' if n > 0 else ''}{texto} %"
@@ -242,9 +280,14 @@ def texto_reparto(propuesta: Mapping[str, Any]) -> str:
     """The proposal in one paragraph, as the Balance tab shows it (kcal in whole numbers)."""
     if propuesta["motivo"] == "nada_que_repartir":
         return NADA
+    if propuesta["motivo"] == "ya_repartido":
+        return YA_REPARTIDO
     if propuesta["motivo"] == "sin_dias":
         return SIN_DIAS
-    partes = [f"Llevas {kcal_enteras(propuesta['por_encima_kcal'])} kcal por encima de tu objetivo esta semana."]
+    if propuesta.get("ya_repartido_kcal"):  # unit 018: part of it is already spread, only the rest is proposed
+        partes = [f"Te quedan {kcal_enteras(propuesta['por_encima_kcal'])} kcal por encima sin repartir esta semana."]
+    else:
+        partes = [f"Llevas {kcal_enteras(propuesta['por_encima_kcal'])} kcal por encima de tu objetivo esta semana."]
     grupos: dict[tuple, list[str]] = {}
     for x in propuesta["dias"]:
         grupos.setdefault((x["nuevo_pct"], x["objetivo_kcal"], round(x["kcal"])), []).append(_nombre(x["dia"]))

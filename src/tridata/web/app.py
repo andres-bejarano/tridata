@@ -36,7 +36,9 @@
                                   how much of each food fits; saves NOTHING (R-17, REC-2)
     POST /api/garmin/actualizar   brings today from Garmin with the `tridata sync` sync and returns
                                   today recomputed; 409 if one is running, 502 `motivo` "sesion"/"red",
-                                  503 without Garmin credentials
+                                  503 without Garmin credentials. Unit 018: it brings from the day of the last
+                                  good sync (at most 45 days), writes down `ok_en` when it ends well, and a 429 is
+                                  502 `motivo` "limite"; a failure is not written down (the routine does that)
     GET  /ajustes                 the settings page
     GET  /api/ajustes             settings in force (?fecha=, default today), changes to come, races
     POST /api/ajustes             {"datos": {...}, "desde": "AAAA-MM-DD"} save one or more settings
@@ -60,17 +62,26 @@
                                   today), its rows, sum, what is above the objective and the week of unit 014;
                                   `reparto_posible` (true or why not) only for the week of today
     GET  /api/balance             ?rango=4s|3m|todo: the bars of the balance (by day, or by week past 91 days),
-                                  the weights and their 7-day means and the weight goal; another range is 400
+                                  the weights and their 7-day means and the weight goal; another range is 400.
+                                  Unit 018: or ?desde=AAAA-MM-DD&hasta=AAAA-MM-DD (both, without `rango`; desde ≤
+                                  hasta ≤ today, else 400), the same answer from the first day with data on;
+                                  `vacio` if those dates have no data. Every answer says `primer_dia`
     GET  /api/balance/semanas     every week from today's back to the first day with data, newest first
     POST /api/balance/repartir    {"aplicar": false} -> the proposal to spread what is above the objective, saving
                                   NOTHING; {"aplicar": true, "propuesta": {...}} recomputes it: if it changed, 409
                                   with the new one and nothing saved, else the % of each day goes to `objetivo_dia`
+                                  marked `repartido`. Unit 018: only what is still pending is proposed
+                                  (`ya_repartido` when everything is already spread)
     POST /api/balance/volver-al-plan  {"confirmado": true}: the days that are left lose the % set for them
-                                  (also one set by hand); without it 400 and nothing changes
+                                  (also one set by hand), except the maintenance days before a race (unit 018);
+                                  without it 400 and nothing changes
 Every Balance route sends only totals (no food, no names) and computes each day ONCE per request with the
 same `resumen_completo` as /api/dia. Unit 017 also adds `barras` (the 30 days, by day) to /api/peso.
 
 Unit 016: every day the screen gets also says `hoy` (today on the server), so the page sees midnight pass.
+
+Unit 018 (R-91): today's day also brings `garmin_sync` = `{ok_en, fallo_en, fallo_motivo, aviso, texto}`
+(`sync.aviso_sync` with the clock `ahora`); any other day brings it as null.
 
 Unit 014: today's GET /api/dia first brings the days up to date (`Cierres.al_dia`: closes the food of the past
 days, closes with Garmin those it can, looks at the corrections and recalibrates the kcal per step). Every
@@ -107,7 +118,7 @@ import logging
 import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -118,19 +129,22 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from ..garmin_client import GarminAuthError
+from garminconnect import GarminConnectTooManyRequestsError
+
+from ..garmin_client import GarminAuthError, GarminRateLimitError
 from ..ia import ErrorInterpretacion, ErrorTranscripcion
 from ..nutricion import (
     DESDE_SIEMPRE, Ajustes, Alimento, Cierres, ObjetivosDia, RegistroComidas, RegistroPeso, gramos_que_caben, kcal_previstas,
     objetivo_valido, peso_valido, Recetario, media_7_dias, simular,
 )
 from ..nutricion.balance import (
-    NADA, SIN_DIAS, dias_que_quedan, lunes_de, proponer_reparto, semana as semana_balance, semanas, serie,
+    NADA, SIN_DIAS, dias_que_quedan, lunes_de, reparto_de_la_semana, semana as semana_balance, semanas, serie,
     texto_reparto,
 )
 from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
 from ..nutricion.recetas import ErrorDatos, _numero
 from ..storage import DataStore
+from ..sync import aviso_sync
 from .recetas import rutas as rutas_recetas
 
 log = logging.getLogger(__name__)
@@ -145,6 +159,8 @@ FALTA_GARMIN = "Faltan GARMIN_EMAIL / GARMIN_PASSWORD en .env: no puedo traer Ga
 # unit 016 (R6): a fixed text; the library's exception (it may carry the e-mail) never reaches the screen or the log
 SESION_GARMIN = ("La sesión de Garmin ha fallado. Prueba otra vez y, si sigue, revisa GARMIN_EMAIL y "
                  "GARMIN_PASSWORD en .env.")
+LIMITE_GARMIN = "Garmin está limitando las peticiones: espera unos minutos y vuelve a probar."  # unit 018 (R3)
+AL_REVES = "La fecha de inicio tiene que ser anterior o igual a la de fin"
 AUDIO_MAX_BYTES = 10 * 1024 * 1024  # a 2-minute recording is far below this (R4)
 TIPOS_AUDIO = frozenset({"audio/mp4", "audio/x-m4a", "audio/aac", "audio/webm", "audio/ogg", "audio/wav", "audio/mpeg"})
 DICTADO_NO_DISPONIBLE = "El dictado no está disponible en el PC ahora mismo. Se reintentará más tarde."
@@ -256,6 +272,7 @@ def crear_app(
     pesos: RegistroPeso | None = None, objetivos: ObjetivosDia | None = None,
     store: DataStore | None = None, actualizar_garmin: Callable[[date], None] | None = None,
     transcriptor: Any = None, recetario: Recetario | None = None, cierres: Cierres | None = None,
+    ahora: Callable[[], datetime] = datetime.now,
 ) -> Starlette:
     """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double).
 
@@ -269,6 +286,7 @@ def crear_app(
     Without it, /api/dictado says «try again later» (503) and writing works as always.
     `recetario` holds the recipes, fixed foods and pots (unit 011); by default, in the same SQLite.
     `cierres` is the close of the day (unit 014); by default, in the same SQLite with these settings and `store`.
+    `ahora` is the clock of the Garmin warning and of the sync record (unit 018).
     """
     recetario = recetario or Recetario(registro.db_path)
     pesos = pesos or RegistroPeso(registro.db_path)
@@ -288,7 +306,10 @@ def crear_app(
         dia_hoy = hoy()
         resumen = resumen_completo(fecha, registro=registro, pesos=pesos, ajustes=ajustes, objetivos=objetivos,
                                    store=store, cierres=cierres, hoy=dia_hoy)
-        return {**resumen, "hoy": dia_hoy.isoformat()}  # unit 016 (R3): the page sees midnight pass
+        # unit 018 (R-91): only today says whether Garmin is behind
+        garmin_sync = (aviso_sync(store.estado_sync() if store is not None else None, ahora())
+                       if fecha == dia_hoy else None)
+        return {**resumen, "hoy": dia_hoy.isoformat(), "garmin_sync": garmin_sync}  # unit 016 (R3): midnight
 
     def _al_dia() -> None:
         """Today's screen first brings the days up to date (unit 014); a failure there never hides the day."""
@@ -327,8 +348,8 @@ def crear_app(
 
     def _propuesta(resumen: Callable[[date], dict | None], s: dict) -> dict:
         dia_hoy = hoy()
-        propuesta = proponer_reparto(s["por_encima_kcal"], dias_que_quedan(dia_hoy, s, ajustes),
-                                     ajustes.vigentes(dia_hoy).limite_saludable_pct)
+        propuesta = reparto_de_la_semana(s, dias_que_quedan(dia_hoy, s, ajustes),
+                                         ajustes.vigentes(dia_hoy).limite_saludable_pct)
         return {**propuesta, "desde": s["desde"], "texto": texto_reparto(propuesta)}
 
     def _vista_semana(fecha: date, resumen: Callable[[date], dict | None] | None = None) -> dict:
@@ -342,9 +363,10 @@ def crear_app(
                  "volver_al_plan": False}
         if es_actual:
             propuesta = _propuesta(resumen, s)
-            vista["reparto_posible"] = True if propuesta["motivo"] is None else (
+            # unit 018: with everything already spread the button stays, and says so when pressed
+            vista["reparto_posible"] = True if propuesta["motivo"] in (None, "ya_repartido") else (
                 NADA if propuesta["motivo"] == "nada_que_repartir" else SIN_DIAS)
-            quedan = {q["dia"] for q in dias_que_quedan(dia_hoy, s, ajustes)}
+            quedan = {q["dia"] for q in dias_que_quedan(dia_hoy, s, ajustes) if not q["mantenimiento"]}
             vista["volver_al_plan"] = any(f["dia"] in quedan and f.get("objetivo_origen") == "dia" for f in s["filas"])
         return vista
 
@@ -483,22 +505,55 @@ def crear_app(
             return _error(f"Fecha no válida: {texto!r}", 400)
         return JSONResponse(await run_in_threadpool(_vista_semana, fecha))
 
-    def _serie(rango: str) -> dict:
+    def _serie(rango: str | None, fechas: tuple[date, date] | None = None) -> dict:
+        """The chart of a range that ends today (`rango`) or between two dates (`fechas`, unit 018)."""
         dia_hoy = hoy()
         primer = _primer_dia()
         objetivo = ajustes.vigentes(dia_hoy).objetivo_peso
         meta = {"kg": objetivo.kg, "fecha": objetivo.fecha.isoformat()} if objetivo else None
-        if primer is None:
-            return {"rango": rango, "vacio": True, "desde": None, "hasta": dia_hoy.isoformat(), "agrupado": "dia",
-                    "barras": [], "pesos": [], "medias": [], "objetivo": meta}
-        dias = RANGOS_BALANCE[rango]
-        desde = primer if dias is None else max(primer, dia_hoy - timedelta(days=dias - 1))
-        datos = serie(desde, dia_hoy, resumen=_resumenes(), pesos=pesos.entre(desde - timedelta(days=6), dia_hoy),
+        hasta = fechas[1] if fechas else dia_hoy
+        vacio: dict[str, Any] = {
+            "rango": rango, "vacio": True, "desde": fechas[0].isoformat() if fechas else None,
+            "hasta": hasta.isoformat(), "agrupado": "dia", "barras": [], "pesos": [], "medias": [],
+            "objetivo": meta, "primer_dia": primer.isoformat() if primer else None}
+        if primer is None or hasta < primer:
+            return vacio
+        if fechas:
+            desde = max(primer, fechas[0])
+        else:
+            dias = RANGOS_BALANCE[rango or "todo"]
+            desde = primer if dias is None else max(primer, dia_hoy - timedelta(days=dias - 1))
+        datos = serie(desde, hasta, resumen=_resumenes(), pesos=pesos.entre(desde - timedelta(days=6), hasta),
                       hoy=dia_hoy)
-        return {"rango": rango, "vacio": False, **datos, "objetivo": meta}
+        if fechas and not datos["barras"] and not datos["pesos"]:
+            return {**vacio, "desde": desde.isoformat()}
+        return {"rango": rango, "vacio": False, **datos, "objetivo": meta, "primer_dia": primer.isoformat()}
+
+    def _fechas_del_grafico(desde_texto: str | None, hasta_texto: str | None) -> tuple[date, date]:
+        """Unit 018 (R8): both dates, well written, desde ≤ hasta ≤ today; ValueError says what is wrong."""
+        if not desde_texto or not hasta_texto:
+            raise ValueError("Faltan las dos fechas: desde y hasta.")
+        try:
+            desde, hasta = date.fromisoformat(desde_texto), date.fromisoformat(hasta_texto)
+        except ValueError:
+            raise ValueError(f"Fecha no válida: {desde_texto!r} o {hasta_texto!r}.") from None
+        if desde > hasta:
+            raise ValueError(f"{AL_REVES}.")
+        if hasta > hoy():
+            raise ValueError("La fecha de fin no puede ser después de hoy.")
+        return desde, hasta
 
     async def balance_serie(request: Request) -> Response:
         rango = request.query_params.get("rango")
+        desde, hasta = request.query_params.get("desde"), request.query_params.get("hasta")
+        if desde is not None or hasta is not None:
+            if rango is not None:
+                return _error("O un rango o dos fechas, no las dos cosas.", 400)
+            try:
+                fechas = _fechas_del_grafico(desde, hasta)
+            except ValueError as exc:
+                return _error(str(exc), 400)
+            return JSONResponse(await run_in_threadpool(_serie, None, fechas))
         if rango not in RANGOS_BALANCE:
             return _error(f"Rango no válido: {rango!r} (4s, 3m o todo).", 400)
         return JSONResponse(await run_in_threadpool(_serie, rango))
@@ -530,8 +585,8 @@ def crear_app(
                           propuesta=propuesta)
         if not propuesta["dias"]:
             return _error(f"No se ha cambiado nada: {propuesta['texto']}.", 422, propuesta=propuesta)
-        for x in propuesta["dias"]:
-            objetivos.cambiar(date.fromisoformat(x["dia"]), porcentaje=x["nuevo_pct"])
+        for x in propuesta["dias"]:  # unit 018: marked as coming from the spread (R11)
+            objetivos.cambiar(date.fromisoformat(x["dia"]), porcentaje=x["nuevo_pct"], repartido=True)
         return JSONResponse({"semana": _vista_semana(dia_hoy), "dia": _dia(dia_hoy)})
 
     async def balance_volver(request: Request) -> Response:
@@ -540,6 +595,8 @@ def crear_app(
         dia_hoy = hoy()
         s = semana_balance(dia_hoy, resumen=_resumenes())
         for q in dias_que_quedan(dia_hoy, s, ajustes):
+            if q["mantenimiento"]:  # unit 018 (R10): the days before a race stay as they are
+                continue
             dia_q = date.fromisoformat(q["dia"])
             actual = objetivos.del_dia(dia_q)
             if actual is not None and actual.get("porcentaje") is not None:
@@ -781,6 +838,10 @@ def crear_app(
             return _error("Ya estoy actualizando Garmin: espera a que acabe.", 409, motivo="en_marcha")
         try:
             await run_in_threadpool(actualizar_garmin, hoy())
+            if store is not None:  # unit 018 (R-90): a good one is written down; a failure, never here
+                store.marcar_sync_ok(ahora())
+        except (GarminRateLimitError, GarminConnectTooManyRequestsError):  # unit 018 (R3): a 429, said as such
+            return _error(LIMITE_GARMIN, 502, motivo="limite")
         except GarminAuthError:  # its text is not shown nor logged (R6 of unit 016)
             return _error(SESION_GARMIN, 502, motivo="sesion")
         except Exception:  # network, Garmin down, anything else: said, never hidden

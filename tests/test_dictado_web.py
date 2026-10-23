@@ -91,7 +91,7 @@ def test_grabacion_vuelve_como_texto_y_lista_sin_guardar_nada(tmp_path, monkeypa
     assert datos["texto"] == TEXTO
     i = datos["interpretacion"]
     assert [(a["nombre"], a["cantidad"], a["unidad"], a["kcal"]) for a in i["alimentos"]] == [
-        ("lentejas", 300, "g", 360), ("plátano", 1, "unidad", 105)]
+        ("lentejas", 300, "g", 360), ("Plátano", 1, "unidad", 105)]  # unit 026: the common «Plátano» (per 100 g)
     assert i["texto"] == TEXTO and i["peso"] is None and i["objetivo_dia"] is None and i["dudosas"] == []
     # the same answer /api/interpretar gives for that text (the 007 pieces)
     assert i == e.cliente.post("/api/interpretar", json={"texto": TEXTO}).json()

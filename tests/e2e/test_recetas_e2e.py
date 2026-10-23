@@ -252,7 +252,8 @@ def test_receta_provisional_versiones_y_borrar(servidor, abrir, capturar):  # R1
     expect(versiones).to_have_count(2)
     capturar(p, "recetas-versiones", completa=True)
     versiones.filter(has_text=re.compile("Tanda 1")).get_by_role("button", name="Usar esta").click()
-    expect(recetas.locator(".elemento", has_text="garbanzos de la abuela")).to_contain_text("130 kcal/100 g")
+    # unit 026: its «cebolla» (estimated 50 kcal) is now the common «Cebolla», 33 kcal/100 g: 129,6, not 130
+    expect(recetas.locator(".elemento", has_text="garbanzos de la abuela")).to_contain_text("129,6 kcal/100 g")
 
     recetas.locator(".elemento", has_text="lasaña de la tía").click()
     ficha = recetas.locator(".ficha-receta")

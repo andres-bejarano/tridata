@@ -344,6 +344,17 @@ dialog.hoja::backdrop { background: rgba(10, 14, 20, .45); }
 .elemento.revisar .que span { color: var(--alerta); }
 .vacio-apartado { margin: 0; padding: 12px 14px; border-top: 1px solid var(--borde); }
 .apartado > .elementos > button.anadir { width: calc(100% - 28px); margin: 6px 14px 14px; }
+/* unit 026: the app's common foods, folded in their own group after his */
+.comunes { border-top: 1px solid var(--borde); }
+.comunes > summary {
+  display: flex; align-items: center; min-height: 48px; padding: 8px 14px; cursor: pointer;
+  font-weight: 650; color: var(--suave);
+}
+.comunes > summary::after { content: "›"; margin-left: auto; font-size: 1.3rem; transition: transform .15s; }
+.comunes[open] > summary::after { transform: rotate(90deg); }
+.comunes > summary::-webkit-details-marker { display: none; }
+.comunes > summary { list-style: none; }
+.desplegable .opcion.comun span { font-style: italic; }
 .apartado .ficha { margin: 8px; }
 .ficha textarea { min-height: 88px; resize: vertical; }
 .ficha select { appearance: auto; }

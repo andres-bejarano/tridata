@@ -28,5 +28,11 @@ gitleaks git --redact --verbose --no-banner --pre-commit .
 #   no fixed release on PyPI yet, mitigated by GarminClient._restrict_token_store.
 #   Drop the ignore once garminconnect >= 0.3.5 ships.
 # PYSEC-2026-3447: setuptools sdist exclusion bypass, macOS-only and we don't build sdists.
+# CVE-2026-114603: opentelemetry-api <= 1.45.0 parses an inbound `tracestate` in O(N²) (CPU only, no data
+#   exposed). tridata reaches it only through `tridata-mcp`: mcp's OpenTelemetryMiddleware calls extract() on each
+#   request's `_meta`; that server runs over stdio for a local, trusted client (Claude Code), so no stranger can
+#   send it. `tridata web` does not use it. Can't upgrade: garth 0.8.0 needs logfire < 5 and logfire 4.x needs
+#   opentelemetry < 1.45. Drop the ignore once garth allows logfire >= 5 (or logfire 4.x allows 1.45.1).
 echo "== pip-audit"
-python -m pip_audit --skip-editable --ignore-vuln PYSEC-2026-3467 --ignore-vuln PYSEC-2026-3447
+python -m pip_audit --skip-editable --ignore-vuln PYSEC-2026-3467 --ignore-vuln PYSEC-2026-3447 \
+  --ignore-vuln CVE-2026-114603

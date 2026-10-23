@@ -68,3 +68,30 @@ def test_simular_por_gramos_sigue_igual(e):
     cabe = e.ok("/api/simular", {"alimentos": [tarjeta]})["caben"][0]
     n = math.floor(margen / 370 * 100)
     assert cabe["texto"] == f"te caben {n} g de avena suelta"
+
+
+# -- review of 2026-10-23: a dictated card, approximate kcal/100 g, a boolean id ---------------------------------
+
+def _simular(e, tarjeta: dict) -> dict:
+    return e.ok("/api/simular", {"alimentos": [{"dia": HOY.isoformat(), "cantidad": 0.5, "unidad": "receta",
+                                                **tarjeta}]})["caben"][0]
+
+
+def test_simular_receta_dictada_sin_elegir_va_en_gramos(e):
+    margen = _margen(e)  # dictated: the card brings the recipe's name, not `guardado: {tipo, id}`
+    cabe = _simular(e, {"nombre": "lentejas de la abuela", "kcal": 1000, "guardado": "Lentejas de la abuela"})
+    assert (cabe["cantidad"], cabe["unidad"]) == (math.floor(margen / 80 * 100), "g")
+
+
+def test_simular_receta_con_kcal_aproximadas_va_en_gramos(e):
+    margen = _margen(e)
+    e.recetario.corregir(e.ids["Porridge de prueba"], {"kcal_100g_aprox": 125})
+    cabe = _simular(e, {"nombre": "Porridge de prueba", "kcal": 250,
+                        "guardado": {"tipo": "receta", "id": e.ids["Porridge de prueba"]}})
+    assert (cabe["cantidad"], cabe["unidad"]) == (math.floor(margen / 125 * 100), "g")
+
+
+def test_simular_id_booleano_no_es_una_receta(e):
+    margen = _margen(e)  # `True` is not the recipe 1 (Lentejas de la abuela, weighed): it goes by the name
+    cabe = _simular(e, {"nombre": "Porridge de prueba", "kcal": 250, "guardado": {"tipo": "receta", "id": True}})
+    assert (cabe["cantidad"], cabe["unidad"]) == (math.floor(margen), "kcal")

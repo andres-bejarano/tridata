@@ -804,13 +804,18 @@ def crear_app(
                            reverse=True)
         return JSONResponse({"dias": DIAS_RECIENTES, "actividades": [_actividad_corta(a) for a in recientes]})
 
-    def _kcal_100g_de_receta(crudo: dict) -> float | None:
-        """The kcal per 100 g of the saved recipe a card was chosen from; None if not one or not weighed."""
+    def _kcal_100g_de_receta(crudo: dict, nombre: str) -> float | None:
+        """The kcal per 100 g of the saved recipe of a card: the one chosen (`guardado: {tipo, id}`) or, dictated,
+        the one with that name; None if it is not a saved recipe or it is not weighed."""
         elegido = crudo.get("guardado")
-        if not isinstance(elegido, dict) or elegido.get("tipo") != "receta" or not isinstance(elegido.get("id"), int):
-            return None
+        ident = elegido.get("id") if isinstance(elegido, dict) and elegido.get("tipo") == "receta" else None
+        if isinstance(ident, bool) or not isinstance(ident, int):
+            objetivo = recetario._objetivo(nombre)
+            if objetivo is None or objetivo[0] != "receta":
+                return None
+            ident = objetivo[1]["id"]
         try:
-            return recetario.para_apuntar("receta", elegido["id"], 100, "g")["kcal"]
+            return recetario.para_apuntar("receta", ident, 100, "g")["kcal"]
         except (KeyError, ValueError):
             return None
 
@@ -835,7 +840,7 @@ def crear_app(
                               "texto": "sin cantidad o kcal: no se puede calcular"})
                 continue
             if a.unidad == "receta":  # bug 024: a fraction of a recipe, said in grams and kcal (or kcal)
-                cabe = cabe_de_receta(margen, a.nombre, _kcal_100g_de_receta(crudos[i]))
+                cabe = cabe_de_receta(margen, a.nombre, _kcal_100g_de_receta(crudos[i], a.nombre))
                 caben.append({"nombre": a.nombre, **cabe})
                 continue
             cabe = gramos_que_caben(margen, a.kcal, a.cantidad)

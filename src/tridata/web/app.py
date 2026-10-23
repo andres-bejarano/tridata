@@ -142,6 +142,7 @@ from ..nutricion.balance import (
     texto_reparto,
 )
 from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
+from ..nutricion.margen import cabe_de_receta
 from ..nutricion.recetas import ErrorDatos, _numero
 from ..storage import DataStore
 from ..sync import aviso_sync
@@ -803,6 +804,21 @@ def crear_app(
                            reverse=True)
         return JSONResponse({"dias": DIAS_RECIENTES, "actividades": [_actividad_corta(a) for a in recientes]})
 
+    def _kcal_100g_de_receta(crudo: dict, nombre: str) -> float | None:
+        """The kcal per 100 g of the saved recipe of a card: the one chosen (`guardado: {tipo, id}`) or, dictated,
+        the one with that name; None if it is not a saved recipe or it is not weighed."""
+        elegido = crudo.get("guardado")
+        ident = elegido.get("id") if isinstance(elegido, dict) and elegido.get("tipo") == "receta" else None
+        if isinstance(ident, bool) or not isinstance(ident, int):
+            objetivo = recetario._objetivo(nombre)
+            if objetivo is None or objetivo[0] != "receta":
+                return None
+            ident = objetivo[1]["id"]
+        try:
+            return recetario.para_apuntar("receta", ident, 100, "g")["kcal"]
+        except (KeyError, ValueError):
+            return None
+
     async def simular_lista(request: Request) -> Response:
         """The reviewed list, not yet confirmed: how the day would be if eaten. Writes nothing (REC-2)."""
         crudos = (await _cuerpo(request) or {}).get("alimentos")
@@ -818,10 +834,14 @@ def crear_app(
         kcal_lista = round(sum(a.kcal or 0 for a in cuenta), 1)
         margen = resumen["barra"]["objetivo_kcal"] - resumen["total_kcal"]
         caben = []
-        for a in alimentos:
+        for i, a in enumerate(alimentos):
             if a.cantidad is None or a.kcal is None:
                 caben.append({"nombre": a.nombre, "cantidad": None, "unidad": a.unidad,
                               "texto": "sin cantidad o kcal: no se puede calcular"})
+                continue
+            if a.unidad == "receta":  # bug 024: a fraction of a recipe, said in grams and kcal (or kcal)
+                cabe = cabe_de_receta(margen, a.nombre, _kcal_100g_de_receta(crudos[i], a.nombre))
+                caben.append({"nombre": a.nombre, **cabe})
                 continue
             cabe = gramos_que_caben(margen, a.kcal, a.cantidad)
             unidad = a.unidad or "g"

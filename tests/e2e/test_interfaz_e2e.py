@@ -321,7 +321,7 @@ def test_hoja_de_ajustes_del_dia(arrancar, abrir):  # R5
 
 # -- R6, R7: input, review, dictation and queue --------------------------------------------------
 
-def test_revision_con_todas_las_piezas(servidor, abrir):  # R6, R7
+def test_revision_con_todas_las_piezas(servidor, abrir, ir_a):  # R6, R7
     servidor.dia_de_prueba()
     p = abrir(servidor)
     _listo(p)
@@ -330,12 +330,14 @@ def test_revision_con_todas_las_piezas(servidor, abrir):  # R6, R7
     assert round(micro["width"]) == 64 and round(micro["height"]) == 64
     expect(p.locator("#texto")).to_have_attribute("placeholder", re.compile("peso"))
 
-    # interpreting from Balance (unit 027: where the weight of today now is) goes to Hoy
-    p.locator(".pestana", has_text="Balance").click()
+    # unit 029 (S-16): the box is only in Nutrición › Día (not in Balance any more); what is interpreted shows there
+    ir_a(p, "balance")
+    expect(p.locator("#entrada")).to_be_hidden()
+    ir_a(p, "dia")
     expect(p.locator("#entrada")).to_be_visible()
     p.locator("#texto").fill("avena 60 g, peso 72,4, hoy mantenimiento y algo raro")
     p.locator("#enviar").click()
-    expect(p).to_have_url(re.compile(r"#hoy$"))
+    expect(p).to_have_url(re.compile(r"#dia$"))
     revision = p.locator("#revision")
     expect(revision).to_be_visible()
     expect(revision).to_contain_text("Esto he entendido")
@@ -436,44 +438,48 @@ def test_grabacion_no_transcrita_se_quita_con_confirmacion(servidor, abrir):  # 
 
 # -- R8: tabs -----------------------------------------------------------------------------------------
 
-def test_pestanas_hash_y_atras(servidor, abrir):  # R8, R6
+def test_pestanas_hash_y_atras(servidor, abrir, ir_a):  # R8, R6
     p = abrir(servidor)
     _listo(p)
     pestanas = p.locator("nav.pestanas .pestana")
-    assert _textos(pestanas) == ["Hoy", "Balance", "Recetas", "Ajustes"]  # unit 027: Peso is inside Balance
+    # unit 029: five tabs; Balance and Recetas are parts of Nutrición (unit 027: Peso is inside Balance)
+    assert _textos(pestanas) == ["Hoy", "Nutrición", "Fitness", "Asistente", "Ajustes"]
+    assert _textos(p.locator("#partes a")) == ["Día", "Balance", "Recetas"]
     assert round(p.locator("nav.pestanas .pestana").first.bounding_box()["height"]) >= 56
-    expect(pestanas.nth(0)).to_have_attribute("aria-current", "page")
+    expect(pestanas.nth(1)).to_have_attribute("aria-current", "page")
+    expect(p.locator('#partes a[data-parte="dia"]')).to_have_attribute("aria-current", "page")
     expect(p.get_by_text("Ajustes ▸")).to_have_count(0)
 
-    pestanas.nth(1).click()
+    ir_a(p, "balance")
     expect(p).to_have_url(servidor.url + "/#balance")
     expect(p.locator("section#balance")).to_be_visible()
     expect(p.locator("#peso-cifra")).to_be_visible()
-    expect(p.locator("section#hoy")).to_be_hidden()
+    expect(p.locator("section#dia")).to_be_hidden()
     expect(pestanas.nth(1)).to_have_attribute("aria-current", "page")
-    expect(p.locator("#entrada")).to_be_visible()
-    pestanas.nth(2).click()
+    expect(p.locator('#partes a[data-parte="balance"]')).to_have_attribute("aria-current", "page")
+    expect(p.locator("#entrada")).to_be_hidden()  # unit 029 (S-16): the box only in Nutrición › Día
+    ir_a(p, "recetas")
     expect(p.locator("section#recetas")).to_be_visible()
     expect(p.locator("#entrada")).to_be_hidden()
     p.go_back()
     expect(p.locator("section#balance")).to_be_visible()
     p.go_back()
-    expect(p.locator("section#hoy")).to_be_visible()
+    expect(p.locator("section#dia")).to_be_visible()
 
-    # tapping Hoy while on Hoy goes back to today
+    # tapping Día while on Día goes back to today (unit 029: what Hoy on Hoy did)
     p.locator("#anterior").click()
     expect(p.locator("#titulo")).to_have_text("Ayer")
-    pestanas.nth(0).click()
+    ir_a(p, "dia")
     expect(p.locator("#titulo")).to_have_text("Hoy")
 
-    pestanas.nth(3).click()
+    ir_a(p, "ajustes")
     expect(p).to_have_url(servidor.url + "/ajustes")
     en_ajustes = p.locator("nav.pestanas .pestana")
-    assert _textos(en_ajustes) == ["Hoy", "Balance", "Recetas", "Ajustes"]
-    expect(en_ajustes.nth(3)).to_have_attribute("aria-current", "page")
+    assert _textos(en_ajustes) == ["Hoy", "Nutrición", "Fitness", "Asistente", "Ajustes"]
+    expect(en_ajustes.nth(4)).to_have_attribute("aria-current", "page")
     expect(p.get_by_text("◀ Hoy")).to_have_count(0)
     expect(p.locator("#entrada")).to_have_count(0)
-    en_ajustes.nth(1).click()
+    ir_a(p, "balance")
     expect(p).to_have_url(servidor.url + "/#balance")
     expect(p.locator("section#balance")).to_be_visible()
     expect(p.locator("#peso-cifra")).to_be_visible()
@@ -481,7 +487,7 @@ def test_pestanas_hash_y_atras(servidor, abrir):  # R8, R6
 
 # -- R9: Peso (unit 027: the weight of today at the top of Balance, its chart the one of Balance) ------------------------------------------------------------------------------------------
 
-def test_peso_siempre_de_hoy_con_grafica(arrancar, abrir):  # R9
+def test_peso_siempre_de_hoy_con_grafica(arrancar, abrir, ir_a):  # R9
     servidor = arrancar({"objetivo_peso": {"kg": 70.0, "fecha": (HOY + timedelta(days=130)).isoformat()}})
     servidor.pesos_de_prueba()
     p = abrir(servidor, "/#balance")
@@ -505,10 +511,10 @@ def test_peso_siempre_de_hoy_con_grafica(arrancar, abrir):  # R9
     assert _textos(p.locator("#peso-ultimos .kcal")) == ["72,4 kg", "72,6 kg", "73,0 kg"]
 
     # Peso is always today, even after going back a day in Hoy
-    p.locator(".pestana", has_text="Hoy").click()
+    ir_a(p, "dia")
     p.locator("#anterior").click()
     expect(p.locator("#titulo")).to_have_text("Ayer")
-    p.locator(".pestana", has_text="Balance").click()
+    ir_a(p, "balance")
     expect(p.locator("#peso-cabecera")).to_have_text("Peso de hoy · miércoles 21 oct")
     expect(p.locator("#peso-cifra")).to_contain_text("72,4")
     expect(p.locator("#peso-media")).to_contain_text("72,5 kg")
@@ -522,12 +528,12 @@ def test_peso_sin_pesos(servidor, abrir):  # R9
 
 # -- R11: Recetas ---------------------------------------------------------------------------------------
 
-def test_recetas_vacia(servidor, abrir):  # R11
+def test_recetas_vacia(servidor, abrir, ir_a):  # R11
     p = abrir(servidor)
     _listo(p)
     llamadas = []
     p.on("request", lambda r: llamadas.append(r.url) if "/api/" in r.url else None)
-    p.locator(".pestana", has_text="Recetas").click()
+    ir_a(p, "recetas")
     seccion = p.locator("section#recetas")
     # unit 011 replaced the empty placeholder by the real tab: its three sections, each one empty
     # with its own add button, and no «próximamente» any more
@@ -640,7 +646,7 @@ def _ergonomia(p, pantalla: str) -> None:
 
 
 @pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
-def test_ergonomia_y_capturas(arrancar, abrir, capturar, oscuro):  # R14
+def test_ergonomia_y_capturas(arrancar, abrir, capturar, oscuro, ir_a):  # R14
     servidor = arrancar({"objetivo_peso": {"kg": 70.0, "fecha": (HOY + timedelta(days=130)).isoformat()},
                          "edad": 38, "altura_cm": 178, "limite_saludable_pct": 20})
     servidor.dia_de_prueba()
@@ -670,7 +676,7 @@ def test_ergonomia_y_capturas(arrancar, abrir, capturar, oscuro):  # R14
     capturar(p, f"hoy-hoja{sufijo}")
     p.locator("#cerrar-hoja").click()
     for pantalla in ("balance", "recetas"):  # unit 027: the weight of today is in Balance
-        p.locator(".pestana", has_text=pantalla.capitalize()).click()
+        ir_a(p, pantalla)
         expect(p.locator(f"section#{pantalla}")).to_be_visible()
         if pantalla == "balance":
             expect(p.locator("#peso-cifra")).to_contain_text("72,4")

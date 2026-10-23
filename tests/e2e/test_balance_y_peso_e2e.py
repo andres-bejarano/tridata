@@ -104,8 +104,11 @@ def test_una_pestana_balance_con_todo_en_orden(arrancar, abrir, capturar, oscuro
     expect(p).to_have_url(servidor.url + "/#balance")
     expect(p.locator("section#balance")).to_be_visible()
     expect(p.locator("section#peso")).to_have_count(0)
-    assert _textos(p.locator("nav.pestanas .pestana")) == ["Hoy", "Balance", "Recetas", "Ajustes"]
-    expect(p.locator('.pestana[data-ir="balance"]')).to_have_attribute("aria-current", "page")
+    # unit 029: Balance is a part of Nutrición, the second tab of five
+    assert _textos(p.locator("nav.pestanas .pestana")) == ["Hoy", "Nutrición", "Fitness", "Asistente", "Ajustes"]
+    assert _textos(p.locator("#partes a")) == ["Día", "Balance", "Recetas"]
+    expect(p.locator('.pestana[data-ir="nutricion"]')).to_have_attribute("aria-current", "page")
+    expect(p.locator('#partes a[data-parte="balance"]')).to_have_attribute("aria-current", "page")
 
     contenido = p.locator("#balance-contenido")
     expect(contenido.locator("#balance-semana .fila-dia")).to_have_count(7)
@@ -134,9 +137,9 @@ def test_una_pestana_balance_con_todo_en_orden(arrancar, abrir, capturar, oscuro
     capturar(p, f"balance-arriba{sufijo}")
     capturar(p, f"balance-entera{sufijo}", completa=True)
 
-    # Ajustes has the same four tabs, and its Balance goes back here
+    # Ajustes has the same five tabs (unit 029)
     p.locator(".pestana", has_text="Ajustes").click()
-    assert _textos(p.locator("nav.pestanas .pestana")) == ["Hoy", "Balance", "Recetas", "Ajustes"]
+    assert _textos(p.locator("nav.pestanas .pestana")) == ["Hoy", "Nutrición", "Fitness", "Asistente", "Ajustes"]
 
 
 # -- R2: what to show --------------------------------------------------------------------------------------
@@ -266,13 +269,13 @@ def test_por_semanas_usa_el_porcentaje_de_la_semana(servidor, abrir):  # R3
 
 # -- R4: the choice is remembered ------------------------------------------------------------------------------
 
-def test_recuerda_lo_elegido(servidor, abrir):  # R4
+def test_recuerda_lo_elegido(servidor, abrir, ir_a):  # R4
     servidor.historial_de_prueba(date(2026, 9, 1))
     p = abrir(servidor, "/#balance")
     _ver(p, "Peso")
-    p.locator(".pestana", has_text="Hoy").click()
-    expect(p.locator("section#hoy")).to_be_visible()
-    p.locator(".pestana", has_text="Balance").click()
+    ir_a(p, "dia")
+    expect(p.locator("section#dia")).to_be_visible()
+    ir_a(p, "balance")
     expect(p.locator("#balance-grafica svg")).to_have_count(1)
     assert _pulsado(p, "grafica-vista") == ["Peso"]
     expect(p.locator("#balance-grafica svg .barra-kcal")).to_have_count(0)
@@ -343,7 +346,7 @@ def _miles_sin_punto(texto: str) -> list[str]:
     return [m.group(0) for m in re.finditer(r"(?<![\d.,])\d{4,}(?![\d])", texto) if not re.fullmatch(r"20\d\d", m.group(0))]
 
 
-def test_kcal_enteras_con_punto_de_millar(arrancar, abrir):  # R6
+def test_kcal_enteras_con_punto_de_millar(arrancar, abrir, ir_a):  # R6
     servidor = arrancar({**OBJETIVO_PESO, "edad": 38, "altura_cm": 178.5})
     martes = LUNES + timedelta(days=1)
     servidor.ajustes.cambiar({"limite_saludable_pct": 25}, desde=date(1, 1, 1))
@@ -367,7 +370,7 @@ def test_kcal_enteras_con_punto_de_millar(arrancar, abrir):  # R6
     expect(p.locator("#balance-semana .fila-dia").nth(0)).to_contain_text("−1.940 kcal")
     assert re.search(r"Basal\s+[\d.]+\s", p.locator("#peso-basal").inner_text())
 
-    p.locator(".pestana", has_text="Hoy").click()
+    ir_a(p, "dia")
     expect(p.locator("#queda-cifra")).not_to_have_text("—")
     barra = " ".join([p.locator("#queda").inner_text(), p.locator("#cierre").inner_text()])
     assert _decimales_que_no_son_kg_ni_pct(barra) == [], "Hoy: kcal with decimals"

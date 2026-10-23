@@ -11,7 +11,7 @@
 // until the PC sends back its text and list, which wait as «pendientes de revisar» until they
 // are confirmed or discarded. The service worker (sw.js) lets the page open with the PC off.
 // Unit 010 (presentation only, no rule changes): Hoy, Peso and Recetas are sections of this page
-// chosen by #hoy / #peso / #recetas; the «Te quedan» card shows in big the level being looked at
+// chosen by #dia / #balance / #recetas (unit 029); the «Te quedan» card shows in big the level being looked at
 // (remembered on this phone) with the others as buttons; everything that adjusts the day lives in
 // the sheet «⚙ Ajustar el día» (<dialog id="hoja">); the day is a list Comido / Planeado. The Peso
 // tab is drawn by peso.js, always for today. Unit 027: the Peso tab is inside Balance (balance.js calls peso.js);
@@ -53,7 +53,10 @@ const etiquetaNivel = (n) => (n === 0 ? "Mantenimiento" : `${signo(n)} %`);
 const conSignoKcal = (n) => (Math.round(n) < 0 ? `−${kcalEnteras(-n)}` : kcalEnteras(Math.max(n, 0)));
 const signoKcal = (n) => (Math.round(n) > 0 ? "+" : Math.round(n) < 0 ? "−" : "") + kcalEnteras(Math.abs(n));
 const MINUTO_MS = 60_000; // unit 016 (R3): how often the day is asked again while it is in sight
-const PESTANAS = ["hoy", "balance", "recetas"]; // unit 027: Peso is inside Balance
+// unit 029: five tabs (Hoy · Nutrición · Fitness · Asistente · Ajustes, the last one its own page); Nutrición has
+// three parts, Día · Balance · Recetas (unit 027: Peso is inside Balance). Each place has its address.
+const SITIOS = ["hoy", "dia", "balance", "recetas", "fitness", "asistente"];
+const NUTRICION = ["dia", "balance", "recetas"];
 const CLAVE_NIVEL = "tridata.nivel-que-miras"; // a screen preference of this phone, never the objective
 const PESO_MIN = 30;
 const PESO_MAX = 250;
@@ -72,8 +75,8 @@ let grabacion = null; // { parar } while recording
 let esperada = null; // id of the recording just made: its list opens by itself when it comes back
 let textoDeLista = null; // a list whose interpretation failed (502), its text put in the box, and its day
 const porCien = new WeakMap(); // unit 013: the kcal/100 g typed on a review card, by food (never saved)
-let pestanaVista = null; // the tab on screen, to reload the day when coming back to Hoy (unit 013)
-let diaPedido = null; // unit 017: a day tapped in Balance, opened when Hoy shows up
+let pestanaVista = null; // the place on screen, to reload the day when coming back to Día (unit 013)
+let diaPedido = null; // unit 017: a day tapped in Balance, opened when Día shows up
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -200,7 +203,7 @@ function pintarDia(dia) {
   document.body.dataset.dia = dia.fecha;
   const esHoy = dia.fecha === hoyISO;
   $("titulo").textContent = nombreDelDia(dia.fecha);
-  if (pestanaActual() === "hoy") document.title = `TriData · ${nombreDelDia(dia.fecha)}`;
+  if (pestanaActual() === "dia") document.title = `TriData · ${nombreDelDia(dia.fecha)}`;
   $("fecha").textContent = deFecha(dia.fecha);
   $("ir-hoy").hidden = esHoy;
   $("t-comido-dia").textContent = esHoy ? "Tu día" : mayuscula(deFecha(dia.fecha));
@@ -865,7 +868,7 @@ function irA(fecha) {
 // Unit 016 (R3): back to the front, and every minute while in sight, the day is asked again; its `hoy`
 // says whether midnight has passed (pintarDia moves from the old today to the new one).
 function mirarElDia() {
-  if (document.visibilityState !== "visible" || pestanaActual() !== "hoy" || !diaVisto) return;
+  if (document.visibilityState !== "visible" || pestanaActual() !== "dia" || !diaVisto) return;
   cargarDia(diaVisto, { callado: true });
 }
 
@@ -1286,37 +1289,52 @@ function enlazarHoja() {
 function pestanaActual() {
   if (location.hash === "#peso") history.replaceState(null, "", "#balance"); // unit 027: an old bookmark
   const h = location.hash.slice(1);
-  return PESTANAS.includes(h) ? h : "hoy";
+  return SITIOS.includes(h) ? h : "dia"; // unit 029: until unit 030, the app opens in Nutrición › Día
 }
 
-// Unit 017: from Balance, a day opens in Hoy (its list of foods, its margin).
+// Unit 029 (R6): an address saved from before opens its place of now. `#hoy` was the day: on load it opens
+// Nutrición › Día; only the bar of Ajustes («/?ir=hoy#hoy») opens the new Hoy. Inside the page, #hoy is Hoy.
+function direccionDeAntes() {
+  const deLaBarra = new URLSearchParams(location.search).get("ir") === "hoy";
+  if (deLaBarra) history.replaceState(null, "", "/#hoy");
+  else if (location.hash === "#hoy") history.replaceState(null, "", "#dia");
+}
+
+// Unit 017: from Balance, a day opens in Nutrición › Día (its list of foods, its margin).
 function irADia(fecha) {
   diaPedido = fecha;
-  if (pestanaActual() === "hoy") mostrarPestana();
-  else location.hash = "hoy";
+  if (pestanaActual() === "dia") mostrarPestana();
+  else location.hash = "dia";
 }
 
 function irAPestanaHoy() {
-  if (pestanaActual() !== "hoy") location.hash = "hoy";
+  if (pestanaActual() !== "dia") location.hash = "dia";
 }
 
 function mostrarPestana() {
   const actual = pestanaActual();
-  for (const p of PESTANAS) $(p).hidden = p !== actual;
+  const enNutricion = NUTRICION.includes(actual);
+  for (const p of SITIOS) $(p).hidden = p !== actual;
+  $("nutricion").hidden = !enNutricion;
+  const pestana = enNutricion ? "nutricion" : actual;
   for (const a of document.querySelectorAll(".pestana")) {
-    if (a.dataset.ir === actual) a.setAttribute("aria-current", "page");
+    if (a.dataset.ir === pestana) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
-  $("entrada").hidden = actual === "recetas"; // the box is for Hoy and Balance (unit 027: where Peso had it)
+  for (const a of document.querySelectorAll("#partes a")) {
+    if (a.dataset.parte === actual) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  }
+  $("entrada").hidden = actual !== "dia"; // unit 029 (S-16): the box and the microphone only where the day is logged
   if ($("hoja").open) $("hoja").close();
-  if (actual === "hoy") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
+  if (actual === "dia") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
   else document.title = `TriData · ${mayuscula(actual)}`;
-  // unit 013: back in Hoy from another tab, the day is asked again (what was logged from Recetas shows)
-  if (actual === "hoy" && diaPedido) { // unit 017: a day tapped in Balance
+  // unit 013: back in Día from another place, the day is asked again (what was logged from Recetas shows)
+  if (actual === "dia" && diaPedido) { // unit 017: a day tapped in Balance
     const fecha = diaPedido;
     diaPedido = null;
     irA(fecha);
-  } else if (actual === "hoy" && pestanaVista !== null && pestanaVista !== "hoy" && diaVisto) cargarDia(diaVisto);
+  } else if (actual === "dia" && pestanaVista !== null && pestanaVista !== "dia" && diaVisto) cargarDia(diaVisto);
   if (pestanaVista === "recetas" && actual !== "recetas") cargarGuardado({ otraVez: true }); // unit 019: the search box
   pestanaVista = actual;
   if (actual === "balance") pintarBalance($("balance-contenido"), irADia);
@@ -1325,11 +1343,14 @@ function mostrarPestana() {
 }
 
 function enlazarPestanas() {
-  // tapping Hoy while already in Hoy goes back to today (the «Hoy» button that was next to ▶)
-  document.querySelector('.pestana[data-ir="hoy"]').addEventListener("click", () => {
-    if (pestanaActual() === "hoy" && hoyISO && diaVisto !== hoyISO) irA(hoyISO);
-  });
+  // tapping Día (or Nutrición) while already in Día goes back to today (what tapping Hoy in Hoy did, unit 029)
+  const volverAHoy = () => {
+    if (pestanaActual() === "dia" && hoyISO && diaVisto !== hoyISO) irA(hoyISO);
+  };
+  document.querySelector('#partes a[data-parte="dia"]').addEventListener("click", volverAHoy);
+  document.querySelector('.pestana[data-ir="nutricion"]').addEventListener("click", volverAHoy);
   window.addEventListener("hashchange", mostrarPestana);
+  direccionDeAntes();
   mostrarPestana();
 }
 

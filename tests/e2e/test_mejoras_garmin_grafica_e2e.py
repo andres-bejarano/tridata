@@ -222,7 +222,7 @@ def test_peso_entre_fechas(servidor, abrir, capturar, oscuro):  # R13
 
 # -- R9, R11: spreading again and the label ------------------------------------------------------------------
 
-def test_repartir_otra_vez_y_la_etiqueta(servidor, abrir, capturar):  # R9, R11 · R-20
+def test_repartir_otra_vez_y_la_etiqueta(servidor, abrir, capturar, ir_a):  # R9, R11 · R-20
     servidor.semana_de_prueba()
     p = abrir(servidor, "/#balance")
     filas = p.locator("#balance-semana .fila-dia")
@@ -240,7 +240,7 @@ def test_repartir_otra_vez_y_la_etiqueta(servidor, abrir, capturar):  # R9, R11 
     capturar(p, "balance-ya-repartido")
 
     # Hoy, −15 % by hand: today loses «repartido», the others keep it
-    p.locator(".pestana", has_text="Hoy").click()
+    ir_a(p, "dia")
     p.locator("#abrir-hoja").click()
     p.locator("#abrir-pct").click()
     p.locator("#objetivo-pct").fill("15")
@@ -248,7 +248,7 @@ def test_repartir_otra_vez_y_la_etiqueta(servidor, abrir, capturar):  # R9, R11 
     p.locator("#objetivo-guardar").click()
     expect(p.locator("#objetivo-valor")).to_have_text("−15 % · hoy")
     p.locator("#cerrar-hoja").click()
-    p.locator(".pestana", has_text="Balance").click()
+    ir_a(p, "balance")
     expect(filas.nth(2)).to_contain_text("−15 %")
     expect(filas.nth(2)).not_to_contain_text("repartido")
     for i in (3, 4):

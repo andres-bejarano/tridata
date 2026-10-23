@@ -52,7 +52,7 @@ def _lado(fila) -> str:
 # -- R1, R2: the week ------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
-def test_la_semana(servidor, abrir, capturar, oscuro):  # R1, R2 · R-24, R-25
+def test_la_semana(servidor, abrir, capturar, oscuro, ir_a):  # R1, R2 · R-24, R-25
     servidor.semana_de_prueba()
     p = abrir(servidor, "/#balance", oscuro=oscuro)
     expect(p.locator("section#balance")).to_be_visible()
@@ -83,7 +83,7 @@ def test_la_semana(servidor, abrir, capturar, oscuro):  # R1, R2 · R-24, R-25
         capturar(p, "balance-completo", completa=True)
 
     # seeing the week changes nothing: Hoy keeps its 1,040
-    p.locator(".pestana", has_text="Hoy").click()
+    ir_a(p, "dia")
     expect(p.locator("#queda-cifra")).to_contain_text("1.040")
 
 
@@ -103,7 +103,7 @@ def test_un_deficit_cerrado_con_garmin_va_hacia_abajo(servidor, abrir):  # R1
 
 # -- R3, R4, R6: spread, apply, back to the plan ---------------------------------------------------------
 
-def test_repartir_aplicar_y_volver(servidor, abrir, capturar):  # R3, R4 · R-20, C-20, G-22
+def test_repartir_aplicar_y_volver(servidor, abrir, capturar, ir_a):  # R3, R4 · R-20, C-20, G-22
     servidor.semana_de_prueba()
     p = abrir(servidor, "/#balance")
     expect(p.locator("#balance-semana .fila-dia")).to_have_count(7)
@@ -128,11 +128,11 @@ def test_repartir_aplicar_y_volver(servidor, abrir, capturar):  # R3, R4 · R-20
     for i in (2, 3, 4):
         expect(filas.nth(i)).to_contain_text("−22,5 % · repartido")
     expect(filas.nth(5)).to_contain_text("0 % · carrera")
-    p.locator(".pestana", has_text="Hoy").click()
+    ir_a(p, "dia")
     expect(p.locator("#queda-cifra")).to_contain_text("790")
     expect(p.locator("#nivel-activo")).to_have_text("Nivel −22,5 %")
 
-    p.locator(".pestana", has_text="Balance").click()
+    ir_a(p, "balance")
     p.locator("#volver-al-plan").click()
     expect(p.locator("#volver-confirmar")).to_contain_text("también quita un % puesto a mano")
     p.locator("#volver-si").click()
@@ -191,7 +191,7 @@ def test_grafica_y_rangos(servidor, abrir, capturar, oscuro):  # R7
     capturar(p, "balance-todo" + sufijo)
 
 
-def test_semanas_abrir_una_y_un_dia(servidor, abrir, capturar):  # R8
+def test_semanas_abrir_una_y_un_dia(servidor, abrir, capturar, ir_a):  # R8
     servidor.historial_de_prueba(date(2026, 6, 1))
     p = abrir(servidor, "/#balance")
     semanas = p.locator("#balance-semanas .semana")
@@ -211,10 +211,10 @@ def test_semanas_abrir_una_y_un_dia(servidor, abrir, capturar):  # R8
     expect(p.locator("#volver-a-esta")).to_be_visible()
     # the contract says «su miércoles 15», but 2026-10-15 is a Thursday: its Wednesday is the 14th
     p.locator("#balance-semana .fila-dia", has_text="Miércoles 14").click()
-    expect(p.locator("section#hoy")).to_be_visible()
+    expect(p.locator("section#dia")).to_be_visible()
     expect(p.locator("#titulo")).to_have_text("Miércoles 14 de octubre")
     expect(p.locator("#lista-dia")).to_contain_text("total del día (importado)")
 
-    p.locator(".pestana", has_text="Balance").click()
+    ir_a(p, "balance")
     p.locator("#volver-a-esta").click()
     expect(p.locator("#balance-titulo")).to_have_text("Esta semana · del 19 al 25 de octubre")

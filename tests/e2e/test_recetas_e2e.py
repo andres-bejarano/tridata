@@ -117,7 +117,7 @@ def test_recetas_vacia_tres_apartados(servidor, abrir, capturar):  # R11
 
 
 @pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
-def test_e2e_1_receta_pesada_y_dictada(servidor, abrir, capturar, oscuro):  # R16, E2E-1, R11
+def test_e2e_1_receta_pesada_y_dictada(servidor, abrir, capturar, oscuro, ir_a):  # R16, E2E-1, R11
     servidor.interprete.interpretar.side_effect = _entiende
     sufijo = "-oscuro" if oscuro else ""
     p = abrir(servidor, "/#recetas", oscuro=oscuro)
@@ -131,7 +131,7 @@ def test_e2e_1_receta_pesada_y_dictada(servidor, abrir, capturar, oscuro):  # R1
     capturar(p, f"recetas{sufijo}", completa=True)
 
     # in Hoy: «garbanzos de la abuela 250 g» uses the recipe
-    p.locator(".pestana", has_text="Hoy").click()
+    ir_a(p, "dia")
     expect(p.locator("#queda-cifra")).not_to_have_text("—")
     p.locator("#texto").fill("garbanzos de la abuela 250 g")
     p.locator("#enviar").click()
@@ -164,7 +164,7 @@ def test_e2e_1_receta_pesada_y_dictada(servidor, abrir, capturar, oscuro):  # R1
     expect(tarjeta.locator(".propuesta")).to_have_count(0)
 
 
-def test_editar_fijo_y_olla_en_pantalla(servidor, abrir, capturar):  # R18, R14
+def test_editar_fijo_y_olla_en_pantalla(servidor, abrir, capturar, ir_a):  # R18, R14
     servidor.interprete.interpretar.side_effect = _entiende
     p = abrir(servidor, "/#recetas")
     _nuevo_fijo(p, "dulce de guayaba de ciclismo", 90, por="por unidad", alias="guayaba")
@@ -213,7 +213,7 @@ def test_editar_fijo_y_olla_en_pantalla(servidor, abrir, capturar):  # R18, R14
     expect(taras.locator(".vacio-apartado")).to_be_visible()
 
     # «2 guayabas» in Hoy now counts 95 each
-    p.locator(".pestana", has_text="Hoy").click()
+    ir_a(p, "dia")
     p.locator("#texto").fill("2 guayabas")
     p.locator("#enviar").click()
     expect(p.locator("#lista article").first.get_by_label("kcal")).to_have_value("190")

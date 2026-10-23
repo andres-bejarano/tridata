@@ -52,7 +52,7 @@ def _nombres(caja) -> list[str]:
 def test_buscador_tuyos_primero_y_la_pera_comun(servidor, abrir, capturar, oscuro):  # R3 — criterio portante
     _suyos(servidor)
     sufijo = "-oscuro" if oscuro else ""
-    p = abrir(servidor, "/", oscuro=oscuro)
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
     expect(p.locator("#total")).to_have_text("1.000 kcal comidas")
     ficha = _anadir(p)
     nombre = ficha.get_by_role("combobox", name="Alimento")
@@ -129,7 +129,7 @@ def test_grupo_comunes_plegado_corregir_y_quitar(servidor, abrir, capturar, oscu
     fijos.locator(".confirmar-borrado").get_by_role("button", name="Sí, borrar").click()
     expect(grupo.locator(".elemento", has_text="Tomate")).to_have_count(0)
     expect(grupo.locator("summary")).to_have_text(f"Comunes ({len(COMUNES) - 2})")
-    p.goto(servidor.url + "/")
+    p.goto(servidor.url + "/#dia")
     p.wait_for_selector("body[data-dia]", state="attached")
     ficha = _anadir(p)
     ficha.get_by_role("combobox", name="Alimento").fill("tomate")

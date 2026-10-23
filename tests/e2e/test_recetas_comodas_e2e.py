@@ -55,7 +55,7 @@ def _abrir_cosa(p, apartado: str, nombre: str):
 
 
 @pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
-def test_calcular_y_apuntar_en_hoy(servidor, abrir, capturar, oscuro):  # R1, R2, R3, R9a · R-57, R-58, C-67, C-68
+def test_calcular_y_apuntar_en_hoy(servidor, abrir, capturar, oscuro, ir_a):  # R1, R2, R3, R9a · R-57, R-58, C-67, C-68
     _guardado(servidor)
     sufijo = "-oscuro" if oscuro else ""
     p = abrir(servidor, "/#recetas", oscuro=oscuro)
@@ -90,7 +90,7 @@ def test_calcular_y_apuntar_en_hoy(servidor, abrir, capturar, oscuro):  # R1, R2
     capturar(p, f"calculadora-fijo{sufijo}")
 
     # back in Hoy, without reloading the page: the list has it and the total went up 325
-    p.locator(".pestana", has_text="Hoy").click()
+    ir_a(p, "dia")
     fila = p.locator("#lista-dia .fila", has_text="garbanzos de la abuela")
     expect(fila.locator(".kcal")).to_have_text("325")
     expect(fila).to_contain_text("de tu receta «garbanzos de la abuela»")
@@ -139,7 +139,7 @@ def test_pesar_ahora(servidor, abrir, capturar, oscuro):  # R3, R4, R9b · R-58,
 @pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
 def test_kcal_a_mano_en_hoy(servidor, abrir, capturar, oscuro):  # R5, R7, R9c · R-8, R-56, C-63
     sufijo = "-oscuro" if oscuro else ""
-    p = abrir(servidor, "/", oscuro=oscuro)
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
     expect(p.locator("#queda-cifra")).not_to_have_text("—")
     p.locator("#anadir").click()
     nueva = p.locator("#anadir-ficha .tarjeta")
@@ -185,7 +185,7 @@ def _entiende(texto: str, hoy: date) -> Interpretacion:
 
 def test_kcal_a_mano_y_kcal_100g_en_la_revision(servidor, abrir, capturar):  # R5, R6, R7 · R-8, R-56, C-64, C-65, C-66
     servidor.interprete.interpretar.side_effect = _entiende
-    p = abrir(servidor, "/")
+    p = abrir(servidor, "/#dia")
     p.locator("#texto").fill("dátiles, leche en el café y dos yogures")
     p.locator("#enviar").click()
     tarjetas = p.locator("#lista article")

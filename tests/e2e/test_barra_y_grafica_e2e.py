@@ -1,6 +1,7 @@
 """Unit 017 (asked by Andrés on 2026-10-22): today's bar in two layers and a readable weight-and-deficit chart.
 
-R10-R11 the bar (planned and done now according to Garmin) · R12 the chart of Peso and Balance: two panels,
+R10-R11 the bar (planned and done now according to Garmin) · R12 the chart of Balance (unit 027: the Peso tab is
+inside Balance, its chart is this one, «Las dos» by default): two panels,
 the «kg» and «kcal» axes, a mark every Monday whose labels never overlap and are 44 px or more apart, and
 its legend. Real Chromium at 390 × 844, light and dark; Claude, Whisper and «Actualizar Garmin» are
 `MagicMock`s (conftest.py). Invented data only; «today» is Wednesday 2026-10-21.
@@ -100,8 +101,8 @@ def test_grafica_de_peso_legible(arrancar, abrir, capturar, oscuro):  # R12
     servidor = arrancar(OBJETIVO_PESO)
     servidor.pesos_de_prueba()
     servidor.semana_de_prueba()
-    p = abrir(servidor, "/#peso", oscuro=oscuro)
-    tarjeta = p.locator("#peso-grafica")
+    p = abrir(servidor, "/#balance", oscuro=oscuro)  # unit 027: the Peso tab is inside Balance
+    tarjeta = p.locator("#balance-grafica")
     grafica = tarjeta.locator("svg")
     expect(grafica).to_have_count(1)
     expect(grafica.locator("circle.punto-peso")).to_have_count(3)
@@ -115,7 +116,7 @@ def test_grafica_de_peso_legible(arrancar, abrir, capturar, oscuro):  # R12
     expect(grafica.locator(".marca-x")).to_have_count(4)
     assert _etiquetas_legibles(grafica) == ["28 sept", "5 oct", "12 oct", "19 oct"]
     expect(tarjeta.locator(".leyenda-grafica")).to_have_text(LEYENDA)
-    _sin_scroll(p, "peso")
+    _sin_scroll(p, "balance con pesos")
     tarjeta.scroll_into_view_if_needed()
     capturar(p, "peso-grafica" + ("-oscuro" if oscuro else ""))
 

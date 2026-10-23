@@ -14,7 +14,8 @@
 // chosen by #hoy / #peso / #recetas; the «Te quedan» card shows in big the level being looked at
 // (remembered on this phone) with the others as buttons; everything that adjusts the day lives in
 // the sheet «⚙ Ajustar el día» (<dialog id="hoja">); the day is a list Comido / Planeado. The Peso
-// tab is drawn by peso.js, always for today.
+// tab is drawn by peso.js, always for today. Unit 027: the Peso tab is inside Balance (balance.js calls peso.js);
+// an old #peso opens #balance.
 // Unit 011: the Recetas tab is drawn by recetas.js. A food that comes from a saved recipe or fixed
 // food says so («de tu receta …», «provisional») in the review and in the day list; one that is only
 // alike comes as a visible proposal with «Usar estimación», which puts Claude's estimate back.
@@ -36,7 +37,6 @@ import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
 import { pintarBalance } from "./balance.js";
 import { buscador, cajaElegida, cargarGuardado, cosaGuardada, cuenta, leerOrigen, origenDe, textoReceta, unidadPropia } from "./buscador.js";
-import { pintarPeso } from "./peso.js";
 import { pintarRecetas } from "./recetas.js";
 
 const $ = (id) => document.getElementById(id);
@@ -53,7 +53,7 @@ const etiquetaNivel = (n) => (n === 0 ? "Mantenimiento" : `${signo(n)} %`);
 const conSignoKcal = (n) => (Math.round(n) < 0 ? `−${kcalEnteras(-n)}` : kcalEnteras(Math.max(n, 0)));
 const signoKcal = (n) => (Math.round(n) > 0 ? "+" : Math.round(n) < 0 ? "−" : "") + kcalEnteras(Math.abs(n));
 const MINUTO_MS = 60_000; // unit 016 (R3): how often the day is asked again while it is in sight
-const PESTANAS = ["hoy", "balance", "peso", "recetas"];
+const PESTANAS = ["hoy", "balance", "recetas"]; // unit 027: Peso is inside Balance
 const CLAVE_NIVEL = "tridata.nivel-que-miras"; // a screen preference of this phone, never the objective
 const PESO_MIN = 30;
 const PESO_MAX = 250;
@@ -1284,6 +1284,7 @@ function enlazarHoja() {
 }
 
 function pestanaActual() {
+  if (location.hash === "#peso") history.replaceState(null, "", "#balance"); // unit 027: an old bookmark
   const h = location.hash.slice(1);
   return PESTANAS.includes(h) ? h : "hoy";
 }
@@ -1306,7 +1307,7 @@ function mostrarPestana() {
     if (a.dataset.ir === actual) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
-  $("entrada").hidden = actual === "recetas" || actual === "balance"; // the box is for Hoy and Peso
+  $("entrada").hidden = actual === "recetas"; // the box is for Hoy and Balance (unit 027: where Peso had it)
   if ($("hoja").open) $("hoja").close();
   if (actual === "hoy") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
   else document.title = `TriData · ${mayuscula(actual)}`;
@@ -1319,7 +1320,6 @@ function mostrarPestana() {
   if (pestanaVista === "recetas" && actual !== "recetas") cargarGuardado({ otraVez: true }); // unit 019: the search box
   pestanaVista = actual;
   if (actual === "balance") pintarBalance($("balance-contenido"), irADia);
-  if (actual === "peso") pintarPeso($("peso-contenido"));
   if (actual === "recetas") pintarRecetas($("recetas"));
   window.scrollTo(0, 0);
 }

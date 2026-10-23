@@ -1,7 +1,8 @@
 """Unit 018 in a real Chromium at 390 × 844, light and dark. Invented data only.
 
 R2, R3 the Garmin warning in Hoy and its «Actualizar Garmin» · R7 the Balance chart between two dates · R13 the
-same in the Peso tab · R9, R11 spreading again and the «repartido» label · R12 ◀ before the first day arrives.
+same with the weight of today above it (unit 027: the Peso tab is inside Balance) · R9, R11 spreading again and
+the «repartido» label · R12 ◀ before the first day arrives.
 Claude, Whisper and «Actualizar Garmin» are `MagicMock`s (conftest.py); «today» is Wednesday 2026-10-21 and the
 server's clock says 10:00.
 """
@@ -172,34 +173,35 @@ def test_fechas_antes_del_primer_dia_y_sin_datos(servidor, abrir):  # R7, R8
     expect(p.locator("#balance-grafica svg")).to_have_count(0)
 
 
-# -- R13: the same chart in the Peso tab -------------------------------------------------------------------
+# -- R13: between dates, the weight of today stays today's (unit 027: the Peso tab is inside Balance) --------
 
 @TEMAS
 def test_peso_entre_fechas(servidor, abrir, capturar, oscuro):  # R13
     servidor.historial_de_prueba(date(2026, 7, 27))
     servidor.pesos_de_prueba()
     sufijo = "-oscuro" if oscuro else ""
-    p = abrir(servidor, "/#peso", oscuro=oscuro)
-    tarjeta = p.locator("#peso-grafica")
+    p = abrir(servidor, "/#balance", oscuro=oscuro)
+    tarjeta = p.locator("#balance-grafica")
     grafica = tarjeta.locator("svg")
-    expect(p.locator("#peso-periodo")).to_have_text("Últimos 30 días")
-    expect(grafica.locator(".barra-kcal")).to_have_count(30)
+    expect(p.locator("#balance-rangos button[aria-pressed=true]")).to_have_text("4 semanas")
+    expect(grafica.locator(".barra-kcal")).to_have_count(28)
     expect(p.locator("#peso-cifra")).to_contain_text("72,4")
+    p.locator("#balance-ultimos-pesos summary").click()  # folded at first
     basal = p.locator("#peso-basal").inner_text()
     objetivo = p.locator("#peso-objetivo").inner_text()
     ultimos = _textos(p.locator("#peso-ultimos .kcal"))
-    boton = p.locator("#peso-fechas-boton")
+    assert ultimos
+    boton = p.locator("#balance-fechas-boton")
     expect(boton).to_have_text("Fechas…")
-    _alto_minimo(boton, "peso-fechas")
-    assert boton.bounding_box()["y"] > grafica.bounding_box()["y"]  # under the chart
+    _alto_minimo(boton, "balance-fechas")
 
     boton.click()
-    _alto_minimo(p.locator("#peso-ver"), "peso-ver")
-    _elegir(p, "peso", "2026-08-01", "2026-09-01")
+    _alto_minimo(p.locator("#balance-ver"), "balance-ver")
+    _elegir(p, "balance", "2026-08-01", "2026-09-01")
 
     expect(grafica.locator(".barra-kcal")).to_have_count(32)
     assert _etiquetas_separadas(grafica) == LUNES_DE_AGOSTO
-    expect(p.locator("#peso-periodo")).to_have_text("del 1 ago al 1 sept")
+    expect(p.locator("#balance-periodo")).to_have_text("del 1 ago al 1 sept")
     expect(p.locator("#peso-cifra")).to_contain_text("72,4")  # the rest is still today's
     assert p.locator("#peso-basal").inner_text() == basal
     assert p.locator("#peso-objetivo").inner_text() == objetivo
@@ -208,19 +210,14 @@ def test_peso_entre_fechas(servidor, abrir, capturar, oscuro):  # R13
     tarjeta.scroll_into_view_if_needed()
     capturar(p, f"peso-fechas{sufijo}")
 
-    _elegir(p, "peso", "2026-09-10", "2026-09-01")
-    expect(p.locator("#peso-fechas-error")).to_have_text(AL_REVES)
+    _elegir(p, "balance", "2026-09-10", "2026-09-01")
+    expect(p.locator("#balance-fechas-error")).to_have_text(AL_REVES)
     expect(grafica.locator(".barra-kcal")).to_have_count(32)
 
-    p.locator("#peso-30-dias").click()
-    expect(p.locator("#peso-periodo")).to_have_text("Últimos 30 días")
-    expect(grafica.locator(".barra-kcal")).to_have_count(30)
-
-    # the dates of Peso and of Balance are each their own
-    p.locator(".pestana", has_text="Balance").click()
-    p.locator("#balance-fechas-boton").click()
-    expect(p.locator("#balance-desde")).not_to_have_value("2026-08-01")
-    _sin_scroll(p, "balance tras peso")
+    p.locator("#balance-rangos button", has_text="4 semanas").click()
+    expect(grafica.locator(".barra-kcal")).to_have_count(28)
+    expect(p.locator("#peso-cifra")).to_contain_text("72,4")
+    _sin_scroll(p, "balance tras fechas")
 
 
 # -- R9, R11: spreading again and the label ------------------------------------------------------------------

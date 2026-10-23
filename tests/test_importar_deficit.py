@@ -368,7 +368,7 @@ def test_sin_html_no_se_cruzan_pesos_y_la_copia_solo_lleva_el_md(entorno):
     assert codigo == 0
     assert _filas(entorno["db"], "peso_dia") == 10
     copia = next(p for p in entorno["copias"].iterdir() if p.is_dir())
-    assert sorted(p.name for p in copia.iterdir()) == ["data.sqlite3", "deficit.md"]
+    assert sorted(p.name for p in copia.iterdir()) == ["deficit.md"]  # unit 028 (R2): no base, no empty SQLite copy
 
 
 # -- The command: review the dubious ones (R3, R4, R5, R9, R10) ---------------------------

@@ -49,10 +49,13 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import sys
+import tempfile
 from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from garminconnect import GarminConnectTooManyRequestsError
@@ -436,12 +439,28 @@ def _cmd_backup(store: DataStore, dest_root: Path, keep: int, extras: list[Path]
         print(f"--extra file(s) not found: {', '.join(map(str, missing))}", file=sys.stderr)
         return 1
 
-    # Timestamped folders sort chronologically, which rotation relies on.
-    dest = dest_root / datetime.now().strftime("%Y-%m-%dT%H%M%S")
-    dest.mkdir(parents=True)
+    # Timestamped folders sort chronologically, which rotation relies on. A second backup in the same
+    # second gets «-001», «-002»…: "T080000" < "T080000-001" < "T080001", so the order still holds (unit 028).
+    dest_root.mkdir(parents=True, exist_ok=True)
+    sello = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    dest = dest_root / sello
+    for n in range(1, 1000):
+        try:
+            dest.mkdir()
+            break
+        except FileExistsError:
+            dest = dest_root / f"{sello}-{n:03d}"
+    else:
+        print(f"Too many backups in the same second under {dest_root}.", file=sys.stderr)
+        return 1
     dest_root.chmod(0o700)
     dest.chmod(0o700)
-    counts = store.backup(dest / "data.sqlite3")
+    if isinstance(store, _SoloCopia) and not store.ruta.is_file():
+        # unit 028 (R2): nothing to lose, and never an empty SQLite that looks like a good copy
+        counts: dict[str, int] = {}
+        print(f"No hay base que copiar en {store.ruta}: la copia solo lleva los ficheros de la importación.")
+    else:
+        counts = store.backup(dest / "data.sqlite3")
     for extra in extras:
         copied = dest / extra.name
         shutil.copy2(extra, copied)
@@ -462,11 +481,16 @@ def _cmd_backup(store: DataStore, dest_root: Path, keep: int, extras: list[Path]
 class _SoloCopia(DataStore):
     """The store, opened only to copy it: unlike `DataStore()`, it creates no table.
 
-    So a failed backup before an import leaves the database exactly as it was.
+    So a failed backup before an import leaves the database exactly as it was; and if there is no
+    database, `_cmd_backup` copies nothing of it instead of creating an empty one (unit 028).
     """
 
     def __init__(self, db_path: Path) -> None:  # on purpose: no super().__init__, no schema
         self._db_path = Path(db_path)
+
+    @property
+    def ruta(self) -> Path:
+        return self._db_path
 
 
 def _leer_fichero(ruta: Path, opcion: str) -> bytes | None:
@@ -529,7 +553,6 @@ def _cmd_importar(
 
     Everything it prints goes to the terminal only (never to sync.log): it is Andrés's health data.
     """
-    from .nutricion import RegistroComidas, RegistroPeso
     from .nutricion import importar_deficit as imp
 
     hoy = hoy or date.today()
@@ -590,18 +613,72 @@ def _cmd_importar(
         print("La copia de seguridad ha fallado: no se ha guardado nada.", file=sys.stderr)
         return 1
 
-    resumen = imp.aplicar(lectura, decisiones, RegistroComidas(db_path), RegistroPeso(db_path), hoy)
     dudosos = []
     for i, dudoso in enumerate(lectura.dudosos):
         decision, valor = decisiones.get(i, (imp.OMITIDO, None))
         dudosos.append({**dudoso.como_dict(), "decision": decision, "valor": valor})
-    imp.Importaciones(db_path).registrar(
-        imp.huella(md_bytes, html_bytes),
-        {"resumen": resumen.como_dict(), "referencias": lectura.referencias, "taras": lectura.taras,
-         "dudosos": dudosos},
-    )
+    registro = {"referencias": lectura.referencias, "taras": lectura.taras, "dudosos": dudosos}
+
+    # unit 028 (R4): each day and each weight is saved on its own, so a failure halfway keeps what was
+    # saved; the counters say where it stopped, and the import is recorded as partial
+    avance = _Avance()
+    try:
+        resumen = imp.aplicar(lectura, decisiones, _comidas_contadas(db_path, avance), _pesos_contados(db_path, avance),
+                              hoy)
+    except Exception as exc:  # any failure while saving: say where it stopped, never a traceback
+        parcial = {"pesos_nuevos": avance.pesos, "dias_nuevos": avance.dias, "parcial": True,
+                   "cortado_en": avance.dia}
+        try:
+            imp.Importaciones(db_path).registrar(imp.huella(md_bytes, html_bytes), {"resumen": parcial, **registro})
+            registrada = "queda registrada como parcial"
+        except Exception as exc_registro:  # noqa: BLE001 - the store itself may be what failed
+            registrada = f"y no se ha podido registrar ({exc_registro})"
+        print(f"La importación se ha cortado al guardar el {avance.dia} ({exc}): llegó a guardar "
+              f"{avance.pesos} pesos y {avance.dias} días, {registrada}. Repítela: solo añadirá lo que falte.",
+              file=sys.stderr)
+        return 1
+    imp.Importaciones(db_path).registrar(imp.huella(md_bytes, html_bytes),
+                                         {"resumen": resumen.como_dict(), **registro})
     print(resumen.texto())
     return 0
+
+
+class _Avance:
+    """How far `imp.aplicar` got: the day it was saving and how many weights and days it saved (unit 028)."""
+
+    def __init__(self) -> None:
+        self.dia: str | None = None
+        self.pesos = 0
+        self.dias = 0
+
+
+def _comidas_contadas(db_path: Path, avance: _Avance) -> Any:
+    """A `RegistroComidas` that writes down in `avance` each day it saves (imported lazily, like the rest)."""
+    from .nutricion import RegistroComidas
+
+    class ComidasContadas(RegistroComidas):
+        def importar_dia(self, dia: date, alimentos: list, hoy: date) -> int:
+            avance.dia = dia.isoformat()
+            hechas = super().importar_dia(dia, alimentos, hoy)
+            if hechas:
+                avance.dias += 1
+            return hechas
+
+    return ComidasContadas(db_path)
+
+
+def _pesos_contados(db_path: Path, avance: _Avance) -> Any:
+    """A `RegistroPeso` that writes down in `avance` each weight it saves."""
+    from .nutricion import RegistroPeso
+
+    class PesosContados(RegistroPeso):
+        def apuntar(self, dia: Any, kg: Any, nota: str | None = None, *, hoy: date | None = None) -> dict:
+            avance.dia = dia.isoformat() if isinstance(dia, date) else str(dia)
+            guardado = super().apuntar(dia, kg, nota, hoy=hoy)
+            avance.pesos += 1
+            return guardado
+
+    return PesosContados(db_path)
 
 
 def _cmd_importar_recetas(md: Path, simular: bool, *, db_path: Path = DEFAULT_DB_PATH,
@@ -633,9 +710,21 @@ def _cmd_importar_recetas(md: Path, simular: bool, *, db_path: Path = DEFAULT_DB
             print(f"  {carga.describir()} · {estado}")
 
     if simular:
-        # read-only: a copy of the store in memory would also work, but simply not opening it is safer
-        imprimir(Recetario(db_path).cargar_de_deficit(cargas, hoy, simular=True) if db_path.is_file()
-                 else [(c, "nueva") for c in cargas])
+        # unit 028 (R1): `Recetario()` creates and migrates tables, so it only ever opens a throwaway copy;
+        # the real store is opened read-only, to copy it, and its bytes stay the same
+        if db_path.is_file():
+            with tempfile.TemporaryDirectory(prefix="tridata-simular-") as carpeta:
+                copia = Path(carpeta) / "data.sqlite3"
+                origen = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+                destino = sqlite3.connect(copia)
+                try:
+                    origen.backup(destino)
+                finally:
+                    destino.close()
+                    origen.close()
+                imprimir(Recetario(copia).cargar_de_deficit(cargas, hoy, simular=True))
+        else:
+            imprimir([(c, "nueva") for c in cargas])
         print("Simulación: no se ha guardado nada.")
         return 0
 

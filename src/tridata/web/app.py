@@ -458,8 +458,8 @@ def crear_app(
             return _error(f"Fecha no válida: {texto!r}", 400)
         if fecha > dia_hoy:
             return _error("Ese día aún no ha llegado: no se puede cerrar.", 422)
-        try:
-            cierres.cerrar_comida(fecha, "boton")
+        try:  # unit 028 (R8): SQLite may wait for the lock; never inside the app's loop
+            await run_in_threadpool(cierres.cerrar_comida, fecha, "boton")
         except ValueError as exc:
             return _error(f"No se ha cerrado: {exc}.", 422)
         if fecha < dia_hoy:  # a past day may already have its whole day in Garmin
@@ -733,6 +733,9 @@ def crear_app(
             cuerpo = _con_lo_guardado(recetario, await _cuerpo(request) or {})
         except NoSeGuarda as exc:
             return _error(str(exc), exc.estado)
+        # unit 028 (R6): estimated kcal without a quantity do not count here either (R-8); it looks at the
+        # `estimado` that came, before it is set to False
+        cuerpo = _sin_estimacion_suelta(cuerpo)
         try:
             alimento = Alimento.desde_dict({**cuerpo, "estimado": False, "dudoso": False, "supuestos": []})
         except ValueError as exc:

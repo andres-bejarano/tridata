@@ -59,7 +59,11 @@ CREATE TABLE IF NOT EXISTS alimento_fijo (
     alias TEXT NOT NULL DEFAULT '[]',
     kcal REAL NOT NULL,
     por TEXT NOT NULL CHECK (por IN ('100g', 'unidad')),
-    nota TEXT
+    nota TEXT,
+    comun INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS comun_quitado (
+    nombre TEXT PRIMARY KEY
 );
 CREATE TABLE IF NOT EXISTS olla (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -358,6 +362,9 @@ class Recetario:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            columnas = {c["name"] for c in conn.execute("PRAGMA table_info(alimento_fijo)")}
+            if "comun" not in columnas:  # a base from before unit 026
+                conn.execute("ALTER TABLE alimento_fijo ADD COLUMN comun INTEGER NOT NULL DEFAULT 0")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -374,7 +381,7 @@ class Recetario:
     @staticmethod
     def _fijo_fila(f: sqlite3.Row) -> dict:
         return {"id": f["id"], "nombre": f["nombre"], "alias": json.loads(f["alias"]), "kcal": f["kcal"],
-                "por": f["por"], "nota": f["nota"]}
+                "por": f["por"], "nota": f["nota"], "comun": bool(f["comun"])}
 
     @staticmethod
     def _version_fila(v: sqlite3.Row, en_uso: int) -> dict:
@@ -408,7 +415,7 @@ class Recetario:
     def fijos(self) -> list[dict]:
         with self._connect() as conn:
             return [self._fijo_fila(f) for f in conn.execute(
-                "SELECT * FROM alimento_fijo ORDER BY nombre COLLATE NOCASE, id")]
+                "SELECT * FROM alimento_fijo ORDER BY comun, nombre COLLATE NOCASE, id")]
 
     def ollas(self) -> list[dict]:
         with self._connect() as conn:
@@ -451,7 +458,18 @@ class Recetario:
             duenos.setdefault(normalizar(f["nombre"]), ("olla", f["id"], f["nombre"]))
         return duenos
 
+    @staticmethod
+    def _quitar_comun(conn: sqlite3.Connection, fila: sqlite3.Row) -> None:
+        """Unit 026 (R5, R7): a common food that goes is written down, so it is never loaded again."""
+        conn.execute("INSERT OR IGNORE INTO comun_quitado (nombre) VALUES (?)", (normalizar(fila["nombre"]),))
+        conn.execute("DELETE FROM alimento_fijo WHERE id = ?", (fila["id"],))
+
     def _unico(self, conn: sqlite3.Connection, nombres: list[str], propio: tuple[str, int | None]) -> None:
+        """G-34; unit 026 (R7): a common food with one of these names gives way to what is being saved."""
+        claves = {normalizar(n) for n in nombres}
+        for f in conn.execute("SELECT * FROM alimento_fijo WHERE comun = 1").fetchall():
+            if ("fijo", f["id"]) != propio and claves & {normalizar(n) for n in [f["nombre"], *json.loads(f["alias"])]}:
+                self._quitar_comun(conn, f)
         duenos = self._duenos(conn)
         for n in nombres:
             dueno = duenos.get(normalizar(n))
@@ -491,16 +509,44 @@ class Recetario:
     def cambiar_fijo(self, fijo_id: int, datos: dict) -> dict:
         """A2: change it in place. What was logged and the saved recipe versions keep their kcal."""
         with self._connect() as conn:
-            self._leer(conn, "alimento_fijo", fijo_id)
+            antes = self._leer(conn, "alimento_fijo", fijo_id)
             f = self._datos_fijo(datos)
             self._unico(conn, [f["nombre"], *f["alias"]], ("fijo", fijo_id))
-            conn.execute("UPDATE alimento_fijo SET nombre = ?, alias = ?, kcal = ?, por = ?, nota = ? WHERE id = ?",
+            if antes["comun"]:  # unit 026 (R4): corrected, it is his; the common one is not loaded again
+                conn.execute("INSERT OR IGNORE INTO comun_quitado (nombre) VALUES (?)", (normalizar(antes["nombre"]),))
+            conn.execute("UPDATE alimento_fijo SET nombre = ?, alias = ?, kcal = ?, por = ?, nota = ?, comun = 0 "
+                         "WHERE id = ?",
                          (f["nombre"], json.dumps(f["alias"], ensure_ascii=False), f["kcal"], f["por"], f["nota"],
                           fijo_id))
             return self._fijo_fila(self._leer(conn, "alimento_fijo", fijo_id))
 
     def borrar_fijo(self, fijo_id: int, confirmado: bool = False) -> dict:
-        return self._borrar("alimento_fijo", fijo_id, confirmado, self._fijo_fila)
+        """Unit 026 (R5): a common one removed is written down and does not come back at the next start."""
+        fijo = self._borrar("alimento_fijo", fijo_id, confirmado, self._fijo_fila)
+        if fijo["comun"]:
+            with self._connect() as conn:
+                conn.execute("INSERT OR IGNORE INTO comun_quitado (nombre) VALUES (?)", (normalizar(fijo["nombre"]),))
+        return fijo
+
+    def cargar_comunes(self, comunes: Any) -> int:
+        """Unit 026 (R1, R2): add the common foods that are missing, marked `comun`; returns how many.
+
+        One whose name is already a recipe, ingredient, pot or alias (without capitals or accents) is not loaded,
+        nor one removed or corrected before (`comun_quitado`): loading twice never duplicates nor touches his.
+        """
+        nuevos = 0
+        with self._connect() as conn:
+            duenos = self._duenos(conn)
+            quitados = {f["nombre"] for f in conn.execute("SELECT nombre FROM comun_quitado")}
+            for c in comunes:
+                clave = normalizar(c["nombre"])
+                if clave in duenos or clave in quitados:
+                    continue
+                conn.execute("INSERT INTO alimento_fijo (nombre, alias, kcal, por, nota, comun) VALUES (?, '[]', ?, ?, ?, 1)",
+                             (c["nombre"], c["kcal"], c["por"], c.get("nota")))
+                duenos[clave] = ("fijo", 0, c["nombre"])
+                nuevos += 1
+        return nuevos
 
     # -- pots -------------------------------------------------------------------------------------------
 
@@ -729,7 +775,8 @@ class Recetario:
             if kcal is None:
                 como = "por 100 g: dilo en gramos" if cosa["por"] == "100g" else "por unidad: dilo en unidades"
                 return {"problema": f"«{cosa['nombre']}» está guardado {como}", "dudoso": False}
-            return {"kcal": kcal, "origen": f"de tu ingrediente «{cosa['nombre']}»", "provisional": False}
+            origen = "de la lista de comunes" if cosa.get("comun") else f"de tu ingrediente «{cosa['nombre']}»"
+            return {"kcal": kcal, "origen": origen, "provisional": False}
         v = cosa["en_uso"]
         tanda = f" (tanda {v['numero']})" if len(cosa["versiones"]) > 1 else ""
         origen = f"de tu receta «{cosa['nombre']}»{tanda}"

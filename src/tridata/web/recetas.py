@@ -20,6 +20,8 @@
                                       Both read an optional "unidad" ("g", "unidad" or "receta"; none is the
                                       thing's own): one that does not fit is a 422 and nothing is saved
 
+Unit 026: every fixed food carries `comun` (true for one of the app's common foods, `nutricion/comunes.py`).
+
 Every other route answers the whole listing plus the thing touched ("receta", "fijo" or "olla").
 400 malformed data, 422 a business rule (its text says why), 404 it does not exist. The kcal of
 an ingredient that is a fixed food are always recomputed here, never taken from the page.
@@ -35,6 +37,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from ..nutricion.comunes import cargar_comunes
 from ..nutricion.recetas import ErrorDatos, Recetario, YaEsReceta, _numero
 from ..nutricion.registro import Alimento, RegistroComidas
 
@@ -55,6 +58,8 @@ async def _cuerpo(request: Request) -> dict | None:
 
 
 def rutas(recetario: Recetario, hoy: Callable[[], date], registro: RegistroComidas) -> list[Route]:
+    cargar_comunes(recetario)  # unit 026 (R1): the common foods that are missing, once, when the app is created
+
     def respuesta(que: str, cosa: dict | None) -> JSONResponse:
         return JSONResponse({que: cosa, **recetario.listado()})
 

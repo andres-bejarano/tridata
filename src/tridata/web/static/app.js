@@ -681,6 +681,16 @@ function camposFicha(a, { buscar = false } = {}) {
   const dia = campo("Día", a.dia, "date");
   const por100 = kcalPor100(null, (k) => { kc.entrada.value = String(k); });
   const alCambiarCantidad = () => por100.cambiar(comoNumero(cant.entrada.value), unidad.entrada.value.trim() || null);
+  // bug 021: a new quantity scales the kcal (kcal ÷ old quantity × new one) while the unit is the same and the
+  // kcal have not been typed by hand; with kcal/100 g open, that works them out instead
+  const base = a.cantidad > 0 && a.kcal !== null ? { kcal: a.kcal / a.cantidad, unidad: a.unidad || "g" } : null;
+  let kcalEscritas = false;
+  kc.entrada.addEventListener("input", () => { kcalEscritas = true; });
+  cant.entrada.addEventListener("input", () => {
+    const c = comoNumero(cant.entrada.value);
+    if (!base || kcalEscritas || por100.valor() !== null || (unidad.entrada.value.trim() || "g") !== base.unidad || !(c > 0)) return;
+    kc.entrada.value = String(Math.round(base.kcal * c * 10) / 10);
+  });
   cant.entrada.addEventListener("input", alCambiarCantidad);
   unidad.entrada.addEventListener("input", alCambiarCantidad);
   alCambiarCantidad();

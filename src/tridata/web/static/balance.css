@@ -1,0 +1,27 @@
+/* Unit 027: the Balance tab with the weight of today on top (the Peso tab is inside it), the selectors of the
+   chart (what to show and the axis of the deficit) and the folding lists. Apart from estilos.css on purpose:
+   only what this tab adds. Colours are the variables of estilos.css, so light and dark follow it. */
+
+/* the weight of today, smaller than in the old Peso tab: it is the first card, not the whole screen */
+#peso-hoy .cifra { font-size: 2.6rem; margin: 2px 0; }
+#peso-hoy .ayuda-peso { margin: 0 0 10px; font-size: .9rem; }
+#peso-hoy .datos { margin: 0 0 8px; }
+#peso-hoy .objetivo-peso p { margin: 0; }
+#peso-hoy .linea-objetivo-peso { margin-top: 6px; font-weight: 600; }
+#peso-hoy .linea-objetivo-peso span { color: var(--objetivo-peso); }
+
+/* the chart: «Qué ver» above the range, «Eje del déficit» under it */
+#grafica-vista, #grafica-eje { margin: 0 6px 8px; }
+#grafica-eje button { font-size: .9rem; }
+#grafica-eje[hidden] { display: none; }
+
+/* «Tus semanas» and «Últimos pesos» fold */
+details.plegable { margin-top: 18px; }
+details.plegable > summary {
+  display: flex; align-items: center; min-height: 44px; padding: 0 4px; cursor: pointer;
+  font-weight: 700; font-size: 1.05rem; list-style: none;
+}
+details.plegable > summary::-webkit-details-marker { display: none; }
+details.plegable > summary::before { content: "▸"; margin-right: 8px; transition: transform .15s; }
+details.plegable[open] > summary::before { transform: rotate(90deg); }
+details.plegable > .tarjeta { margin-top: 4px; }

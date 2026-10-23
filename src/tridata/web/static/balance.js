@@ -2,10 +2,14 @@
 // The week from Monday to Sunday (◀ ▶ by weeks), what is above the objective and «Repartir lo que llevo»
 // (saves nothing until «Aplicar»), the weight-and-deficit chart of grafica.js with its three ranges and the
 // list of every week. The server does every sum (nutricion/balance.py); this only draws and asks.
-// Unit 018: a fourth button, «Fechas…», draws the same chart between two dates (/api/balance?desde=&hasta=); its
-// form (`formularioFechas`) and `delAl` are shared with the Peso tab. «repartido» only on the days of the spread.
+// Unit 018: a fourth button, «Fechas…», draws the same chart between two dates (/api/balance?desde=&hasta=), with
+// its form (`formularioFechas`). «repartido» only on the days of the spread.
+// Unit 027: the Peso tab lives here. In this order: the weight of today (peso.js), the week, ONE chart with what to
+// show (Peso · Las dos · Déficit) and the axis of the deficit (kcal · %) next to its range, «Tus semanas» (open)
+// and «Últimos pesos» (folded). What to show and the axis are remembered on this phone (`localStorage`, in a try).
 
 import { graficaPesoDeficit, leyendaPesoDeficit } from "./grafica.js";
+import { cargarPeso } from "./peso.js";
 
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
 const unDecimal = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 });
@@ -14,6 +18,10 @@ const nombreDia = new Intl.DateTimeFormat("es-ES", { weekday: "long", day: "nume
 const mesLargo = new Intl.DateTimeFormat("es-ES", { month: "long" });
 const mesCorto = new Intl.DateTimeFormat("es-ES", { month: "short" });
 const RANGOS = [["4s", "4 semanas"], ["3m", "3 meses"], ["todo", "Todo"]];
+const VISTAS = [["peso", "Peso"], ["dos", "Las dos"], ["deficit", "Déficit"]];
+const EJES = [["kcal", "Déficit en kcal"], ["pct", "Déficit en %"]];
+const CLAVE_VISTA = "tridata.grafica-ver"; // unit 027: screen preferences of this phone, like the level of Hoy
+const CLAVE_EJE = "tridata.grafica-eje";
 
 let turno = 0; // drops a late answer when the tab is painted twice quickly
 let semanaVista = null; // the Monday on screen (ISO), null = this week
@@ -23,6 +31,22 @@ let fechas = null; // unit 018: { desde, hasta } last drawn between dates (kept 
 let enElFormulario = null; // unit 018: { desde, hasta } as typed, kept when going to another range and back
 let hoyBalance = null;
 let datosGrafica = null; // what the chart shows now
+let vista = recordado(CLAVE_VISTA, VISTAS, "dos"); // unit 027: "peso" | "dos" | "deficit"
+let eje = recordado(CLAVE_EJE, EJES, "kcal"); // unit 027: "kcal" | "pct"
+
+// A remembered choice, only if it is one of `opciones`; without storage (private mode, blocked) the default.
+function recordado(clave, opciones, porDefecto) {
+  try {
+    const v = localStorage.getItem(clave);
+    return opciones.some(([o]) => o === v) ? v : porDefecto;
+  } catch {
+    return porDefecto;
+  }
+}
+
+function recordar(clave, valor) {
+  try { localStorage.setItem(clave, valor); } catch { /* no storage: it holds until the page is closed */ }
+}
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -69,22 +93,30 @@ export async function pintarBalance(contenedor, irADia) {
   // unit 018 (the R12 family): while the tab is asked again, what it showed before cannot be tapped
   for (const b of contenedor.querySelectorAll("button")) b.disabled = true;
   const ruta = semanaVista ? `/api/balance/semana?fecha=${semanaVista}` : "/api/balance/semana";
-  const [s, g, l] = await Promise.all([pedir(ruta), pedir(rutaGrafica()), pedir("/api/balance/semanas")]);
+  const [s, g, l, peso] = await Promise.all([pedir(ruta), pedir(rutaGrafica()), pedir("/api/balance/semanas"), cargarPeso()]);
   if (yo !== turno) return;
+  const ultimos = peso.ultimos ? plegable("balance-ultimos-pesos", "Últimos pesos", false, peso.ultimos) : null;
   if (!s.ok || !g.ok || !l.ok) {
-    contenedor.replaceChildren(el("p", { className: "aviso", textContent: "No he podido cargar tu balance: no hay conexión con el PC." }));
+    contenedor.replaceChildren(peso.tarjeta, el("p", { className: "aviso", textContent: "No he podido cargar tu balance: no hay conexión con el PC." }));
     return;
   }
   if (s.datos.vacio) {
-    contenedor.replaceChildren(el("p", { className: "suave vacio-balance", textContent: "Aún no hay días con comida para enseñar." }));
+    contenedor.replaceChildren(...[peso.tarjeta, el("p", { className: "suave vacio-balance", textContent: "Aún no hay días con comida para enseñar." }), ultimos].filter(Boolean));
     return;
   }
   const tarjetaSemana = el("article", { id: "balance-semana", className: "tarjeta semana-balance" });
   pintarSemana(tarjetaSemana, s.datos, irADia);
   hoyBalance = s.datos.hoy;
   const tarjetaGrafica = el("article", { id: "balance-grafica", className: "tarjeta grafica" });
-  contenedor.replaceChildren(tarjetaSemana, tarjetaGrafica, el("h2", { textContent: "Tus semanas" }), listaSemanas(l.datos.semanas, contenedor));
+  const semanas = plegable("balance-tus-semanas", "Tus semanas", true, listaSemanas(l.datos.semanas, contenedor));
+  contenedor.replaceChildren(...[peso.tarjeta, tarjetaSemana, tarjetaGrafica, semanas, ultimos].filter(Boolean));
   pintarGrafica(tarjetaGrafica, g.datos);
+}
+
+// Unit 027: a list that folds (<details>), open or not when the tab is painted.
+function plegable(id, titulo, abierto, contenido) {
+  const caja = el("details", { id, className: "plegable", open: abierto }, el("summary", { textContent: titulo }), contenido);
+  return caja;
 }
 
 function rutaGrafica() {
@@ -245,9 +277,9 @@ function reparto(s) {
 
 const fechaLarga = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "long" });
 
-// Unit 018: «Desde», «Hasta» (type=date, between `min` and `max`) and «Ver», shared with the Peso tab. «Ver» with
+// Unit 018: «Desde», «Hasta» (type=date, between `min` and `max`) and «Ver». «Ver» with
 // the start after the end only says so: nothing is asked and the chart stays. `alVer(desde, hasta)` asks.
-export function formularioFechas({ prefijo, desde, hasta, min, max, alVer, alEscribir }) {
+function formularioFechas({ prefijo, desde, hasta, min, max, alVer, alEscribir }) {
   const campo = (id, texto, valor) => {
     const entrada = el("input", { type: "date", id: `${prefijo}-${id}`, value: valor ?? "" });
     if (min) entrada.min = min;
@@ -270,7 +302,7 @@ export function formularioFechas({ prefijo, desde, hasta, min, max, alVer, alEsc
 }
 
 // Unit 018: under the chart, what a range between dates needs to say (the data start later, or there are none).
-export function notaFechas(prefijo, pedido, datos) {
+function notaFechas(prefijo, pedido, datos) {
   if (datos.vacio) return el("p", { id: `${prefijo}-fechas-nota`, className: "suave", textContent: "No hay días con datos entre esas fechas" });
   if (pedido && datos.desde && pedido.desde < datos.desde) {
     return el("p", { id: `${prefijo}-fechas-nota`, className: "suave", textContent: `Tus datos empiezan el ${fechaLarga.format(comoFecha(datos.desde))}` });
@@ -315,12 +347,15 @@ function pintarGrafica(tarjeta, datos) {
   const que = datos.agrupado === "semana" ? "media diaria de cada semana" : "un día por barra";
   const entreFechas = rango === "fechas" && fechas && !datos.rango;
   const nodos = [
-    el("div", { className: "dato-fila cabeza-grafica" }, el("strong", { textContent: "Peso y déficit" }),
+    el("div", { className: "dato-fila cabeza-grafica" }, el("strong", { textContent: "Tu evolución" }),
       entreFechas && datos.desde ? el("span", { id: "balance-periodo", className: "periodo", textContent: delAl(datos.desde, datos.hasta, true) }) : null,
       el("span", { className: "suave leyenda", textContent: que })),
+    segmentado("grafica-vista", "Qué ver", VISTAS, vista, (v) => { vista = v; recordar(CLAVE_VISTA, v); pintarGrafica(tarjeta, datosGrafica); }),
     el("div", { id: "balance-selector", className: "segmentado rangos", role: "group", ariaLabel: "Rango de la gráfica" },
       el("div", { id: "balance-rangos", className: "rangos-fijos" }, ...botones), deFechas),
+    segmentado("grafica-eje", "Eje del déficit", EJES, eje, (v) => { eje = v; recordar(CLAVE_EJE, v); pintarGrafica(tarjeta, datosGrafica); }),
   ];
+  nodos.at(-1).hidden = vista === "peso"; // the axis is only that of the deficit
   if (rango === "fechas") {
     const valores = enElFormulario ?? fechas ?? { desde: datos.desde, hasta: datos.hasta };
     nodos.push(formularioFechas({
@@ -330,8 +365,23 @@ function pintarGrafica(tarjeta, datos) {
     }));
     if (entreFechas) nodos.push(notaFechas("balance", fechas, datos));
   }
-  if (!(entreFechas && datos.vacio)) nodos.push(graficaPesoDeficit(datos, ancho), leyendaPesoDeficit(datos.objetivo));
+  if (!(entreFechas && datos.vacio)) {
+    nodos.push(graficaPesoDeficit(datos, ancho, { ver: vista, eje }), leyendaPesoDeficit(datos.objetivo, { ver: vista, eje }));
+  }
   tarjeta.replaceChildren(...nodos.filter(Boolean));
+}
+
+// Unit 027: «Qué ver» and «Eje del déficit», buttons with aria-pressed like the range.
+function segmentado(id, etiqueta, opciones, actual, alElegir) {
+  const grupo = el("div", { id, className: `segmentado ${id}`, role: "group", ariaLabel: etiqueta });
+  for (const [clave, texto] of opciones) {
+    const b = el("button", { type: "button", textContent: texto });
+    b.dataset.valor = clave;
+    b.setAttribute("aria-pressed", String(clave === actual));
+    b.addEventListener("click", () => { if (clave !== actual) alElegir(clave); });
+    grupo.append(b);
+  }
+  return grupo;
 }
 
 // -- every week ------------------------------------------------------------------------------------

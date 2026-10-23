@@ -1,4 +1,4 @@
-"""E2E of bug 021: changing the quantity of a saved food works its kcal out again.
+"""E2E of bug 025: changing the quantity of a saved food works its kcal out again.
 
 The change card scales the kcal with the quantity (kcal ÷ old quantity × new one) while the unit stays
 the same and the kcal have not been typed by hand; kcal typed by hand win. Every value is invented.
@@ -53,3 +53,18 @@ def test_con_otra_unidad_no_recalcula(servidor, abrir):
     ficha.get_by_label("Unidad", exact=True).fill("unidad")
     ficha.get_by_label("Cantidad", exact=True).fill("2")
     expect(ficha.get_by_label("kcal", exact=True)).to_have_value("380")
+
+
+def test_con_kcal_100g_abierto_mandan_esas(servidor, abrir):
+    p, ficha = _con_avena(servidor, abrir)
+    ficha.get_by_role("button", name="kcal/100 g").click()
+    ficha.get_by_label("kcal/100 g", exact=True).fill("400")
+    ficha.get_by_label("Cantidad", exact=True).fill("200")
+    expect(ficha.get_by_label("kcal", exact=True)).to_have_value("800")
+
+
+def test_unidad_borrada_cuenta_como_gramos(servidor, abrir):
+    p, ficha = _con_avena(servidor, abrir)
+    ficha.get_by_label("Unidad", exact=True).fill("")
+    ficha.get_by_label("Cantidad", exact=True).fill("150")
+    expect(ficha.get_by_label("kcal", exact=True)).to_have_value("570")

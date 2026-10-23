@@ -4,6 +4,7 @@
 // by a piece of the word): it matches name or alias without capitals or accents, by a piece («lent», «bote»),
 // first what starts with what is written; empty and touched, the whole list in «Recetas» / «Ingredientes». A
 // recipe with a doubtful ingredient or to review shows but cannot be chosen. Touch, arrows + Enter, Escape.
+// Unit 026: his first, then the app's common foods (`comun`), with the mark «común» and their own group.
 // The list is what GET /api/recetas brings, asked once (and again from Recetas); without the PC it is empty
 // and the field is written by hand. `cuenta()` (from unit 013) shows the kcal of what is chosen, the same in
 // every screen; only to SHOW them: the server works them out again with what is saved when it is logged (R-57).
@@ -80,7 +81,7 @@ export function cuenta(tipo, cosa, n, unidad = null) {
 
 // What the server will write as origin (Recetario._calcular), to show it before saving.
 export function origenDe(tipo, cosa) {
-  if (tipo === "fijo") return `de tu ingrediente «${cosa.nombre}»`;
+  if (tipo === "fijo") return cosa.comun ? "de la lista de comunes" : `de tu ingrediente «${cosa.nombre}»`;
   const tanda = cosa.versiones && cosa.versiones.length > 1 && cosa.en_uso ? ` (tanda ${cosa.en_uso.numero})` : "";
   return `de tu receta «${cosa.nombre}»${tanda}`;
 }
@@ -98,7 +99,10 @@ export function textoReceta(n) {
 // -- the list -------------------------------------------------------------------------------------
 
 function describir(tipo, cosa) {
-  if (tipo === "fijo") return { detalle: `Ingrediente · ${numero.format(cosa.kcal)} kcal/${cosa.por === "unidad" ? "unidad" : "100 g"}`, elegible: true };
+  if (tipo === "fijo") {
+    const que = cosa.comun ? "común" : "Ingrediente";
+    return { detalle: `${que} · ${numero.format(cosa.kcal)} kcal/${cosa.por === "unidad" ? "unidad" : "100 g"}`, elegible: true };
+  }
   const v = cosa.en_uso;
   if (cosa.por_revisar || !v || v.estado === "sin_kcal") return { detalle: "Receta · corrígela en Recetas", elegible: false };
   if (v.estado === "definitiva") return { detalle: `Receta · ${numero.format(v.kcal_100g)} kcal/100 g`, elegible: true };
@@ -118,8 +122,9 @@ function candidatos(texto, solo) {
     if (q && !nombres.some((n) => n.includes(q))) continue;
     salida.push({ ...c, ...describir(c.tipo, c.cosa), empieza: !q || nombres.some((n) => n.startsWith(q)) });
   }
-  if (!q) return salida; // the whole list, recipes then ingredients (each as the server orders them)
-  const peso = (c) => [c.empieza ? 0 : 1, c.elegible ? 0 : 1, c.tipo === "receta" ? 0 : 1];
+  // the whole list, recipes, ingredients, then the common ones (the server puts them after his)
+  if (!q) return salida;
+  const peso = (c) => [c.cosa.comun ? 1 : 0, c.empieza ? 0 : 1, c.elegible ? 0 : 1, c.tipo === "receta" ? 0 : 1];
   return salida.sort((a, b) => {
     const [x, y] = [peso(a), peso(b)];
     for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return x[i] - y[i];
@@ -181,13 +186,14 @@ export function buscador({ entrada, solo = null, alElegir }) {
     const nodos = [];
     let grupo = null;
     opciones = encontrados.map((c, i) => {
-      if (vacio && c.tipo !== grupo) {
-        grupo = c.tipo;
-        const titulo = el("li", { className: "grupo", textContent: c.tipo === "receta" ? "Recetas" : "Ingredientes" });
+      const suyo = c.cosa.comun ? "comun" : c.tipo;
+      if (vacio && suyo !== grupo) {
+        grupo = suyo;
+        const titulo = el("li", { className: "grupo", textContent: { receta: "Recetas", fijo: "Ingredientes", comun: "Comunes" }[suyo] });
         titulo.setAttribute("role", "presentation");
         nodos.push(titulo);
       }
-      const nodo = el("li", { id: `${id}-${i}`, className: c.elegible ? "opcion" : "opcion no-elegible" },
+      const nodo = el("li", { id: `${id}-${i}`, className: `opcion${c.elegible ? "" : " no-elegible"}${c.cosa.comun ? " comun" : ""}` },
         el("strong", { textContent: c.cosa.nombre }), el("span", { textContent: c.detalle }));
       nodo.setAttribute("role", "option");
       nodo.setAttribute("aria-selected", "false");
@@ -211,7 +217,8 @@ export function buscador({ entrada, solo = null, alElegir }) {
     cargarGuardado().then(pintar);
   };
 
-  entrada.addEventListener("focus", abrir);
+  // touched, typed or arrowed, not merely focused: a card that puts the focus in its field by itself (the review's
+  // «Añadir alimento») does not open ~90 rows over its own buttons (unit 026, with the common foods)
   entrada.addEventListener("click", () => { if (lista.hidden) abrir(); });
   entrada.addEventListener("input", abrir);
   entrada.addEventListener("blur", cerrar);

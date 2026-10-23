@@ -14,6 +14,7 @@ from starlette.testclient import TestClient
 from tridata import cli
 from tridata.ia import AlimentoInterpretado, ListaInterpretada
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, RegistroComidas
+from tridata.nutricion.comunes import COMUNES
 from tridata.nutricion.recetas import Recetario
 from tridata.web import crear_app
 
@@ -90,7 +91,9 @@ def e(tmp_path):
 # -- R11: the listing ------------------------------------------------------------------------------
 
 def test_listado_vacio_y_lleno(e):  # R11
-    assert e.cliente.get("/api/recetas").json() == {"recetas": [], "fijos": [], "ollas": []}
+    vacio = e.cliente.get("/api/recetas").json()  # unit 026: nothing of his, only the app's common foods
+    assert vacio["recetas"] == [] and vacio["ollas"] == []
+    assert [f for f in vacio["fijos"] if not f["comun"]] == [] and len(vacio["fijos"]) == len(COMUNES)
     e.garbanzos()
     e.ok("/api/fijos", {"nombre": "dulce de guayaba de ciclismo", "kcal": 90, "por": "unidad", "alias": "guayaba",
                         "nota": "no la fruta"})
@@ -298,7 +301,8 @@ def test_tridata_web_pasa_los_nombres_al_interprete(tmp_path, monkeypatch):  # R
     db = tmp_path / "data.sqlite3"
     Recetario(db).crear_fijo({"nombre": "gel de prueba", "kcal": 100, "por": "unidad", "alias": ["gel"]})
     assert cli._cmd_web("127.0.0.1", 8765, db_path=db) == 0
-    assert creados and creados[0] is not None and sorted(creados[0]()) == ["gel", "gel de prueba"]
+    assert creados and creados[0] is not None and sorted(creados[0]()) == sorted(
+        ["gel", "gel de prueba", *(c["nombre"] for c in COMUNES)])  # unit 026: the common foods too
 
 
 @pytest.fixture

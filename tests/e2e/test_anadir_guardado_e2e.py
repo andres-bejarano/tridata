@@ -19,6 +19,7 @@ from playwright.sync_api import expect  # noqa: E402
 
 from tridata.ia import AlimentoInterpretado, ListaInterpretada  # noqa: E402
 from tridata.nutricion import Alimento  # noqa: E402
+from tridata.nutricion.comunes import COMUNES  # noqa: E402
 from tridata.nutricion.recetas import Recetario  # noqa: E402
 
 HOY = date(2026, 10, 21)  # the same fixed «today» as conftest.py
@@ -89,14 +90,14 @@ def test_buscador_en_anadir(servidor, abrir, capturar, oscuro):  # R1, R7
     lista = ficha.get_by_role("listbox")
     expect(lista).to_be_visible()  # empty and touched: the whole list, grouped
     expect(nombre).to_have_attribute("aria-expanded", "true")
-    expect(lista.locator(".grupo")).to_have_text(["Recetas", "Ingredientes"])
-    expect(_opciones(ficha)).to_have_count(3 + len(FIJOS) + 1)
+    expect(lista.locator(".grupo")).to_have_text(["Recetas", "Ingredientes", "Comunes"])  # unit 026: + the common
+    expect(_opciones(ficha)).to_have_count(3 + len(FIJOS) + 1 + len(COMUNES))
     capturar(p, f"buscador-vacio{sufijo}")
     nombre.fill("lent")
     # «lenteja seca de prueba» (an ingredient of §Criterios) also has «lent»: R1 lists the three it is about
-    expect(_opciones(ficha)).to_have_count(4)
+    expect(_opciones(ficha)).to_have_count(4 + 2)  # unit 026: + the common «Lentejas cocidas» and «… crudas», after
     assert _nombres(ficha) == ["Lentejas de la abuela", "lenteja seca de prueba", "Lentejas cocidas bote",
-                               "Lentejas con kfjd"]
+                               "Lentejas con kfjd", "Lentejas cocidas", "Lentejas crudas"]
     expect(_opciones(ficha).nth(0)).to_contain_text("Receta · 80 kcal/100 g")
     expect(_opciones(ficha).nth(2)).to_contain_text("Ingrediente · 90 kcal/100 g")
     expect(_opciones(ficha).nth(3)).to_contain_text("corrígela en Recetas")
@@ -104,10 +105,11 @@ def test_buscador_en_anadir(servidor, abrir, capturar, oscuro):  # R1, R7
     _ergonomia(p, "buscador" + sufijo)
     capturar(p, f"buscador-lent{sufijo}")
     nombre.fill("LENT")
-    expect(_opciones(ficha)).to_have_count(4)
+    expect(_opciones(ficha)).to_have_count(4 + 2)
     nombre.fill("léntejas")  # without the accent: «lentejas», the three of R1 («lenteja seca» has no «s»)
-    expect(_opciones(ficha)).to_have_count(3)
-    assert _nombres(ficha) == ["Lentejas de la abuela", "Lentejas cocidas bote", "Lentejas con kfjd"]
+    expect(_opciones(ficha)).to_have_count(3 + 2)  # unit 026: + the two common ones, after
+    assert _nombres(ficha) == ["Lentejas de la abuela", "Lentejas cocidas bote", "Lentejas con kfjd",
+                               "Lentejas cocidas", "Lentejas crudas"]
     nombre.fill("bote de")
     expect(_opciones(ficha)).to_have_count(1)
     expect(_opciones(ficha).nth(0)).to_contain_text("Lentejas cocidas bote")
@@ -310,8 +312,9 @@ def test_receta_nueva_con_ingredientes_elegidos(servidor, abrir, capturar, oscur
     ficha.get_by_role("button", name="Añadir ingrediente").click()
     linea = ficha.locator(".ingrediente").nth(0)
     linea.get_by_role("combobox", name="Ingrediente").fill("lent")
-    expect(_opciones(linea)).to_have_count(2)
-    assert _nombres(linea) == ["lenteja seca de prueba", "Lentejas cocidas bote"]  # only ingredients, never a recipe
+    expect(_opciones(linea)).to_have_count(2 + 2)  # unit 026: + the two common ones, after
+    assert _nombres(linea) == ["lenteja seca de prueba", "Lentejas cocidas bote",  # only ingredients, never a recipe
+                               "Lentejas cocidas", "Lentejas crudas"]
     capturar(p, f"linea-buscador{sufijo}")
     _opciones(linea).filter(has_text="Lentejas cocidas bote").click()
     linea = ficha.locator(".ingrediente").nth(0)
@@ -352,7 +355,7 @@ def test_con_el_teclado_abierto(servidor, abrir, capturar, oscuro):  # R7
     ficha = _anadir(p)
     nombre = ficha.get_by_role("combobox", name="Alimento")
     nombre.fill("lentejas")
-    expect(_opciones(ficha)).to_have_count(3)
+    expect(_opciones(ficha)).to_have_count(3 + 2)  # unit 026: + the common «Lentejas cocidas» and «… crudas»
     expect(_opciones(ficha).first).to_be_in_viewport()
     caja_campo = nombre.bounding_box()
     caja_lista = ficha.get_by_role("listbox").bounding_box()

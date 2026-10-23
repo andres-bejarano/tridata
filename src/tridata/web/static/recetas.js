@@ -29,6 +29,7 @@ const SIN_PC = "No hay conexión con el PC: no se ha guardado nada.";
 let seccion = null;
 let datos = { recetas: [], fijos: [], ollas: [] };
 let abierta = null; // { tipo: "receta" | "fijo" | "olla", id: number | null } — one card at a time
+let comunesAbiertos = false; // unit 026: the group «Comunes» stays as he left it (folded at first)
 let turno = 0;
 
 function el(etiqueta, props = {}, ...hijos) {
@@ -108,7 +109,20 @@ function poner(respuesta) {
 function pintar() {
   pintarApartado("recetas", datos.recetas, filaReceta, "receta", "Aún no hay recetas.", "＋ Añadir receta");
   pintarApartado("taras", datos.ollas, filaOlla, "olla", "Aún no hay taras.", "＋ Añadir tara");
-  pintarApartado("fijos", datos.fijos, filaFijo, "fijo", "Aún no hay ingredientes.", "＋ Añadir ingrediente");
+  pintarApartado("fijos", datos.fijos.filter((f) => !f.comun), filaFijo, "fijo", "Aún no hay ingredientes.", "＋ Añadir ingrediente");
+  pintarComunes(datos.fijos.filter((f) => f.comun));
+}
+
+// Unit 026 (R6): the app's common foods, in a folded group of their own after his. Tapping one opens its card,
+// as any ingredient: correcting it makes it his (it leaves the group), «Borrar» takes it out for good.
+function pintarComunes(comunes) {
+  if (!comunes.length) return;
+  if (abierta && abierta.tipo === "fijo" && comunes.some((f) => f.id === abierta.id)) comunesAbiertos = true;
+  const grupo = el("details", { className: "comunes", open: comunesAbiertos },
+    el("summary", { textContent: `Comunes (${comunes.length})` }),
+    ...comunes.map((f) => (abierta && abierta.tipo === "fijo" && abierta.id === f.id ? ficha("fijo", f) : filaFijo(f))));
+  grupo.addEventListener("toggle", () => { comunesAbiertos = grupo.open; });
+  $("#apartado-fijos .elementos").append(grupo);
 }
 
 function pintarApartado(cual, lista, fila, tipo, vacio, textoAnadir) {
@@ -283,7 +297,8 @@ const MARCAS = { guardado: "ingrediente", estimado: "estimado", dudoso: "dudoso:
 function comoIngrediente(a) {
   let estado = "estimado";
   if (a.dudoso || a.kcal === null) estado = "dudoso";
-  else if (a.origen && (a.origen.startsWith("de tu ingrediente ") || a.origen.startsWith("de tu alimento fijo "))) estado = "guardado";
+  else if (a.origen && (a.origen.startsWith("de tu ingrediente ") || a.origen.startsWith("de tu alimento fijo ")
+    || a.origen === "de la lista de comunes")) estado = "guardado"; // unit 026: a common one is as his
   return { nombre: a.nombre, cantidad: a.cantidad, unidad: a.unidad, kcal: estado === "dudoso" ? null : a.kcal, estado };
 }
 

@@ -326,6 +326,7 @@ function fichaReceta(r) {
   const peso = campo("Olla llena (g)", "", "text", numerico);
   if (v) peso.entrada.value = v.peso_lleno_g !== null && olla.entrada.value ? String(v.peso_lleno_g) : (v.peso_neto_g !== null ? String(v.peso_neto_g) : "");
   if (v && v.peso_lleno_g === null && v.peso_neto_g !== null) olla.entrada.value = "";
+  const pesoAlAbrir = [olla.entrada.value, peso.entrada.value]; // unit 028 (R5): to know whether they were touched
   const aprox = campo("kcal/100 g aproximadas (si no la pesas)", v && v.kcal_100g_aprox !== null ? String(v.kcal_100g_aprox) : "", "text", numerico);
   const calculo = el("p", { className: "suave calculo" });
   const aviso = el("p", { className: "aviso", hidden: true });
@@ -463,12 +464,17 @@ function fichaReceta(r) {
   olla.entrada.addEventListener("change", pintarCalculo);
   peso.entrada.addEventListener("input", pintarCalculo);
 
-  // What is sent: the server recomputes the fixed foods and the kcal/100 g.
-  function cuerpo() {
+  // What is sent: the server recomputes the fixed foods and the kcal/100 g. Correcting a recipe (`corregir`)
+  // without touching the pot or the weight sends neither, so the net weight it had stays even if the pot's tare
+  // changed since (unit 028, R5); another batch always sends them.
+  function cuerpo(corregir = false) {
     const c = { nombre: nombre.entrada.value, alias: alias(alias_.entrada.value), nota: nota.entrada.value,
-      kcal_100g_aprox: comoNumero(aprox.entrada.value), olla_id: olla.entrada.value ? Number(olla.entrada.value) : null };
-    const g = comoNumero(peso.entrada.value);
-    if (olla.entrada.value) c.peso_lleno_g = g; else c.peso_neto_g = g;
+      kcal_100g_aprox: comoNumero(aprox.entrada.value) };
+    if (!corregir || olla.entrada.value !== pesoAlAbrir[0] || peso.entrada.value !== pesoAlAbrir[1]) {
+      c.olla_id = olla.entrada.value ? Number(olla.entrada.value) : null;
+      const g = comoNumero(peso.entrada.value);
+      if (olla.entrada.value) c.peso_lleno_g = g; else c.peso_neto_g = g;
+    }
     if (modelo.ingredientes.length || modelo.teniaIngredientes || !r) {
       c.ingredientes = modelo.ingredientes.map((i) => ({ nombre: i.nombre, cantidad: i.cantidad, unidad: i.unidad,
         kcal: i.kcal, dudoso: i.estado === "dudoso", guardado: i.estado === "guardado" ? i.nombre : null }));
@@ -481,8 +487,8 @@ function fichaReceta(r) {
     if (c.ingredientes && c.ingredientes.some((i) => !i.nombre || Number.isNaN(i.cantidad) || Number.isNaN(i.kcal))) return "Revisa los ingredientes: hay uno sin nombre o con un número que no vale.";
     return "";
   }
-  async function guardarComo(ruta, extra, texto) {
-    const c = { ...cuerpo(), ...extra };
+  async function guardarComo(ruta, extra, texto, corregir = false) {
+    const c = { ...cuerpo(corregir), ...extra };
     const motivo = falta(c);
     if (motivo) return motivo;
     const { ok, estado, datos: respuesta } = await api(ruta, c);
@@ -501,7 +507,7 @@ function fichaReceta(r) {
     el("div", { className: "fila dos" }, olla, peso), aprox, calculo, alias_, nota];
   const { tarjeta, acciones } = armazon({
     clase: "ficha-receta", aviso, textoGuardar: r ? "Guardar cambios" : "Guardar receta", nodos,
-    guardar: () => (r ? guardarComo(`/api/recetas/${r.id}`, {}, `Guardada: ${r.nombre}.`)
+    guardar: () => (r ? guardarComo(`/api/recetas/${r.id}`, {}, `Guardada: ${r.nombre}.`, true)
       : guardarComo("/api/recetas", {}, `Guardada: ${nombre.entrada.value.trim()}.`)),
   });
   if (r) {

@@ -514,12 +514,17 @@ class Cierres:
             comido = self._comido(dia)
             relevante = es_relevante(real, nuevo, comido, vigentes.limite_saludable_pct)
             with self._connect() as conn:
+                # unit 028 (R7): the sync and the open app may both get here with the same old `real`; only the
+                # one whose UPDATE still finds it writes the trail, in the same transaction: one warning, not two
+                conn.execute("BEGIN IMMEDIATE")
+                if conn.execute("UPDATE cierre_dia SET gasto_real = ? WHERE dia = ? AND gasto_real = ?",
+                                (nuevo, texto, real)).rowcount != 1:
+                    continue
                 conn.execute(
                     "INSERT INTO cierre_rastro (dia, fecha, gasto_antes, gasto_despues, balance_antes, balance_despues, "
                     "relevante) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (texto, _ahora(), real, nuevo, balance(comido, real)["kcal"], balance(comido, nuevo)["kcal"],
                      int(relevante)))
-                conn.execute("UPDATE cierre_dia SET gasto_real = ? WHERE dia = ?", (nuevo, texto))
             hechas += 1
         return hechas
 

@@ -19,8 +19,32 @@
 </head>
 <body>
   <main>
-    <!-- ================= HOY ================= -->
-    <section id="hoy" class="pantalla" data-pestana="hoy" aria-label="Hoy">
+    <!-- ================= HOY, FITNESS, ASISTENTE (unit 029: what they will bring; 030, 031 and 032 fill them) ================= -->
+    <section id="hoy" class="pantalla pronto" data-pestana="hoy" aria-label="Hoy" hidden>
+      <h1 class="titulo-pantalla">Hoy</h1>
+      <p class="tarjeta llega-pronto">Muy pronto, aquí: el resumen de tu día.</p>
+    </section>
+    <section id="fitness" class="pantalla pronto" data-pestana="fitness" aria-label="Fitness" hidden>
+      <h1 class="titulo-pantalla">Fitness</h1>
+      <p class="tarjeta llega-pronto">Muy pronto, aquí: tu carga, tu último entreno y tu recuperación.</p>
+    </section>
+    <section id="asistente" class="pantalla pronto" data-pestana="asistente" aria-label="Asistente" hidden>
+      <h1 class="titulo-pantalla">Asistente</h1>
+      <p class="tarjeta llega-pronto">Muy pronto, aquí: tus conversaciones con el asistente.</p>
+    </section>
+
+    <!-- ================= NUTRICIÓN: its selector Día · Balance · Recetas (unit 029) ================= -->
+    <header id="nutricion" class="nutricion" hidden>
+      <h1 class="titulo-pantalla">Nutrición</h1>
+      <nav id="partes" class="segmentado partes" aria-label="Parte de Nutrición">
+        <a href="#dia" data-parte="dia">Día</a>
+        <a href="#balance" data-parte="balance">Balance</a>
+        <a href="#recetas" data-parte="recetas">Recetas</a>
+      </nav>
+    </header>
+
+    <!-- ================= NUTRICIÓN › DÍA (the «Hoy» screen until unit 029) ================= -->
+    <section id="dia" class="pantalla" data-pestana="dia" aria-label="Día">
       <nav class="dias" aria-label="Cambiar de día">
         <!-- unit 018 (R12): ◀ ▶ and «Volver a hoy» wait for the first day painted (app.js enables them) -->
         <button id="anterior" type="button" class="flecha" aria-label="Día anterior" disabled>◀</button>
@@ -113,13 +137,13 @@
 
     <!-- ================= BALANCE (balance.js, unit 017; unit 027: the weight of today too, peso.js) ================= -->
     <section id="balance" class="pantalla" data-pestana="balance" aria-label="Balance" hidden>
-      <h1 class="titulo-pantalla">Balance</h1>
+      <h2 class="oculto">Balance</h2>
       <div id="balance-contenido"><p class="suave">Cargando…</p></div>
     </section>
 
     <!-- ================= RECETAS (recetas.js, unit 011) ================= -->
     <section id="recetas" class="pantalla" data-pestana="recetas" aria-label="Recetas" hidden>
-      <h1 class="titulo-pantalla">Recetas</h1>
+      <h2 class="oculto">Recetas</h2>
       <p class="suave intro-recetas">Lo que guardes aquí lo usará al dictar: «garbanzos de la abuela 250 g».</p>
       <p id="recetas-mensaje" role="status" aria-live="polite"></p>
       <article id="apartado-recetas" class="tarjeta apartado" aria-labelledby="t-recetas">
@@ -222,10 +246,12 @@
     <nav class="pestanas" aria-label="Pantallas">
       <a class="pestana" href="#hoy" data-ir="hoy">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><path d="M12 8v4l2.5 2"/></svg>Hoy</a>
-      <a class="pestana" href="#balance" data-ir="balance">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h16"/><path d="M7 12V6"/><path d="M12 12v4"/><path d="M17 12V8"/><path d="M4 20h16"/></svg>Balance</a>
-      <a class="pestana" href="#recetas" data-ir="recetas">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5"/><path d="M9 8h6M9 12h6"/></svg>Recetas</a>
+      <a class="pestana" href="#dia" data-ir="nutricion">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v8a2 2 0 0 0 2 2v8"/><path d="M5 3v5a2 2 0 0 0 4 0V3"/><path d="M17 21V3c-2 1-3 4-3 7s1 4 3 4"/></svg>Nutrición</a>
+      <a class="pestana" href="#fitness" data-ir="fitness">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg>Fitness</a>
+      <a class="pestana" href="#asistente" data-ir="asistente">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>Asistente</a>
       <a class="pestana" href="/ajustes" data-ir="ajustes">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>Ajustes</a>
     </nav>

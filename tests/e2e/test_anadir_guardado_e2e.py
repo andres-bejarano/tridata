@@ -83,7 +83,7 @@ def _nombres(caja) -> list[str]:
 def test_buscador_en_anadir(servidor, abrir, capturar, oscuro):  # R1, R7
     _guardado(servidor)
     sufijo = "-oscuro" if oscuro else ""
-    p = abrir(servidor, "/", oscuro=oscuro)
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
     ficha = _anadir(p)
     nombre = ficha.get_by_role("combobox", name="Alimento")
     nombre.click()
@@ -127,7 +127,7 @@ def test_buscador_en_anadir(servidor, abrir, capturar, oscuro):  # R1, R7
 
 def test_sin_pc_el_buscador_no_ensena_nada(servidor, abrir):  # R1
     _guardado(servidor)
-    p = abrir(servidor, "/")
+    p = abrir(servidor, "/#dia")
     p.route("**/api/recetas", lambda ruta: ruta.abort())
     ficha = _anadir(p)
     ficha.get_by_role("combobox", name="Alimento").fill("lent")
@@ -143,7 +143,7 @@ def test_sin_pc_el_buscador_no_ensena_nada(servidor, abrir):  # R1
 def test_anadir_el_bote_eligiendolo(servidor, abrir, capturar, oscuro):  # R2 · C-131
     _guardado(servidor)
     sufijo = "-oscuro" if oscuro else ""
-    p = abrir(servidor, "/", oscuro=oscuro)
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
     expect(p.locator("#total")).to_have_text("1.000 kcal comidas")
     ficha = _anadir(p)
     ficha.get_by_role("combobox", name="Alimento").fill("lent")
@@ -167,7 +167,7 @@ def test_anadir_el_bote_eligiendolo(servidor, abrir, capturar, oscuro):  # R2 ·
 
 def test_anadir_gel_por_unidades_receta_por_gramos_y_cambiar(servidor, abrir):  # R2
     _guardado(servidor)
-    p = abrir(servidor, "/")
+    p = abrir(servidor, "/#dia")
     ficha = _anadir(p)
     nombre = ficha.get_by_role("combobox", name="Alimento")
     nombre.fill("gel")
@@ -194,7 +194,7 @@ def test_anadir_gel_por_unidades_receta_por_gramos_y_cambiar(servidor, abrir):  
 def test_porridge_entero_y_media_abuela(servidor, abrir, capturar, oscuro):  # R4 · R-58
     _guardado(servidor)
     sufijo = "-oscuro" if oscuro else ""
-    p = abrir(servidor, "/", oscuro=oscuro)
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
     ficha = _anadir(p)
     ficha.get_by_role("combobox", name="Alimento").fill("porr")
     _opciones(ficha).first.click()
@@ -233,7 +233,7 @@ def test_porridge_entero_y_media_abuela(servidor, abrir, capturar, oscuro):  # R
 
 
 @pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
-def test_ficha_del_porridge_entera_y_apuntar(servidor, abrir, capturar, oscuro):  # R4 · C-134
+def test_ficha_del_porridge_entera_y_apuntar(servidor, abrir, capturar, oscuro, ir_a):  # R4 · C-134
     _guardado(servidor, comido=0)
     sufijo = "-oscuro" if oscuro else ""
     p = abrir(servidor, "/#recetas", oscuro=oscuro)
@@ -251,7 +251,7 @@ def test_ficha_del_porridge_entera_y_apuntar(servidor, abrir, capturar, oscuro):
     calc.get_by_role("button", name="Entera").click()
     calc.get_by_role("button", name="Apuntar en hoy").click()
     expect(calc.locator(".aviso-calc")).to_contain_text("Corrige la receta")
-    p.locator(".pestana", has_text="Hoy").click()
+    ir_a(p, "dia")
     fila = p.locator("#lista-dia .fila", has_text="Porridge de prueba")
     expect(fila.locator(".kcal")).to_have_text("500")
     expect(fila).to_contain_text("la receta entera")
@@ -271,7 +271,7 @@ def test_en_la_revision(servidor, abrir, capturar, oscuro):  # R5 · C-132
     _guardado(servidor)
     servidor.interprete.interpretar.side_effect = _unas_lentejas
     sufijo = "-oscuro" if oscuro else ""
-    p = abrir(servidor, "/", oscuro=oscuro)
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
     expect(p.locator("#queda-cifra")).not_to_have_text("—")
     p.locator("#texto").fill("unas lentejas")
     p.locator("#enviar").click()
@@ -350,7 +350,7 @@ def test_receta_nueva_con_ingredientes_elegidos(servidor, abrir, capturar, oscur
 def test_con_el_teclado_abierto(servidor, abrir, capturar, oscuro):  # R7
     _guardado(servidor)
     sufijo = "-oscuro" if oscuro else ""
-    p = abrir(servidor, "/", oscuro=oscuro)
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
     p.set_viewport_size({"width": ANCHO, "height": ALTO_CON_TECLADO})
     ficha = _anadir(p)
     nombre = ficha.get_by_role("combobox", name="Alimento")
@@ -382,14 +382,14 @@ def _sin_alimento_fijo(p, pantalla: str) -> None:
 
 
 @pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
-def test_se_llaman_ingredientes(servidor, abrir, capturar, oscuro):  # R8 · S-21, R-55
+def test_se_llaman_ingredientes(servidor, abrir, capturar, oscuro, ir_a):  # R8 · S-21, R-55
     _guardado(servidor, comido=0)
     sufijo = "-oscuro" if oscuro else ""
     servidor.registro.guardar([Alimento(
         nombre="dátiles de prueba", dia=HOY, cantidad=6, unidad="g", kcal=16.8,
         origen="de tu alimento fijo «dátiles de prueba»")], hoy=HOY, texto="dátiles", sin_cambios=True)
     servidor.interprete.interpretar.side_effect = _unas_lentejas
-    p = abrir(servidor, "/", oscuro=oscuro)
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
     fila = p.locator("#lista-dia .fila", has_text="dátiles de prueba")
     expect(fila).to_contain_text("de tu ingrediente «dátiles de prueba»")
     expect(fila.locator(".kcal")).to_have_text("17")
@@ -411,7 +411,7 @@ def test_se_llaman_ingredientes(servidor, abrir, capturar, oscuro):  # R8 · S-2
     p.locator("#apartado-recetas .elemento", has_text="Lentejas de la abuela").click()
     expect(p.locator("#apartado-recetas .ficha .ingrediente").first).to_contain_text("ingrediente")
     _sin_alimento_fijo(p, "receta abierta")
-    p.locator(".pestana", has_text="Hoy").click()
+    ir_a(p, "dia")
     expect(p.locator("#lista-dia .fila", has_text="gel de prueba")).to_contain_text("de tu ingrediente «gel de prueba»")
     p.goto(servidor.url + "/ajustes")
     expect(p.locator("body")).to_be_visible()

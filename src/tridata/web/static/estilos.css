@@ -253,15 +253,21 @@ dialog.hoja::backdrop { background: rgba(10, 14, 20, .45); }
 .micro.grabando .micro-icono { display: none; }
 .micro-tiempo { font-weight: 700; font-size: 1rem; font-variant-numeric: tabular-nums; }
 .pestanas { display: flex; background: var(--tarjeta); border-top: 1px solid var(--borde); padding: 4px 4px calc(6px + env(safe-area-inset-bottom)); }
-.pestana { flex: 1; min-height: 56px; color: var(--suave); text-decoration: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: .78rem; font-weight: 600; border-radius: 12px; }
+.pestana { flex: 1; min-width: 0; min-height: 56px; color: var(--suave); text-decoration: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: .72rem; font-weight: 600; border-radius: 12px; }
 .pestana[aria-current="page"] { color: var(--acento); }
-.pestana svg { width: 26px; height: 26px; }
+.pestana svg { width: 24px; height: 24px; } /* unit 029: five tabs fit at 390 px */
 @media (min-width: 680px) {
   .abajo { border-left: 1px solid var(--borde); border-right: 1px solid var(--borde); border-radius: 14px 14px 0 0; overflow: hidden; }
 }
 
 /* -- Peso (peso.js) ------------------------------------------------------------------- */
 .titulo-pantalla { margin-top: 10px; }
+
+/* -- unit 029: Nutrición and its selector Día · Balance · Recetas; Hoy, Fitness and Asistente say what is coming */
+.nutricion { margin-bottom: 12px; }
+.partes a { flex: 1; min-width: 0; min-height: 44px; display: grid; place-items: center; padding: 0 4px; border-radius: 10px; color: var(--texto); text-decoration: none; font-size: .95rem; font-weight: 600; }
+.partes a[aria-current="page"] { background: var(--tarjeta); color: var(--acento); box-shadow: 0 1px 3px rgba(0, 0, 0, .15); }
+.llega-pronto { display: block; padding: 18px; color: var(--suave); font-size: 1rem; }
 .peso-hoy { padding: 18px; display: block; }
 .peso-hoy .cifra { font-size: 3.2rem; font-weight: 800; line-height: 1; margin: 6px 0; }
 .peso-hoy .cifra small { font-size: 1.2rem; color: var(--suave); font-weight: 600; }

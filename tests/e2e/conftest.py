@@ -9,6 +9,8 @@ Unit 017: `semana_de_prueba()`, `historial_de_prueba(desde)` and `hoy_con_garmin
 Unit 018: `servidor.ahora` (the server's clock for the Garmin warning, 10:00 of `HOY` by default),
 `sync_de_prueba(ok_en, fallo_en=None, motivo=None)`, and `abrir()` on "/" waits for the day painted
 (`body[data-dia]`), never for the «Hoy» of the static HTML (R12).
+Unit 029: five tabs; `abrir()` opens Nutrición › Día (`/#dia`) by default, and `ir_a(pagina, sitio)` goes to a
+place the way Andrés does: hoy · dia · balance · recetas · fitness · asistente · ajustes.
 
 Optional: needs the `e2e` extra (`python -m pip install -e ".[dev,e2e]"` and, once,
 `python -m playwright install chromium`). Without Playwright these tests are skipped by
@@ -206,15 +208,15 @@ def navegador():
 
 @pytest.fixture
 def abrir(navegador):
-    """`abrir(servidor, ruta="/", oscuro=False)` -> a page of a new phone (390 × 844, touch, es-ES).
+    """`abrir(servidor, ruta="/#dia", oscuro=False)` -> a page of a new phone (390 × 844, touch, es-ES).
 
     The page fails the test if it throws a JavaScript error. Unit 018: on "/" it waits until the first day is
-    painted (`body[data-dia]`), unless `esperar=False`; `antes(pagina)` runs before the page is loaded (e.g. a
+    painted (`body[data-dia]`) (unit 029: also on "/#dia"), unless `esperar=False`; `antes(pagina)` runs before the page is loaded (e.g. a
     `page.route` that delays an answer).
     """
     contextos, errores = [], []
 
-    def _abrir(servidor: Servidor, ruta: str = "/", *, oscuro: bool = False, service_worker: bool = False,
+    def _abrir(servidor: Servidor, ruta: str = "/#dia", *, oscuro: bool = False, service_worker: bool = False,
                esperar: bool = True, antes=None):
         contexto = navegador.new_context(
             viewport={"width": ANCHO, "height": ALTO}, device_scale_factor=2, has_touch=True, is_mobile=True,
@@ -228,7 +230,7 @@ def abrir(navegador):
         if antes is not None:
             antes(pagina)
         pagina.goto(servidor.url + ruta)
-        if ruta == "/" and esperar and servidor.con_ajustes:
+        if ruta in ("/", "/#dia") and esperar and servidor.con_ajustes:
             pagina.wait_for_selector("body[data-dia]", state="attached")
         return pagina
 
@@ -251,3 +253,27 @@ def capturar():
         pagina.screenshot(path=str(Path(carpeta) / f"{nombre}.png"), full_page=completa)
 
     return _capturar
+
+
+PESTANA_DE = {"hoy": "Hoy", "fitness": "Fitness", "asistente": "Asistente", "ajustes": "Ajustes"}
+PARTE_DE = {"dia": "Día", "balance": "Balance", "recetas": "Recetas"}
+
+
+def _ir_a(pagina, sitio: str) -> None:
+    """Unit 029: goes to `sitio` as Andrés does: a tab of the bar, or Nutrición and then its part."""
+    if sitio in PESTANA_DE:
+        pagina.locator("nav.pestanas .pestana", has_text=PESTANA_DE[sitio]).click()
+        return
+    partes = pagina.locator("#partes")
+    if partes.count() == 0 or not partes.is_visible():
+        pagina.locator("nav.pestanas .pestana", has_text="Nutrición").click()
+        partes.wait_for(state="visible")
+        if sitio == "dia":
+            return
+    partes.locator("a", has_text=PARTE_DE[sitio]).click()
+
+
+@pytest.fixture
+def ir_a():
+    """`ir_a(pagina, sitio)` (unit 029): hoy · dia · balance · recetas · fitness · asistente · ajustes."""
+    return _ir_a

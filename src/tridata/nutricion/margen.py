@@ -161,6 +161,19 @@ def gramos_que_caben(margen: float, kcal: float, cantidad: float) -> dict:
     return {"cantidad": n, "texto": f"te caben {n}"}
 
 
+def cabe_de_receta(margen: float, nombre: str, kcal_100g: float | None) -> dict:
+    """Bug 024: how much of a recipe chosen by fraction fits in `margen`, in grams and kcal if it is weighed
+    (`kcal_100g`, exact or approximate), in kcal if not. Saves nothing."""
+    unidad = "g" if kcal_100g else "kcal"
+    if math.floor(margen) <= 0:
+        return {"cantidad": 0, "unidad": unidad, "texto": "no te cabe hoy"}
+    if not kcal_100g:
+        n = math.floor(margen)
+        return {"cantidad": n, "unidad": unidad, "texto": f"te caben {n} kcal de {nombre}"}
+    n = math.floor(margen / kcal_100g * 100)
+    return {"cantidad": n, "unidad": unidad, "texto": f"te caben {n} g de {nombre} ({round(n * kcal_100g / 100)} kcal)"}
+
+
 def dias_de_retraso(plan: Mapping[date, float | None], hoy: date, nuevo_pct: float) -> float | None:
     """Days later (+) or earlier (−) the weight target is reached if today is `nuevo_pct` instead of the plan.
 

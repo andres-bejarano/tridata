@@ -142,6 +142,7 @@ from ..nutricion.balance import (
     texto_reparto,
 )
 from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
+from ..nutricion.margen import cabe_de_receta
 from ..nutricion.recetas import ErrorDatos, _numero
 from ..storage import DataStore
 from ..sync import aviso_sync
@@ -803,6 +804,16 @@ def crear_app(
                            reverse=True)
         return JSONResponse({"dias": DIAS_RECIENTES, "actividades": [_actividad_corta(a) for a in recientes]})
 
+    def _kcal_100g_de_receta(crudo: dict) -> float | None:
+        """The kcal per 100 g of the saved recipe a card was chosen from; None if not one or not weighed."""
+        elegido = crudo.get("guardado")
+        if not isinstance(elegido, dict) or elegido.get("tipo") != "receta" or not isinstance(elegido.get("id"), int):
+            return None
+        try:
+            return recetario.para_apuntar("receta", elegido["id"], 100, "g")["kcal"]
+        except (KeyError, ValueError):
+            return None
+
     async def simular_lista(request: Request) -> Response:
         """The reviewed list, not yet confirmed: how the day would be if eaten. Writes nothing (REC-2)."""
         crudos = (await _cuerpo(request) or {}).get("alimentos")
@@ -818,10 +829,14 @@ def crear_app(
         kcal_lista = round(sum(a.kcal or 0 for a in cuenta), 1)
         margen = resumen["barra"]["objetivo_kcal"] - resumen["total_kcal"]
         caben = []
-        for a in alimentos:
+        for i, a in enumerate(alimentos):
             if a.cantidad is None or a.kcal is None:
                 caben.append({"nombre": a.nombre, "cantidad": None, "unidad": a.unidad,
                               "texto": "sin cantidad o kcal: no se puede calcular"})
+                continue
+            if a.unidad == "receta":  # bug 024: a fraction of a recipe, said in grams and kcal (or kcal)
+                cabe = cabe_de_receta(margen, a.nombre, _kcal_100g_de_receta(crudos[i]))
+                caben.append({"nombre": a.nombre, **cabe})
                 continue
             cabe = gramos_que_caben(margen, a.kcal, a.cantidad)
             unidad = a.unidad or "g"

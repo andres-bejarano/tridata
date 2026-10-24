@@ -259,6 +259,13 @@ class ListaInterpretada(BaseModel):
 Interpretacion = ListaInterpretada  # the name the web uses: one interpretation, all its pieces
 
 
+def esquema_enviado() -> dict[str, Any]:
+    """The schema the SDK actually sends for `ListaInterpretada` (bug 036: it must fit the API's grammar limit)."""
+    from anthropic.lib._parse._transform import transform_schema
+
+    return transform_schema(ListaInterpretada.model_json_schema())
+
+
 class ErrorInterpretacion(Exception):
     """Claude could not interpret the text (no key, no network, rate limit, refusal…)."""
 

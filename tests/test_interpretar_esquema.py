@@ -1,13 +1,10 @@
 """Bug 036: the strict schema sent to Claude must fit the API's grammar limit (no network: the schema shape)."""
 
-from anthropic.lib._parse._transform import transform_schema
-
-from tridata.ia.claude import CambioInterpretado, LineaInterpretada, ListaInterpretada
+from tridata.ia.claude import CambioInterpretado, LineaInterpretada, esquema_enviado
 
 
 def _cambio_enviado() -> dict:
-    esquema = transform_schema(ListaInterpretada.model_json_schema())
-    return esquema["$defs"]["CambioInterpretado"]
+    return esquema_enviado()["$defs"]["CambioInterpretado"]
 
 
 def test_un_cambio_no_lleva_listas_de_objetos_dentro():

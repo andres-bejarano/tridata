@@ -1,0 +1,167 @@
+"""Unit 032 · R3, R5 (R-114, R-115, G-46, C-155, C-156) — the criterio portante: every conversation sees ALL the
+context, the same, and none sees what was said in another one (S-41).
+
+The context is built on this PC (`conversaciones/contexto.py`): the fixed instructions with the catalogue of
+actions, the medical transcription and the data in JSON (the last 8 weeks day by day, the earlier ones by week, the
+load with the HR of Ajustes), without the hour. The line «Ve tus …, hasta hoy 9:42» goes apart. Every datum is
+invented: foods, weights, activities, sleep, HR, HRV and a medical transcription made from a PDF written by the test
+and «read» by a double.
+"""
+from __future__ import annotations
+
+import json
+from datetime import date, datetime, timedelta
+
+import pytest
+
+from test_conversaciones import VALOR_INVENTADO, PdfFalso, pdf_sintetico
+from tridata.conversaciones.contexto import Contexto, linea, montar
+from tridata.conversaciones.medicos import Medicos, TranscriptorPDF
+from tridata.models import Activity, DailyStats, HRVRecord, SleepRecord
+from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, RegistroComidas, RegistroPeso
+from tridata.nutricion.asistente import texto_acciones
+from tridata.storage import DataStore
+
+HOY = date(2026, 10, 24)  # a Saturday
+AHORA = datetime(2026, 10, 24, 9, 42)
+PULSO = {"fc_max": 186, "fc_reposo": 46, "zonas_fc": [[46, 120], [121, 140], [141, 155], [156, 170], [171, 186]],
+         "fc_origen": {"tipo": "prueba", "mes": "2025-11"}}
+
+
+class Mundo:
+    """A temporary SQLite with every kind of datum Andrés has, all invented."""
+
+    def __init__(self, tmp_path, *, con_medicos: bool = True) -> None:
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.db = tmp_path / "data.sqlite3"
+        self.ajustes = Ajustes(self.db)
+        self.ajustes.cambiar({"basal_kcal": 1700, "kcal_por_paso": 0.04, "pasos_por_defecto": 9000,
+                              "objetivo_pct": -10, **PULSO}, desde=DESDE_SIEMPRE)
+        self.ajustes.anadir_carrera("10K de prueba", "2026-12-03", 1)
+        self.registro = RegistroComidas(self.db)
+        self.pesos = RegistroPeso(self.db)
+        self.store = DataStore(self.db)
+        self.comer("tostada de prueba", HOY, 210)
+        self.comer("lentejas de prueba", HOY - timedelta(days=10), 480)
+        self.comer("comida antigua de prueba", HOY - timedelta(days=100), 2222)
+        self.pesos.apuntar(HOY, 71.9, hoy=HOY)
+        self.pesos.apuntar(HOY - timedelta(days=70), 72.6, hoy=HOY)
+        self.store.save_activities([
+            Activity(activity_id="a1", activity_date=HOY - timedelta(days=3), activity_type="running",
+                     name="Carrera de prueba al río", duration_seconds=2700, distance_meters=10000, avg_hr=151,
+                     calories=640),
+            Activity(activity_id="a0", activity_date=HOY - timedelta(days=90), activity_type="cycling",
+                     name="Bici antigua de prueba", duration_seconds=5400, distance_meters=45000, avg_hr=132),
+        ])
+        self.store.save_daily_stats(DailyStats(stat_date=HOY, steps=8123, resting_hr=47, total_calories=2650))
+        self.store.save_sleep(SleepRecord(sleep_date=HOY, total_sleep_seconds=26100, sleep_score=81))
+        self.store.save_hrv(HRVRecord(hrv_date=HOY, last_night_avg=63))
+        carpeta = tmp_path / "medicos"
+        carpeta.mkdir()
+        if con_medicos:
+            (carpeta / "analitica-de-prueba.pdf").write_bytes(pdf_sintetico("analitica inventada"))
+            (carpeta / "ergometria-de-prueba.pdf").write_bytes(pdf_sintetico("ergometria inventada"))
+        self.medicos = Medicos(self.db, carpeta if con_medicos else None, TranscriptorPDF(cliente=PdfFalso()))
+
+    def comer(self, nombre: str, dia: date, kcal: float) -> None:
+        self.registro.guardar([Alimento(nombre=nombre, dia=dia, cantidad=100, unidad="g", kcal=kcal)],
+                              hoy=dia, texto=nombre, sin_cambios=True)
+
+    def contexto(self, hoy: date = HOY) -> Contexto:
+        estado = self.medicos.al_dia()
+        return montar(registro=self.registro, pesos=self.pesos, ajustes=self.ajustes, store=self.store,
+                      transcripciones=self.medicos.transcripciones(), aviso_medico=estado["aviso"], hoy=hoy)
+
+
+def _datos(ctx: Contexto) -> dict:
+    return json.loads(ctx.bloques[-1])
+
+
+def test_el_contexto_lleva_todo(tmp_path):  # R3 · R-114, G-46, C-155
+    ctx = Mundo(tmp_path).contexto()
+    texto = "\n".join(ctx.bloques)
+    assert texto_acciones() in ctx.bloques[0]  # the catalogue of the 021 (G-37), once and fixed
+    assert VALOR_INVENTADO in ctx.bloques[1] and "58,31" in ctx.bloques[1]  # the blood test and the stress test
+    d = _datos(ctx)
+    assert d["hoy"] == "2026-10-24"
+    dias = {x["fecha"]: x for x in d["dias"]}
+    assert len(d["dias"]) == 56 and d["dias"][0]["fecha"] == (HOY - timedelta(days=55)).isoformat()  # 8 weeks
+    hoy = dias["2026-10-24"]
+    assert [c["nombre"] for c in hoy["comidas"]] == ["tostada de prueba"]  # foods
+    assert hoy["peso"] == 71.9  # weight
+    assert hoy["pulso_reposo"] == 47 and hoy["pasos"] == 8123  # resting HR, steps
+    assert hoy["sueno_h"] == 7.25 and hoy["sueno_puntos"] == 81  # sleep
+    assert hoy["hrv"] == 63  # HRV
+    carrera = dias[(HOY - timedelta(days=3)).isoformat()]
+    assert [e["nombre"] for e in carrera["entrenos"]] == ["Carrera de prueba al río"]  # trainings
+    assert carrera["carga"]["tss"] > 0 and "ctl" in hoy["carga"]  # the load (031)
+    assert d["pulso"]["fc_max"] == 186 and "prueba de esfuerzo" in d["pulso"]["texto"]  # its HR (G-49)
+    assert [c["nombre"] for c in d["carreras"]] == ["10K de prueba"]
+    # what is older than 8 weeks goes by week: totals, never the names of the foods
+    assert "comida antigua de prueba" not in texto and "Bici antigua de prueba" not in texto
+    semanas = {s["lunes"]: s for s in d["semanas"]}
+    antigua = semanas[(HOY - timedelta(days=100) - timedelta(days=(HOY - timedelta(days=100)).weekday())).isoformat()]
+    assert antigua["kcal_media"] == 2222 and antigua["dias_con_comida"] == 1
+    assert any(s.get("entrenos") == 1 and s.get("km") == 45.0 for s in d["semanas"])
+    assert any(s.get("peso_medio") == 72.6 for s in d["semanas"])
+
+
+def test_el_contexto_no_lleva_la_hora_y_se_repite_byte_a_byte(tmp_path):  # R3, R10 · P3
+    mundo = Mundo(tmp_path)
+    uno, dos = mundo.contexto(), mundo.contexto()
+    assert uno.bloques == dos.bloques
+    assert "9:42" not in "".join(uno.bloques) and "09:42" not in "".join(uno.bloques)
+
+
+def test_un_dato_nuevo_cambia_el_contexto(tmp_path):  # R2 · C-157: the race of yesterday is known
+    mundo = Mundo(tmp_path)
+    antes = mundo.contexto()
+    mundo.store.save_activities([Activity(activity_id="a2", activity_date=HOY - timedelta(days=1),
+                                          activity_type="running", name="Carrera de ayer de prueba",
+                                          duration_seconds=1500, distance_meters=5000, avg_hr=160)])
+    despues = mundo.contexto()
+    assert despues.bloques != antes.bloques
+    assert "Carrera de ayer de prueba" in despues.bloques[-1]
+
+
+def test_la_linea_dice_que_ve_y_hasta_cuando(tmp_path):  # R5 · R-115, C-156
+    ctx = Mundo(tmp_path).contexto()
+    assert linea(ctx, AHORA) == ("Ve tus comidas, peso, entrenos, sueño, pulso, HRV, analítica y prueba de esfuerzo, "
+                                 "hasta hoy 9:42")
+    assert "9:42" not in "".join(ctx.bloques)  # apart, never inside the fixed part
+
+
+def test_sin_datos_medicos_lo_dice_en_la_linea(tmp_path):  # R4, R5
+    ctx = Mundo(tmp_path, con_medicos=False).contexto()
+    texto = linea(ctx, AHORA)
+    assert texto.startswith("Ve tus comidas, peso, entrenos, sueño, pulso y HRV, hasta hoy 9:42")
+    assert "analítica" in texto and "TRIDATA_MEDICOS_DIR" in texto
+    assert VALOR_INVENTADO not in "".join(ctx.bloques)
+
+
+# -- the criterio portante, through the routes: two conversations, the same fixed part --------------------------
+
+@pytest.fixture
+def web(tmp_path):
+    from test_conversaciones_web import Web
+
+    return Web(tmp_path)
+
+
+def test_todas_las_conversaciones_ven_todo_y_lo_mismo(web):  # R3 · R-114, G-46, C-155, S-41
+    web.sembrar()
+    web.claude.responder("Tu peso va bien.")
+    peso = web.nueva("¿cómo va mi peso de noviembre?")
+    web.claude.responder("Para el 10K vas bien.")
+    carrera = web.nueva("quiero hacer 10 km el 3 de diciembre en 45 minutos")
+    assert peso["conversacion"]["id"] != carrera["conversacion"]["id"]
+    p_peso, p_carrera = web.claude.peticiones
+    assert p_peso["system"] == p_carrera["system"]  # byte to byte: none sees less
+    fija = "\n".join(b["text"] for b in p_carrera["system"])
+    for dato in ("tostada de prueba", "71.9", "Carrera de prueba al río", '"pulso_reposo":47', '"hrv":63',
+                 '"sueno_h":7.25', '"ctl"', VALOR_INVENTADO, "58,31", "10K de prueba"):
+        assert dato in fija, dato
+    # what was said in one conversation never reaches the other (S-41)
+    dicho = json.dumps(p_carrera["messages"], ensure_ascii=False)
+    assert "peso de noviembre" not in dicho and "Tu peso va bien" not in dicho
+    assert p_carrera["messages"] == [{"role": "user", "content": "quiero hacer 10 km el 3 de diciembre en 45 minutos"}]

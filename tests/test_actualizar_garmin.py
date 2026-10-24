@@ -5,7 +5,7 @@ Garmin is NEVER called: `actualizar_garmin` is a `MagicMock`, and in the CLI wir
 """
 import sqlite3
 import threading
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -154,7 +154,8 @@ def test_cmd_web_cablea_la_misma_sincronizacion(tmp_path, monkeypatch):  # R13
     cliente_garmin.assert_called_once_with("persona@example.invalid", "inventada")
     (store_usado,) = [c.args[1] for c in servicio.call_args_list]
     assert isinstance(store_usado, DataStore)
-    servicio.return_value.sync.assert_called_once_with(since=hoy, until=hoy, revalidate_days=1)
+    # unit 030 (R4 · R-100): at least yesterday and today
+    servicio.return_value.sync.assert_called_once_with(since=hoy - timedelta(days=1), until=hoy, revalidate_days=2)
 
 
 def test_actualizador_sin_credenciales_es_none(tmp_path):  # R13

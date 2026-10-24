@@ -534,3 +534,27 @@ button.anadir-linea { margin-top: 0; }
 .acciones-grafica { margin: 8px 6px 4px; flex-wrap: wrap; }
 .acciones-grafica button { flex: 1 1 8rem; min-height: 44px; }
 #peso-fechas-nota, #balance-fechas-nota { margin: 6px 10px; }
+
+/* -- unit 030: Hoy at a glance (hoy.js) ----------------------------------------------------------------------- */
+.hoy-cab { margin: 10px 0 6px; }
+.hoy-cab .titulo-pantalla { margin: 0; }
+.hoy-cab p { margin: 2px 0 0; }
+.tarjeta-hoy { display: block; padding: 14px 16px; cursor: pointer; }
+.cab-hoy { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.cab-hoy h2 { font-size: 1.1rem; margin: 0; }
+.ver-mas { color: var(--acento); font-weight: 600; text-decoration: none; padding: 10px 0; min-height: 44px; display: inline-flex; align-items: center; }
+.grande-hoy { margin: 4px 0 2px; }
+.grande-hoy .cifra { font-size: 2.6rem; font-weight: 800; line-height: 1; letter-spacing: -.02em; }
+.grande-hoy small { font-size: 1.05rem; font-weight: 600; color: var(--suave); margin-left: 6px; }
+.tarjeta-hoy.pasado .cifra, .tarjeta-hoy.pasado #hoy-queda-texto { color: var(--peligro); }
+.actividades-hoy { display: grid; gap: 8px; }
+.actividad-hoy { display: grid; gap: 2px; }
+.actividad-hoy span { color: var(--suave); font-size: .92rem; }
+.chips-hoy { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 0; margin: 4px 0 8px; }
+.chip-hoy { background: var(--pista); border-radius: 999px; padding: 6px 12px; font-size: .95rem; }
+.chip-hoy.bien { background: var(--ico-fijo); color: var(--bien); }
+.chip-hoy.falta { color: var(--suave); font-style: italic; }
+.chip-hoy.incompleto { background: var(--alerta-fondo); color: var(--alerta); }
+#hoy-actualizar { width: 100%; min-height: 48px; margin-top: 6px; }
+#hoy-actualizar:disabled { opacity: .75; }
+#hoy-garmin-error { margin: 6px 0 0; }

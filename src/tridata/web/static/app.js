@@ -32,12 +32,16 @@
 // once, and the food goes with `guardado: {tipo, id}` so the server logs it with ITS kcal. «Cambiar» goes back to
 // the free fields. A fraction reads «la receta entera», «½ receta»…; an origin «de tu alimento fijo …» logged
 // before the rename reads «de tu ingrediente …» (the base is not rewritten).
+// Unit 030: the app opens in Hoy (hoy.js paints its four cards from GET /api/hoy); `/`, `#hoy` and reloading in Hoy
+// stay in Hoy. The box and the microphone show in Hoy too: what is dictated there is reviewed in Hoy (the message,
+// the queue and the review move into it while it shows) and confirming refreshes its cards.
 
 import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
 import { pintarBalance } from "./balance.js";
 import { buscador, cajaElegida, cargarGuardado, cosaGuardada, cuenta, leerOrigen, origenDe, textoReceta, unidadPropia } from "./buscador.js";
 import { pintarRecetas } from "./recetas.js";
+import { cargarHoy, iniciarHoy } from "./hoy.js";
 
 const $ = (id) => document.getElementById(id);
 // kcal with a thousands point always («1.040»): es-ES does not group 4 digits by default
@@ -599,6 +603,7 @@ async function actualizarGarmin() {
   }
   $("garmin-estado").textContent = "Garmin actualizado.";
   if (diaVisto === datos.dia.fecha) pintarDia(datos.dia);
+  cargarHoy(); // unit 030: the cards and the hour of Hoy too
 }
 
 async function cargarRecientes() {
@@ -870,6 +875,7 @@ function irA(fecha) {
 // Unit 016 (R3): back to the front, and every minute while in sight, the day is asked again; its `hoy`
 // says whether midnight has passed (pintarDia moves from the old today to the new one).
 function mirarElDia() {
+  if (document.visibilityState === "visible" && pestanaActual() === "hoy") { cargarHoy(); return; } // unit 030
   if (document.visibilityState !== "visible" || pestanaActual() !== "dia" || !diaVisto) return;
   cargarDia(diaVisto, { callado: true });
 }
@@ -1243,6 +1249,7 @@ async function confirmar() {
   pintarRevision();
   if (diaVisto === datos.dia.fecha) pintarDia(datos.dia);
   else cargarDia(diaVisto); // the screen stays on the day being looked at (R6)
+  if (pestanaActual() === "hoy") cargarHoy(); // unit 030 (R8): confirmed from Hoy, its cards are refreshed
   if (origen) { await cola.borrarLista(origen); if (await abrirSiguienteLista()) return; }
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -1269,6 +1276,7 @@ $("siguiente").addEventListener("click", () => irA(sumarDias(diaVisto, 1)));
 $("ir-hoy").addEventListener("click", () => irA(hoyISO));
 enlazarControles();
 enlazarHoja();
+iniciarHoy({ api, alActualizarDia: (dia) => { if (diaVisto === dia.fecha) pintarDia(dia); } });
 enlazarPestanas();
 vigilarAltoEntrada();
 $("fecha").textContent = deFecha(cola.fechaLocal()); // before the PC answers, or if it never does
@@ -1291,15 +1299,24 @@ function enlazarHoja() {
 function pestanaActual() {
   if (location.hash === "#peso") history.replaceState(null, "", "#balance"); // unit 027: an old bookmark
   const h = location.hash.slice(1);
-  return SITIOS.includes(h) ? h : "dia"; // unit 029: until unit 030, the app opens in Nutrición › Día
+  if (!h) return "hoy"; // unit 030 (R1): the app opens in Hoy
+  return SITIOS.includes(h) ? h : "dia"; // unit 029 (R6): an address that does not exist opens Nutrición › Día
 }
 
-// Unit 029 (R6): an address saved from before opens its place of now. `#hoy` was the day: on load it opens
-// Nutrición › Día; only the bar of Ajustes («/?ir=hoy#hoy») opens the new Hoy. Inside the page, #hoy is Hoy.
+// Unit 029 (R6) and unit 030 (decision of 2026-10-24): an address saved from before opens its place of now. No
+// address, `#hoy` and the bar of Ajustes («/?ir=hoy#hoy») open Hoy, and the address says so (`/#hoy`), so
+// reloading while in Hoy stays in Hoy.
 function direccionDeAntes() {
   const deLaBarra = new URLSearchParams(location.search).get("ir") === "hoy";
-  if (deLaBarra) history.replaceState(null, "", "/#hoy");
-  else if (location.hash === "#hoy") history.replaceState(null, "", "#dia");
+  if (deLaBarra || !location.hash) history.replaceState(null, "", "/#hoy");
+}
+
+// Unit 030 (R8): the message, the recordings queue and the review live where the box is used: in Hoy while it
+// shows, else in Nutrición › Día between its card and its list (where they always were).
+function colocarDictado(actual) {
+  const bloque = [$("mensaje"), $("cola"), $("revision")];
+  if (actual === "hoy") $("hoy-dictado").append(...bloque);
+  else if ($("revision").parentElement !== $("dia")) $("t-comido").before(...bloque);
 }
 
 // Unit 017: from Balance, a day opens in Nutrición › Día (its list of foods, its margin).
@@ -1309,8 +1326,9 @@ function irADia(fecha) {
   else location.hash = "dia";
 }
 
+// The review is shown where the box is: Hoy or Nutrición › Día (unit 030); from anywhere else, in Día.
 function irAPestanaHoy() {
-  if (pestanaActual() !== "dia") location.hash = "dia";
+  if (!["dia", "hoy"].includes(pestanaActual())) location.hash = "dia";
 }
 
 function mostrarPestana() {
@@ -1327,7 +1345,10 @@ function mostrarPestana() {
     if (a.dataset.parte === actual) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
-  $("entrada").hidden = actual !== "dia"; // unit 029 (S-16): the box and the microphone only where the day is logged
+  // unit 029 (S-16) and unit 030 (R8): the box and the microphone only where the day is logged: Día and Hoy
+  $("entrada").hidden = actual !== "dia" && actual !== "hoy";
+  colocarDictado(actual);
+  if (actual === "hoy" && pestanaVista !== "hoy") cargarHoy();
   if ($("hoja").open) $("hoja").close();
   if (actual === "dia") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
   else document.title = `TriData · ${mayuscula(actual)}`;

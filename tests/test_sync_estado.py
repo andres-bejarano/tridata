@@ -261,7 +261,7 @@ def test_desde_para_actualizar(ok_en, desde):  # R3
 
 @pytest.mark.parametrize(("ok_en", "since", "dias"), [
     (datetime(2026, 10, 19, 8, 1), date(2026, 10, 19), 3),
-    (None, HOY, 1),
+    (None, HOY - timedelta(days=1), 2),  # unit 030 (R4 · R-100): at least yesterday and today
     (datetime(2026, 8, 22, 8, 1), HOY - timedelta(days=44), 45),
 ])
 def test_el_boton_pide_desde_el_ultimo_bueno(tmp_path, ok_en, since, dias):  # R3 · R-90

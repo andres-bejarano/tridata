@@ -69,7 +69,8 @@ from .garmin_client import GarminAuthError, GarminClient, GarminRateLimitError
 from .metrics import compute_pmc, daily_tss
 from .storage import DEFAULT_DB_PATH, DataStore
 from .sync import (
-    ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncService, desde_para_actualizar,
+    ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncEnMarcha, SyncService, cerrojo_sync,
+    desde_para_actualizar,
 )
 
 DEFAULT_BACKUP_DIR = DEFAULT_DB_PATH.parent / "backups"
@@ -82,6 +83,8 @@ EXPORTERS = {
 # -- unit 018: sync.log stays clean (R-60, Q-3): a failure is one line, no trace, no e-mail, no response body --
 LARGO_LOG = 200
 CODIGO_LIMITE = 75  # `tridata sync` exits with this on a 429: daily_update.sh then waits longer (G-45)
+CODIGO_EN_MARCHA = 76  # unit 030 (G-48): another sync (the app's button) holds the lock; daily_update.sh retries
+EN_MARCHA_LOG = "sync: ya hay una sincronización con Garmin en marcha (el botón de la app); no se lanza otra"
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 
 
@@ -311,24 +314,29 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-        client = GarminClient(email, password)
-        svc = SyncService(client, store)
         normal = not args.laps and not args.weather  # only the normal sync is written down (R-90)
         try:
-            if args.laps:
-                n = svc.sync_laps(limit=args.laps_backfill_limit)
-                print(f"Lap sync complete: {n} activities processed.")
-            elif args.weather:
-                n = svc.sync_weather(limit=args.weather_backfill_limit)
-                print(f"Weather sync complete: {n} activities processed.")
-            else:
-                # A rolling lookback rather than "start of this month": SyncService only
-                # re-fetches genuinely missing days (plus a short recent-day revalidation
-                # window — see SyncService.RECENT_REVALIDATE_DAYS), so a wider default here
-                # costs nothing on a normal run but means a failure near a month boundary
-                # can no longer strand data the moment the month rolls over.
-                since = args.since or (date.today() - timedelta(days=45))
-                svc.sync(since=since, revalidate_days=args.revalidate_days)
+            # unit 030 (G-48): the same lock as the app's «Actualizar Garmin», next to the database; nothing of
+            # Garmin is built while the other one runs
+            with cerrojo_sync(DEFAULT_DB_PATH.parent):
+                svc = SyncService(GarminClient(email, password), store)
+                if args.laps:
+                    n = svc.sync_laps(limit=args.laps_backfill_limit)
+                    print(f"Lap sync complete: {n} activities processed.")
+                elif args.weather:
+                    n = svc.sync_weather(limit=args.weather_backfill_limit)
+                    print(f"Weather sync complete: {n} activities processed.")
+                else:
+                    # A rolling lookback rather than "start of this month": SyncService only
+                    # re-fetches genuinely missing days (plus a short recent-day revalidation
+                    # window — see SyncService.RECENT_REVALIDATE_DAYS), so a wider default here
+                    # costs nothing on a normal run but means a failure near a month boundary
+                    # can no longer strand data the moment the month rolls over.
+                    since = args.since or (date.today() - timedelta(days=45))
+                    svc.sync(since=since, revalidate_days=args.revalidate_days)
+        except SyncEnMarcha:  # unit 030: not a failure of Garmin, nothing is written down; one line in sync.log
+            print(EN_MARCHA_LOG, file=sys.stderr)
+            return CODIGO_EN_MARCHA
         except Exception as exc:  # noqa: BLE001 - unit 018: one line with the motive, what was saved stays (G-2)
             motivo, codigo = _motivo_del_fallo(exc)
             print(f"sync FAILED: {motivo} ({type(exc).__name__}: {limpiar_para_log(str(exc))})", file=sys.stderr)
@@ -815,7 +823,7 @@ def _cmd_importar_detalle(md: Path, simular: bool, *, db_path: Path = DEFAULT_DB
 
 def _actualizador_garmin(store: DataStore, entorno: Mapping[str, str] | None = None) -> Callable[[date], None] | None:
     """The «Actualizar Garmin» button: the same sync as `tridata sync`, from the day of the last good sync to
-    `dia` (unit 018, R-90: at most 45 days; without a record, only that day, as before).
+    `dia` (unit 018, R-90: at most 45 days), and always at least yesterday and today (unit 030, R-100).
 
     `revalidate_days` covers every one of those days, so they are fetched again even if they have a row.
     Nothing talks to Garmin until it is called. None without GARMIN_EMAIL / GARMIN_PASSWORD (the button says so).
@@ -826,7 +834,7 @@ def _actualizador_garmin(store: DataStore, entorno: Mapping[str, str] | None = N
         return None
 
     def actualizar(dia: date) -> None:
-        desde = desde_para_actualizar(store.estado_sync(), dia)
+        desde = min(dia - timedelta(days=1), desde_para_actualizar(store.estado_sync(), dia))
         SyncService(GarminClient(email, password), store).sync(since=desde, until=dia,
                                                                revalidate_days=(dia - desde).days + 1)
 

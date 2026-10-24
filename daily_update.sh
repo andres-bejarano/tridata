@@ -44,6 +44,9 @@ MAX_ATTEMPTS=3
 RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-60}"
 RATE_LIMIT_DELAY_SECONDS="${RATE_LIMIT_DELAY_SECONDS:-300}"
 RATE_LIMIT_EXIT=75
+# Unit 030 (G-48): `tridata sync` exits with 76 when the «Actualizar Garmin» button of the app is syncing (the lock
+# ~/.tridata/sync.lock). It does not start a second one: it is said here and retried like any passing failure.
+EN_MARCHA_EXIT=76
 RETRY_MESSAGE="se reintenta en la próxima hora (hasta las 14:00)"
 
 run_step() {
@@ -72,6 +75,8 @@ run_step() {
         wait=$(( base * (1 << (attempt - 1)) ))
         if [ "$code" -eq "$RATE_LIMIT_EXIT" ]; then
             echo "$label: Garmin limita las peticiones (429), espero $wait s" >> "$LOG"
+        elif [ "$code" -eq "$EN_MARCHA_EXIT" ]; then
+            echo "$label: ya hay una sincronización con Garmin en marcha (el botón de la app), se reintenta en $wait s" >> "$LOG"
         fi
         attempt=$((attempt + 1))
         sleep "$wait"

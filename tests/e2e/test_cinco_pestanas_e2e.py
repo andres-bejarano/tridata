@@ -1,6 +1,8 @@
 """Unit 029 in a real Chromium at 390 × 844, light and dark: the app in five tabs (Hoy · Nutrición · Fitness ·
 Asistente · Ajustes); Nutrición with its selector Día · Balance · Recetas; Hoy, Fitness and Asistente say in one
 sentence what they will bring; the dictation box only in Nutrición › Día; the addresses of before.
+Unit 030 (decision of 2026-10-24): the app opens in Hoy, which now has its four cards and the box (R1, R8 of
+unit 030); `/#hoy` and reloading in Hoy open Hoy. Fitness and Asistente still say what they will bring.
 
 Uses the `conftest.py` of unit 010 (temporary SQLite, every outside service doubled). Invented data only.
 Plans v6 (surface, P-20261023-a848b00b) · `pedir-al-asistente` S-16. R1-R7 of the unit.
@@ -18,7 +20,7 @@ from tridata.nutricion.recetas import Recetario  # noqa: E402
 TEMAS = pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
 PESTANAS = ["Hoy", "Nutrición", "Fitness", "Asistente", "Ajustes"]
 PARTES = ["Día", "Balance", "Recetas"]
-PRONTO = {"hoy": "el resumen de tu día", "fitness": "tu carga, tu último entreno y tu recuperación",
+PRONTO = {"fitness": "tu carga, tu último entreno y tu recuperación",
           "asistente": "tus conversaciones con el asistente"}
 
 
@@ -39,13 +41,13 @@ def _sin_scroll(p, pantalla: str) -> None:
     assert ancho <= 390, f"{pantalla}: horizontal scroll ({ancho}px)"
 
 
-# -- R1, R2: five tabs, and the app opens in Nutrición › Día ---------------------------------------------------
+# -- R1, R2: five tabs, and Nutrición › Día (unit 030: the app opens in Hoy, see test_direcciones_de_antes) ------
 
 @TEMAS
-def test_cinco_pestanas_y_abre_en_dia(servidor, abrir, capturar, oscuro):  # R1 · R2
+def test_cinco_pestanas_y_nutricion_dia(servidor, abrir, capturar, oscuro):  # R1 · R2
     servidor.dia_de_prueba()
     sufijo = "-oscuro" if oscuro else "-claro"
-    p = abrir(servidor, "/", oscuro=oscuro)
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
     assert _textos(p.locator("nav.pestanas .pestana")) == PESTANAS
     assert _marcada(p) == "Nutrición"
     expect(p.locator("section#dia")).to_be_visible()
@@ -105,13 +107,23 @@ def test_selector_de_nutricion(servidor, abrir, capturar, oscuro):  # R2 · R7
     expect(p.locator("#lista-dia .fila", has_text="dátiles de prueba")).to_be_visible()
 
 
-# -- R3: the «coming soon» screens ------------------------------------------------------------------------------
+# -- R3: the «coming soon» screens (unit 030: Hoy is no longer one: its cards, and the box, R8 of unit 030) ------
 
 @TEMAS
 def test_pantallas_llega_pronto(servidor, abrir, capturar, oscuro):  # R3
     sufijo = "-oscuro" if oscuro else "-claro"
-    p = abrir(servidor, "/", oscuro=oscuro)
-    for sitio, nombre in (("hoy", "Hoy"), ("fitness", "Fitness"), ("asistente", "Asistente")):
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
+    p.locator("nav.pestanas .pestana", has_text="Hoy").click()
+    expect(p).to_have_url(f"{servidor.url}/#hoy")
+    expect(p.locator("section#hoy")).to_be_visible()
+    expect(p.locator("section#hoy h1")).to_have_text("Hoy")
+    expect(p.locator("section#hoy #hoy-comida")).to_be_visible()
+    expect(p.locator("section#dia")).to_be_hidden()
+    expect(p.locator("#partes")).to_be_hidden()
+    expect(p.locator("#entrada")).to_be_visible()
+    assert _marcada(p) == "Hoy"
+    _sin_scroll(p, "hoy")
+    for sitio, nombre in (("fitness", "Fitness"), ("asistente", "Asistente")):
         p.locator("nav.pestanas .pestana", has_text=nombre).click()
         expect(p).to_have_url(f"{servidor.url}/#{sitio}")
         pantalla = p.locator(f"section#{sitio}")
@@ -161,15 +173,18 @@ def test_la_barra_en_ajustes(servidor, abrir, capturar):  # R5
         expect(p).to_have_url(servidor.url + "/ajustes")
         p.locator("nav.pestanas .pestana", has_text=nombre).click()
         expect(p.locator(f"section#{sitio}")).to_be_visible()
-        expect(p.locator(f"section#{sitio}")).to_contain_text(PRONTO[sitio])
+        if sitio == "hoy":  # unit 030: Hoy has its cards
+            expect(p.locator("section#hoy #hoy-comida")).to_be_visible()
+        else:
+            expect(p.locator(f"section#{sitio}")).to_contain_text(PRONTO[sitio])
         assert _marcada(p) == nombre
 
 
-# -- R6: the addresses of before ---------------------------------------------------------------------------------
+# -- R6: the addresses of before (unit 030, decision of 2026-10-24: none and `#hoy` open Hoy) -------------------
 
 @pytest.mark.parametrize(("ruta", "sitio", "parte"), [
     ("/#balance", "balance", "Balance"), ("/#recetas", "recetas", "Recetas"), ("/#peso", "balance", "Balance"),
-    ("/#hoy", "dia", "Día"), ("/", "dia", "Día"), ("/#nada", "dia", "Día"), ("/#dia", "dia", "Día"),
+    ("/#hoy", "hoy", None), ("/", "hoy", None), ("/#nada", "dia", "Día"), ("/#dia", "dia", "Día"),
 ], ids=["balance", "recetas", "peso", "hoy", "ninguna", "no-existe", "dia"])
 def test_direcciones_de_antes(servidor, abrir, ruta, sitio, parte):  # R6
     p = abrir(servidor, ruta, esperar=False)
@@ -177,5 +192,9 @@ def test_direcciones_de_antes(servidor, abrir, ruta, sitio, parte):  # R6
     for otro in ("hoy", "dia", "balance", "recetas", "fitness", "asistente"):
         if otro != sitio:
             expect(p.locator(f"section#{otro}")).to_be_hidden()
-    assert _marcada(p) == "Nutrición"
-    assert _parte_marcada(p) == parte
+    if parte is None:  # Hoy: its own tab, outside Nutrición
+        assert _marcada(p) == "Hoy"
+        expect(p.locator("#partes")).to_be_hidden()
+    else:
+        assert _marcada(p) == "Nutrición"
+        assert _parte_marcada(p) == parte

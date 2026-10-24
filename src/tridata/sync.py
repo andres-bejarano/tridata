@@ -5,9 +5,12 @@ out what's missing since the last run and only fetches that.
 """
 from __future__ import annotations
 
+import fcntl
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from .garmin_client import GarminClient
@@ -88,6 +91,33 @@ def desde_para_actualizar(estado: Mapping[str, str | None] | None, hoy: date) ->
         return hoy
     desde = datetime.fromisoformat(ok_en).date()
     return min(hoy, max(desde, hoy - timedelta(days=MAX_DIAS_ATRAS - 1)))
+
+
+# -- unit 030 (G-48): one sync with Garmin at a time, between the app's button and `tridata sync` --
+NOMBRE_CERROJO = "sync.lock"
+
+
+class SyncEnMarcha(RuntimeError):
+    """Another sync with Garmin (the button of the app or the daily routine) holds the lock."""
+
+
+@contextmanager
+def cerrojo_sync(carpeta: Path) -> Iterator[None]:
+    """Holds `carpeta/sync.lock` while the block runs, or raises `SyncEnMarcha` at once if another holds it.
+
+    `fcntl.flock` without waiting: the kernel releases it when the process dies, so a crash never leaves it taken
+    (a row «running» in SQLite would). It works between processes and between two opens in the same one.
+    """
+    carpeta.mkdir(parents=True, exist_ok=True)
+    with open(carpeta / NOMBRE_CERROJO, "a", encoding="utf-8") as fichero:
+        try:
+            fcntl.flock(fichero, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise SyncEnMarcha("another sync with Garmin is running") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(fichero, fcntl.LOCK_UN)
 
 
 class SyncService:

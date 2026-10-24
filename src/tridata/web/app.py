@@ -39,6 +39,14 @@
                                   503 without Garmin credentials. Unit 018: it brings from the day of the last
                                   good sync (at most 45 days), writes down `ok_en` when it ends well, and a 429 is
                                   502 `motivo` "limite"; a failure is not written down (the routine does that)
+    GET  /api/hoy                 unit 030 (REC-18): the four cards of Hoy in one answer: `comida` (eaten and what is
+                                  left at the marked level, from the same day as /api/dia), `entreno` (today's
+                                  activities), `como_llegas` (sleep, resting HR, HRV and its 7-day mean, TSB, each
+                                  with its `estado`, `hoy.py`), `garmin_sync` (/api/dia's plus `texto_hora` and the
+                                  routine's `motivos`) and `asistente` (null until unit 032). Writes nothing new.
+                                  Unit 030 (G-48): «Actualizar Garmin» also takes the routine's lock (`sync.lock`
+                                  next to the database): with `tridata sync` running it is the same 409 «en_marcha»,
+                                  and it brings at least yesterday and today
     GET  /ajustes                 the settings page
     GET  /api/ajustes             settings in force (?fecha=, default today), changes to come, races
     POST /api/ajustes             {"datos": {...}, "desde": "AAAA-MM-DD"} save one or more settings
@@ -144,8 +152,9 @@ from ..nutricion.balance import (
 from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
 from ..nutricion.margen import cabe_de_receta
 from ..nutricion.recetas import ErrorDatos, _numero
+from ..hoy import como_llegas, entreno, texto_sync
 from ..storage import DataStore
-from ..sync import aviso_sync
+from ..sync import MOTIVOS, SyncEnMarcha, aviso_sync, cerrojo_sync
 from .recetas import rutas as rutas_recetas
 
 log = logging.getLogger(__name__)
@@ -161,6 +170,9 @@ FALTA_GARMIN = "Faltan GARMIN_EMAIL / GARMIN_PASSWORD en .env: no puedo traer Ga
 SESION_GARMIN = ("La sesión de Garmin ha fallado. Prueba otra vez y, si sigue, revisa GARMIN_EMAIL y "
                  "GARMIN_PASSWORD en .env.")
 LIMITE_GARMIN = "Garmin está limitando las peticiones: espera unos minutos y vuelve a probar."  # unit 018 (R3)
+EN_MARCHA = "Ya estoy actualizando Garmin: espera a que acabe."
+# unit 030 (R-101): the button of Hoy says why with the words of the routine's warning (`sync.MOTIVOS`)
+MOTIVOS_BOTON = {"sesion": MOTIVOS["sesion"], "limite": MOTIVOS["limite"], "red": MOTIVOS["conexion"]}
 AL_REVES = "La fecha de inicio tiene que ser anterior o igual a la de fin"
 AUDIO_MAX_BYTES = 10 * 1024 * 1024  # a 2-minute recording is far below this (R4)
 TIPOS_AUDIO = frozenset({"audio/mp4", "audio/x-m4a", "audio/aac", "audio/webm", "audio/ogg", "audio/wav", "audio/mpeg"})
@@ -295,6 +307,7 @@ def crear_app(
     cierres = cierres or Cierres(registro.db_path, ajustes=ajustes, pesos=pesos, objetivos=objetivos, store=store,
                                  registro=registro)
     cerrojo_garmin = threading.Lock()
+    carpeta_datos = Path(registro.db_path).parent  # unit 030: where `tridata sync` keeps its lock (G-48)
 
     def _recientes() -> list[dict]:
         if store is None:
@@ -858,11 +871,14 @@ def crear_app(
         if actualizar_garmin is None:
             return _error(FALTA_GARMIN, 503, motivo="credenciales")
         if not cerrojo_garmin.acquire(blocking=False):
-            return _error("Ya estoy actualizando Garmin: espera a que acabe.", 409, motivo="en_marcha")
+            return _error(EN_MARCHA, 409, motivo="en_marcha")
         try:
-            await run_in_threadpool(actualizar_garmin, hoy())
+            with cerrojo_sync(carpeta_datos):  # unit 030 (G-48): the routine's `tridata sync` neither
+                await run_in_threadpool(actualizar_garmin, hoy())
             if store is not None:  # unit 018 (R-90): a good one is written down; a failure, never here
                 store.marcar_sync_ok(ahora())
+        except SyncEnMarcha:  # unit 030 (R-103): the routine of the morning is syncing
+            return _error(EN_MARCHA, 409, motivo="en_marcha")
         except (GarminRateLimitError, GarminConnectTooManyRequestsError):  # unit 018 (R3): a 429, said as such
             return _error(LIMITE_GARMIN, 502, motivo="limite")
         except GarminAuthError:  # its text is not shown nor logged (R6 of unit 016)
@@ -872,6 +888,30 @@ def crear_app(
         finally:
             cerrojo_garmin.release()
         return JSONResponse({"dia": _dia(hoy())})
+
+    def _hoy() -> dict:
+        """Unit 030: the four cards. Comida is today's `_dia` (the same figures as Nutrición › Día)."""
+        dia_hoy = hoy()
+        resumen = _dia(dia_hoy)
+        marcado = next((m for m in resumen["margenes"] if m.get("objetivo")), None) or next(
+            (m for m in resumen["margenes"] if m["nivel"] == resumen["objetivo"]["porcentaje"]), resumen["margenes"][0])
+        comida = {"total_kcal": resumen["total_kcal"], "nivel": marcado["nivel"], "queda_kcal": marcado["kcal"],
+                  "objetivo_kcal": resumen["barra"]["objetivo_kcal"], "pct": resumen["barra"]["pct"],
+                  "planeado_kcal": resumen["planeado_kcal"]}
+        garmin_sync = {**resumen["garmin_sync"], "texto_hora": texto_sync(resumen["garmin_sync"]["ok_en"], ahora()),
+                       "motivos": MOTIVOS_BOTON}
+        sin_garmin = {"sueno": {"estado": "no_ha_llegado", "segundos": None, "puntuacion": None},
+                      "pulso_reposo": {"estado": "no_ha_llegado", "valor": None},
+                      "hrv": {"estado": "no_ha_llegado", "valor": None, "media_7d": None},
+                      "frescura": {"estado": "no_ha_llegado", "valor": None}}
+        return {"fecha": dia_hoy.isoformat(), "comida": comida,
+                "entreno": entreno(store, dia_hoy) if store is not None else [],
+                "como_llegas": como_llegas(store, dia_hoy) if store is not None else sin_garmin,
+                "garmin_sync": garmin_sync, "asistente": None}  # unit 032 brings the last answer
+
+    async def ver_hoy(request: Request) -> Response:
+        await run_in_threadpool(_al_dia)
+        return JSONResponse(await run_in_threadpool(_hoy))
 
     def _cargar_transcriptor() -> None:
         try:
@@ -903,6 +943,7 @@ def crear_app(
         Route("/api/actividades-recientes", actividades_recientes),
         Route("/api/simular", simular_lista, methods=["POST"]),
         Route("/api/garmin/actualizar", actualizar, methods=["POST"]),
+        Route("/api/hoy", ver_hoy),
         Route("/api/ajustes", ver_ajustes),
         Route("/api/ajustes", guardar_ajustes, methods=["POST"]),
         Route("/api/carrera", anadir_carrera, methods=["POST"]),

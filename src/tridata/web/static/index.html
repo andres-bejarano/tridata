@@ -19,11 +19,42 @@
 </head>
 <body>
   <main>
-    <!-- ================= HOY, FITNESS, ASISTENTE (unit 029: what they will bring; 030, 031 and 032 fill them) ================= -->
-    <section id="hoy" class="pantalla pronto" data-pestana="hoy" aria-label="Hoy" hidden>
-      <h1 class="titulo-pantalla">Hoy</h1>
-      <p class="tarjeta llega-pronto">Muy pronto, aquí: el resumen de tu día.</p>
+    <!-- ================= HOY (unit 030: the day at a glance, hoy.js paints the cards; the app opens here) ================= -->
+    <section id="hoy" class="pantalla" data-pestana="hoy" aria-label="Hoy" hidden>
+      <div class="hoy-cab">
+        <h1 class="titulo-pantalla">Hoy</h1>
+        <p id="hoy-fecha" class="suave"></p>
+      </div>
+      <!-- the message, the recordings queue and the review of what is dictated move here from Día while Hoy shows (app.js) -->
+      <div id="hoy-dictado"></div>
+      <article id="hoy-comida" class="tarjeta tarjeta-hoy" data-ir="dia">
+        <div class="cab-hoy"><h2>🍽️ Comida</h2><a class="ver-mas" href="#dia">Ver Nutrición ›</a></div>
+        <div class="grande-hoy num"><span class="cifra">—</span><small id="hoy-queda-texto">kcal te quedan</small></div>
+        <p id="hoy-comida-detalle" class="suave"></p>
+      </article>
+      <article id="hoy-entreno" class="tarjeta tarjeta-hoy" data-ir="fitness">
+        <div class="cab-hoy"><h2>🏃 Entreno</h2><a class="ver-mas" href="#fitness">Ver Fitness ›</a></div>
+        <div id="hoy-actividades" class="actividades-hoy"></div>
+      </article>
+      <article id="hoy-como-llegas" class="tarjeta tarjeta-hoy" data-ir="fitness">
+        <div class="cab-hoy"><h2>🔋 Cómo llegas</h2><a class="ver-mas" href="#fitness">Ver Fitness ›</a></div>
+        <ul class="chips-hoy">
+          <li id="hoy-sueno" class="chip-hoy"></li>
+          <li id="hoy-pulso" class="chip-hoy"></li>
+          <li id="hoy-hrv" class="chip-hoy"></li>
+          <li id="hoy-frescura" class="chip-hoy"></li>
+        </ul>
+        <p id="hoy-garmin-hora" class="suave"></p>
+        <p id="hoy-garmin-error" class="aviso" role="status" aria-live="polite" hidden></p>
+        <button id="hoy-actualizar" type="button" class="principal">↻ Actualizar Garmin</button>
+      </article>
+      <article id="hoy-asistente" class="tarjeta tarjeta-hoy" data-ir="asistente">
+        <div class="cab-hoy"><h2>💬 Asistente</h2><a class="ver-mas" href="#asistente">Abrir ›</a></div>
+        <p id="hoy-asistente-texto" class="suave">Aún no has hablado con el asistente.</p>
+      </article>
     </section>
+
+    <!-- ================= FITNESS, ASISTENTE (unit 029: what they will bring; 031 and 032 fill them) ================= -->
     <section id="fitness" class="pantalla pronto" data-pestana="fitness" aria-label="Fitness" hidden>
       <h1 class="titulo-pantalla">Fitness</h1>
       <p class="tarjeta llega-pronto">Muy pronto, aquí: tu carga, tu último entreno y tu recuperación.</p>

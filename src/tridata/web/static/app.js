@@ -466,7 +466,9 @@ function pintarBarraReal(dia, escala) {
   }
   $("barra-real").style.width = `${Math.min(r.objetivo_kcal / escala * 100, 100)}%`;
   const h = r.hecho;
-  const partes = [r.pasado_kcal > 0 ? `te has pasado ${kcalEnteras(r.pasado_kcal)} kcal` : `te quedan ${kcalEnteras(r.quedan_kcal)} kcal`];
+  // unit 033: it compares with the day's objective, not with the level being looked at
+  const objetivo = `de tu objetivo (${dia.objetivo.porcentaje === 0 ? "mantenimiento" : etiquetaNivel(dia.objetivo.porcentaje)})`;
+  const partes = [r.pasado_kcal > 0 ? `te has pasado ${kcalEnteras(r.pasado_kcal)} kcal ${objetivo}` : `te quedan ${kcalEnteras(r.quedan_kcal)} kcal ${objetivo}`];
   if (h.pasos_hechos !== null) partes.push(`${enteras.format(h.pasos_hechos)} de ${enteras.format(h.pasos_del_dia)} pasos`);
   if (h.previsto_kcal > 0) {
     const nombre = h.previsto_nombre ? `${h.previsto_nombre.charAt(0).toLowerCase()}${h.previsto_nombre.slice(1)} prevista` : "entreno previsto";

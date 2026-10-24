@@ -60,7 +60,7 @@ def test_barra_de_dos_capas(arrancar, abrir, capturar, oscuro):  # R10, R11 · R
     comido = p.locator("#barra-relleno").bounding_box()["width"] / pista["width"]
     assert abs(comido - 1000 / 2160) < 0.01, comido
     expect(p.locator("#barra-real-texto")).to_have_text(
-        "Con lo hecho ahora: te quedan 656 kcal · 6.000 de 10.000 pasos · natación prevista 400 kcal aún no está "
+        "Con lo hecho ahora: te quedan 656 kcal de tu objetivo (−10 %) · 6.000 de 10.000 pasos · natación prevista 400 kcal aún no está "
         "en Garmin")
     expect(p.locator("#barra-leyenda-real")).to_be_visible()
     _sin_scroll(p, "hoy-dos-capas")
@@ -78,6 +78,23 @@ def test_barra_de_dos_capas(arrancar, abrir, capturar, oscuro):  # R10, R11 · R
     expect(p.locator("#titulo")).to_have_text("Mañana")
     expect(real).to_be_hidden()
     expect(p.locator("#barra-real-texto")).to_be_hidden()
+
+
+@pytest.mark.parametrize(("porcentaje", "dicho"), [(-15, "−15 %"), (0, "mantenimiento")])
+def test_con_lo_hecho_dice_contra_que_objetivo(arrancar, abrir, porcentaje, dicho):  # unit 033: R1, R2 · R-23
+    servidor = arrancar()
+    servidor.hoy_con_garmin(6000, 400)
+    servidor.objetivos.cambiar(HOY, porcentaje=porcentaje)
+    servidor.apuntar("Comida", HOY, None, 3000)
+    p = abrir(servidor)
+    texto = p.locator("#barra-real-texto")
+    expect(texto).to_have_text(re.compile(
+        rf"^Con lo hecho ahora: te has pasado [\d.]+ kcal de tu objetivo \({re.escape(dicho)}\) · 6\.000 de 10\.000 pasos · "))
+    antes = texto.text_content()
+    otro = p.locator("#otros button").first  # look at another level: the line keeps the day's objective
+    otro.click()
+    expect(p.locator("#queda-cifra")).not_to_have_text(otro.text_content() or "")
+    expect(texto).to_have_text(antes)
 
 
 def test_barra_pasos_incompletos(arrancar, abrir):  # R11 · R-26

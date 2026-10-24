@@ -186,6 +186,35 @@ button.signo { min-width: 48px; font-size: 1.1rem; padding: 0 12px; }
 .lista .total { display: flex; justify-content: space-between; gap: 8px; padding: 12px 14px; background: var(--fondo); border-top: 1px solid var(--borde); font-weight: 650; }
 .vacio-dia { margin: 8px 4px; }
 
+/* -- unit 035: the sections of the day, the handle ⠿ and the section where the row will drop ------------ */
+.lista > .seccion-cab + .fila { border-top: 0; }
+.seccion-cab {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px;
+  padding: 12px 14px 6px; border-top: 1px solid var(--borde); font-weight: 700;
+}
+.lista > .seccion-cab:first-child { border-top: 0; }
+.seccion-nombre { font-size: 1.05rem; font-variant-caps: all-small-caps; letter-spacing: .06em; color: var(--suave); }
+.seccion-kcal { font-size: .95rem; color: var(--suave); white-space: nowrap; }
+.seccion-vacia { flex-basis: 100%; font-weight: 500; font-size: .9rem; color: var(--suave); padding: 10px 0 4px; font-style: italic; }
+.lista > .fila .asa {
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 32px; min-height: 44px;
+  margin-left: -8px; color: var(--suave); font-size: 1.3rem; cursor: grab;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.lista > .fila .asa::before { content: "⠿"; }
+.lista > .fila.arrastrada { opacity: .35; }
+.lista > .fila.fantasma {
+  position: fixed; z-index: 40; margin: 0; pointer-events: none; background: var(--tarjeta);
+  border: 1px solid var(--acento); border-radius: 12px; box-shadow: var(--sombra-micro);
+}
+.lista > .seccion-cab.destino, .lista > .fila.destino { background: var(--acento-suave); }
+.lista > .seccion-cab.destino .seccion-nombre, .lista > .seccion-cab.destino .seccion-kcal { color: var(--acento); }
+.pie-secciones { display: grid; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--borde); }
+.pie-secciones p { margin: 0; }
+.pie-secciones button.anadir-seccion { border-style: dashed; color: var(--acento); }
+.opciones-seccion { display: flex; flex-wrap: wrap; gap: 8px; }
+.opciones-seccion button { flex: 1 1 auto; color: var(--acento); border-color: var(--acento); }
+
 /* -- the recordings queue and the review (units 006, 007, 008) -------------------------- */
 .cola { display: grid; gap: 8px; margin-top: 8px; }
 .cola > p { margin: 0; }

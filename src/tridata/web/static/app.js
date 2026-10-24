@@ -43,6 +43,11 @@
 // Unit 032: the Asistente tab is conversaciones.js: `#asistente` its list, `#asistente/N` one conversation. Inside a
 // conversation the box and the microphone are the chat's (S-37): what is written goes to the conversation (never to
 // /api/interpretar), what is dictated is transcribed into the box, and «Pensar más» shows next to them.
+// Unit 035: the day list goes by the sections Andrés creates (desayuno … cena, then «Sin sección»), each with its
+// eaten kcal; they replace the groups Comido / Planeado. A section is there when a food is in it, or when it was
+// just created with «Añadir sección» and the day has not changed (S-45: it only lives on this screen). Each row is
+// dragged from its handle ⠿ (pointer events, so it works with the finger on the iPhone) and dropped on another
+// section: POST /api/alimento/N/seccion saves only the section (G-52) and the day comes back painted.
 
 import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
@@ -92,6 +97,14 @@ let textoDeLista = null; // a list whose interpretation failed (502), its text p
 const porCien = new WeakMap(); // unit 013: the kcal/100 g typed on a review card, by food (never saved)
 let pestanaVista = null; // the place on screen, to reload the day when coming back to Día (unit 013)
 let diaPedido = null; // unit 017: a day tapped in Balance, opened when Día shows up
+// unit 035: the five sections in the order of the day; "" is «Sin sección», always last
+const SECCIONES = [["desayuno", "Desayuno"], ["media_manana", "Media mañana"], ["comida", "Comida"],
+  ["merienda", "Merienda"], ["cena", "Cena"]];
+const NOMBRE_SECCION = Object.fromEntries([...SECCIONES, ["", "Sin sección"]]);
+let seccionesNuevas = new Set(); // unit 035 (S-45): sections just created, still empty, of the day on screen
+let eligiendoSeccion = false; // unit 035: «Añadir sección» open: false · "elegir" · "todas"
+let arrastre = null; // unit 035: { a, fila, asa, fantasma, destino, dy, puntero } while a row is dragged
+let diaTrasArrastre = null; // a day that came while dragging: painted when the drag ends
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -210,7 +223,7 @@ function pintarDia(dia) {
     cargarDia(hoyISO);
     return;
   }
-  if (dia.fecha !== diaVisto) { editando = null; anadiendo = false; }
+  if (dia.fecha !== diaVisto) { editando = null; anadiendo = false; seccionesNuevas = new Set(); eligiendoSeccion = false; }
   diaVisto = dia.fecha;
   ultimoDia = dia;
   // unit 018 (R12): until a day is painted ◀ ▶ have no day to move from; then the page says which one it shows
@@ -357,7 +370,7 @@ function kcalPor100(inicial, alCalcular, alEscribir = () => {}) {
   };
 }
 
-// The day as a list in two groups, Comido and Planeado; tapping a row opens its change card (R4).
+// The day as a list by sections (unit 035); tapping a row opens its change card (R4), its handle ⠿ drags it.
 function filaAlimento(a) {
   if (a.id === editando) return fichaConservada(`cambio:${a.id}`, () => fichaCambio(a));
   const planeado = a.estado === "planeado";
@@ -372,6 +385,13 @@ function filaAlimento(a) {
     el("div", { className: "que" }, el("strong", { textContent: a.nombre }), detalle),
     el("div", { className: "kcal num", textContent: cuenta ? kcalEnteras(a.kcal) : "—" }));
   fila.setAttribute("data-grupo", planeado ? "planeado" : "comido");
+  fila.dataset.seccion = a.seccion ?? "";
+  const asa = el("span", { className: "asa", title: "Arrastra para cambiarlo de sección" });
+  asa.setAttribute("role", "button");
+  asa.setAttribute("aria-label", `Mover ${a.nombre} a otra sección`);
+  asa.addEventListener("click", (evento) => evento.stopPropagation()); // the handle never opens the card (R8)
+  asa.addEventListener("pointerdown", (evento) => empezarArrastre(evento, a, fila, asa));
+  fila.prepend(asa);
   if (planeado && a.dia <= hoyISO) { // a later day cannot be eaten yet (R3 of 004)
     const comido = el("button", { type: "button", className: "btn-comido", textContent: "Comido" });
     comido.addEventListener("click", (evento) => { evento.stopPropagation(); marcarComido(a, comido); });
@@ -391,13 +411,21 @@ function fichaConservada(clave, crear) {
 }
 
 function pintarLista(dia) {
+  if (arrastre) { diaTrasArrastre = dia; return; } // the dragged row stays where the finger has it
   if (editando !== null && !dia.alimentos.some((a) => a.id === editando)) editando = null; // deleted elsewhere
   const foco = fichaAbierta && fichaAbierta.nodo.contains(document.activeElement) ? document.activeElement : null;
-  const comidos = dia.alimentos.filter((a) => a.estado !== "planeado");
-  const planeados = dia.alimentos.filter((a) => a.estado === "planeado");
   const nodos = [];
-  if (comidos.length) nodos.push(el("div", { className: "subtitulo", textContent: "Comido" }), ...comidos.map(filaAlimento));
-  if (planeados.length) nodos.push(el("div", { className: "subtitulo", textContent: "Planeado" }), ...planeados.map(filaAlimento));
+  // unit 035 (R5, R6): the sections with some food plus the ones just created, in the order of the day; inside
+  // each, the foods in the order they were logged
+  const de = (clave) => dia.alimentos.filter((a) => (a.seccion ?? "") === clave).sort((x, y) => x.id - y.id);
+  const conAlgo = new Set(dia.alimentos.map((a) => a.seccion ?? ""));
+  for (const clave of conAlgo) seccionesNuevas.delete(clave); // once it has a food, emptying it removes it
+  const visibles = [...SECCIONES.map(([clave]) => clave), ""].filter((c) => conAlgo.has(c) || seccionesNuevas.has(c));
+  for (const clave of visibles) {
+    const alimentos = de(clave);
+    nodos.push(cabeceraSeccion(clave, alimentos), ...alimentos.map(filaAlimento));
+  }
+  nodos.push(pieSecciones(SECCIONES.filter(([clave]) => !visibles.includes(clave))));
   nodos.push(el("div", { id: "con-planeado", className: "total", hidden: true }));
   $("lista-dia").replaceChildren(...nodos);
   $("lista-dia").hidden = dia.alimentos.length === 0;
@@ -412,6 +440,124 @@ function pintarLista(dia) {
     className: "aviso",
     textContent: `Falta la cantidad de: ${dia.pendientes.map((p) => p.nombre).join(", ")}. No suma hasta que la pongas.`,
   })] : []));
+}
+
+// -- unit 035: the sections of the day ------------------------------------------------------------
+
+// The name of a section and its eaten kcal (the ones that count, as the total: never the planned or a pending one).
+function cabeceraSeccion(clave, alimentos) {
+  const suma = alimentos.filter((a) => a.estado !== "planeado" && !a.pendiente_cantidad && a.kcal !== null)
+    .reduce((total, a) => total + a.kcal, 0);
+  const cabecera = el("div", { className: "seccion-cab" },
+    el("span", { className: "seccion-nombre", textContent: NOMBRE_SECCION[clave] }),
+    el("span", { className: "seccion-kcal num", textContent: `${kcalEnteras(suma)} kcal` }));
+  cabecera.dataset.seccion = clave;
+  if (!alimentos.length) cabecera.append(el("span", { className: "seccion-vacia", textContent: "Arrastra aquí un alimento" }));
+  return cabecera;
+}
+
+// «Añadir sección» (R2): offers the ones of the five the day does not have yet; with the five, says so.
+function pieSecciones(faltan) {
+  const pie = el("div", { className: "pie-secciones" });
+  if (!eligiendoSeccion) {
+    const boton = el("button", { type: "button", id: "anadir-seccion", className: "anadir-seccion", textContent: "Añadir sección" });
+    boton.addEventListener("click", () => { eligiendoSeccion = faltan.length ? "elegir" : "todas"; pintarLista(ultimoDia); });
+    pie.append(boton);
+    return pie;
+  }
+  const cerrar = el("button", { type: "button", className: "cancelar-seccion", textContent: eligiendoSeccion === "todas" ? "Vale" : "Cancelar" });
+  cerrar.addEventListener("click", () => { eligiendoSeccion = false; pintarLista(ultimoDia); });
+  if (eligiendoSeccion === "todas" || !faltan.length) {
+    pie.append(el("p", { className: "suave", textContent: "Ya están las cinco secciones." }), cerrar);
+    return pie;
+  }
+  const opciones = el("div", { className: "opciones-seccion", id: "opciones-seccion" });
+  for (const [clave, nombre] of faltan) {
+    const opcion = el("button", { type: "button", textContent: nombre });
+    opcion.dataset.seccion = clave;
+    opcion.addEventListener("click", () => { seccionesNuevas.add(clave); eligiendoSeccion = false; pintarLista(ultimoDia); });
+    opciones.append(opcion);
+  }
+  pie.append(el("p", { className: "suave", textContent: "¿Qué sección añades?" }), opciones, cerrar);
+  return pie;
+}
+
+// Dragging a row from its handle: pointer events (finger or mouse); the handle has `touch-action: none`, so
+// the page does not scroll under the finger, and outside it the page scrolls as always.
+function empezarArrastre(evento, a, fila, asa) {
+  if (arrastre || (evento.pointerType === "mouse" && evento.button !== 0)) return;
+  evento.preventDefault();
+  evento.stopPropagation();
+  const caja = fila.getBoundingClientRect();
+  const fantasma = fila.cloneNode(true);
+  fantasma.removeAttribute("data-seccion");
+  fantasma.removeAttribute("data-grupo");
+  fantasma.classList.add("fantasma");
+  fantasma.setAttribute("aria-hidden", "true");
+  Object.assign(fantasma.style, { left: `${caja.left}px`, top: `${caja.top}px`, width: `${caja.width}px` });
+  $("lista-dia").append(fantasma);
+  fila.classList.add("arrastrada");
+  arrastre = { a, fila, asa, fantasma, destino: null, dy: evento.clientY - caja.top, puntero: evento.pointerId };
+  try { asa.setPointerCapture(evento.pointerId); } catch { /* a synthetic pointer cannot be captured */ }
+  document.addEventListener("pointermove", moverArrastre);
+  document.addEventListener("pointerup", soltarArrastre);
+  document.addEventListener("pointercancel", cancelarArrastre);
+  marcarDestino(evento.clientX, evento.clientY);
+}
+
+function moverArrastre(evento) {
+  if (!arrastre || evento.pointerId !== arrastre.puntero) return;
+  evento.preventDefault();
+  arrastre.fantasma.style.top = `${evento.clientY - arrastre.dy}px`;
+  const borde = 70; // near the top or the bottom of the screen the page follows the finger
+  if (evento.clientY < borde) window.scrollBy(0, -14);
+  else if (evento.clientY > window.innerHeight - borde) window.scrollBy(0, 14);
+  marcarDestino(evento.clientX, evento.clientY);
+}
+
+// The section under the finger, highlighted while dragging (its header and its rows).
+function marcarDestino(x, y) {
+  const debajo = document.elementFromPoint(x, y);
+  const nodo = debajo ? debajo.closest("#lista-dia [data-seccion]") : null;
+  const destino = nodo ? nodo.dataset.seccion : null;
+  if (destino === arrastre.destino) return;
+  arrastre.destino = destino;
+  for (const viejo of $("lista-dia").querySelectorAll(".destino")) viejo.classList.remove("destino");
+  if (destino === null) return;
+  for (const nodoDestino of $("lista-dia").querySelectorAll("[data-seccion]")) {
+    if (nodoDestino.dataset.seccion === destino) nodoDestino.classList.add("destino");
+  }
+}
+
+function terminarArrastre() {
+  document.removeEventListener("pointermove", moverArrastre);
+  document.removeEventListener("pointerup", soltarArrastre);
+  document.removeEventListener("pointercancel", cancelarArrastre);
+  const hecho = arrastre;
+  arrastre = null;
+  hecho.fantasma.remove();
+  const dia = diaTrasArrastre ?? ultimoDia;
+  diaTrasArrastre = null;
+  pintarLista(dia);
+  return hecho;
+}
+
+function cancelarArrastre(evento) {
+  if (arrastre && evento.pointerId === arrastre.puntero) terminarArrastre();
+}
+
+// Dropped on another section (R3): only its section is saved, and the day comes back with the same numbers (R4).
+async function soltarArrastre(evento) {
+  if (!arrastre || evento.pointerId !== arrastre.puntero) return;
+  marcarDestino(evento.clientX, evento.clientY);
+  const { a, destino } = terminarArrastre();
+  if (destino === null || destino === (a.seccion ?? "")) return;
+  const { ok, datos } = await api(`/api/alimento/${a.id}/seccion`, { seccion: destino === "" ? null : destino });
+  if (!ok) {
+    mensaje(`No se ha podido mover: ${a.nombre}. ${datos.error ?? ""}`.trim(), "error");
+    return;
+  }
+  if (datos.dia.fecha === diaVisto) pintarDia(datos.dia);
 }
 
 // «Con lo planeado te quedarían …» for the level being looked at; only with something planned that counts.

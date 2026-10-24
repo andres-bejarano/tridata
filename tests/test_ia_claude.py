@@ -449,3 +449,127 @@ def test_script_de_recetas_marca_los_fallos():  # R17
     assert script.comparar_recetas(esperado, [{**bien, "cantidad": 3}])
     assert script.comparar_recetas(esperado, [{**bien, "unidad": "g"}])
     assert script.comparar_recetas(esperado, [bien, {**bien, "nombre": "guayaba"}])  # one too many
+
+
+# == unit 021: the assistant's changes travel in the same request (R3 · R-66, C-84, G-38) ==
+
+HOY21 = date(2026, 10, 22)  # a Thursday
+AYER21 = date(2026, 10, 21)
+
+
+def _base_r3(tmp_path):
+    """3 recipes, 2 ingredients (one with the alias «guayaba de prueba»), a pot, weights, settings, and
+    «yogur natural de prueba» 125 g (75 kcal) and «pasta de prueba» 100 g (360 kcal) today, «manzana de prueba» yesterday."""
+    from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, RegistroComidas, RegistroPeso
+    from tridata.nutricion.recetas import Recetario
+
+    db = tmp_path / "data.sqlite3"
+    rec = Recetario(db)
+    rec.crear_fijo({"nombre": "queso mozzarella de prueba", "kcal": 280, "por": "100g"})
+    rec.crear_fijo({"nombre": "manzana de prueba", "kcal": 80, "por": "unidad", "alias": ["guayaba de prueba"]})
+    rec.crear_olla({"nombre": "olla grande", "tara_g": 1537})
+    for nombre in ("lentejas de prueba", "crema de prueba", "garbanzos de prueba"):
+        rec.crear_receta({"nombre": nombre, "ingredientes": [
+            {"nombre": "harina misteriosa", "cantidad": 417, "unidad": "g", "kcal": 1459}], "peso_neto_g": 1871}, hoy=HOY21)
+    Ajustes(db).cambiar({"basal_kcal": 1980, "kcal_por_paso": 0.04, "pasos_por_defecto": 8000}, desde=DESDE_SIEMPRE)
+    RegistroPeso(db).apuntar(AYER21, 71.8, hoy=HOY21)
+    registro = RegistroComidas(db)
+    registro.guardar([Alimento(nombre="yogur natural de prueba", dia=HOY21, cantidad=125, unidad="g", kcal=75),
+                      Alimento(nombre="pasta de prueba", dia=HOY21, cantidad=100, unidad="g", kcal=360)],
+                     hoy=HOY21, texto="x", sin_cambios=True)
+    registro.guardar([Alimento(nombre="manzana de prueba", dia=AYER21, cantidad=1, unidad="unidad", kcal=80)],
+                     hoy=AYER21, texto="x", sin_cambios=True)
+    return rec, registro
+
+
+def _cliente_vacio():
+    cliente = MagicMock()
+    cliente.messages.parse.return_value = SimpleNamespace(parsed_output=ListaInterpretada(alimentos=[]),
+                                                          stop_reason="end_turn")
+    return cliente
+
+
+def test_la_peticion_de_un_cambio_lleva_solo_lo_dicho_y_nombres(tmp_path):  # R3 · R-66, C-84
+    from tridata.nutricion.asistente import nombres_apuntados, texto_acciones
+
+    rec, registro = _base_r3(tmp_path)
+    cliente = _cliente_vacio()
+    texto = "quita el yogur, al final fue una manzana"
+    InterpreteClaude(cliente=cliente, modelo="m", guardados=rec.nombres, apuntado=nombres_apuntados(registro),
+                     acciones=texto_acciones).interpretar(texto, HOY21)
+
+    kwargs = cliente.messages.parse.call_args.kwargs
+    assert set(kwargs) == {"model", "max_tokens", "system", "messages", "output_format", "output_config"}
+    assert kwargs["system"] == INSTRUCCION
+    contenido = kwargs["messages"][0]["content"]
+    assert contenido.startswith("Hoy es jueves, 2026-10-22.")
+    assert contenido.endswith(f"Lo que ha escrito:\n{texto}")
+    for nombre in ("lentejas de prueba", "crema de prueba", "garbanzos de prueba", "queso mozzarella de prueba",
+                   "manzana de prueba", "guayaba de prueba"):
+        assert f"«{nombre}»" in contenido  # what is saved: names and aliases
+    linea = next(x for x in contenido.split("\n") if x.startswith("Lo apuntado ese día"))
+    assert linea == "Lo apuntado ese día (solo nombres): «yogur natural de prueba», «pasta de prueba»"
+    assert texto_acciones() in contenido
+    for accion in ("pasos_dia", "quitar_alimento", "guardar_ingrediente"):
+        assert accion in contenido
+    for prohibido in ("125", "100", "75", "360", "280", "8000", "8.000", "1980", "0.04", "0,04", "71", "1537", "olla grande"):
+        assert prohibido not in contenido, prohibido
+    sin_fecha = contenido.split("\n", 1)[1]
+    assert re.search(r"\d", sin_fecha) is None  # no figure at all besides today's date
+
+
+def test_con_una_grabacion_de_ayer_van_los_nombres_de_ayer(tmp_path):  # R3 · C-84
+    from tridata.nutricion.asistente import nombres_apuntados, texto_acciones
+
+    rec, registro = _base_r3(tmp_path)
+    cliente = _cliente_vacio()
+    InterpreteClaude(cliente=cliente, modelo="m", guardados=rec.nombres, apuntado=nombres_apuntados(registro),
+                     acciones=texto_acciones).interpretar("quita la manzana", AYER21)
+    contenido = cliente.messages.parse.call_args.kwargs["messages"][0]["content"]
+    assert contenido.startswith("Hoy es miércoles, 2026-10-21.")
+    linea = next(x for x in contenido.split("\n") if x.startswith("Lo apuntado ese día"))
+    assert linea == "Lo apuntado ese día (solo nombres): «manzana de prueba»"
+    assert "yogur natural de prueba" not in contenido and "pasta de prueba" not in contenido
+
+
+def test_sin_nada_apuntado_no_va_la_linea_de_lo_apuntado(tmp_path):  # R3
+    from tridata.nutricion import RegistroComidas
+    from tridata.nutricion.asistente import nombres_apuntados
+
+    cliente = _cliente_vacio()
+    InterpreteClaude(cliente=cliente, modelo="m", apuntado=nombres_apuntados(RegistroComidas(tmp_path / "d.sqlite3"))
+                     ).interpretar("avena", HOY21)
+    assert cliente.messages.parse.call_args.kwargs["messages"] == [
+        {"role": "user", "content": "Hoy es jueves, 2026-10-22.\n\nLo que ha escrito:\navena"}]
+
+
+def test_el_esquema_trae_cambios_genericos():  # R1-R14: one request, one more piece
+    from anthropic.lib._parse._transform import transform_schema
+
+    from tridata.ia import CambioInterpretado
+
+    esquema = transform_schema(ListaInterpretada)
+    assert "cambios" in esquema["properties"]
+    cambio = esquema["$defs"]["CambioInterpretado"]
+    campos = {"accion", "objeto", "campo", "valor", "valores", "texto", "cantidad", "unidad", "kcal_estimadas",
+              "lineas", "dia", "desde", "fecha", "antes_dicho", "falta"}
+    assert set(cambio["properties"]) == campos and set(cambio["required"]) == campos
+    assert all(cambio["properties"][c].get("description") or "anyOf" in cambio["properties"][c] for c in campos)
+    assert ListaInterpretada(alimentos=[]).cambios == []  # absent by default: the interpretations of before
+    c = CambioInterpretado(accion="pasos_dia", valor=15000)
+    assert c.objeto is None and c.falta is None and c.dia is None
+
+
+def test_la_instruccion_explica_los_cambios():  # R6 · G-40, S-22
+    assert "14." in INSTRUCCION
+    for regla in ("cambios", "falta", '"otra"', "nada a medias", "sustitución"):
+        assert regla in INSTRUCCION
+    assert re.search(r"\d{4}-\d{2}-\d{2}", INSTRUCCION) is None
+
+
+def test_los_cambios_que_devuelve_claude_llegan_tal_cual():  # R1
+    from tridata.ia import CambioInterpretado
+
+    salida = ListaInterpretada(alimentos=[], cambios=[CambioInterpretado(accion="pasos_dia", valor=15000, dia=HOY21)])
+    resultado = InterpreteClaude(cliente=_cliente_piezas(salida), modelo="m").interpretar("hoy son 15 mil pasos", HOY21)
+    assert [(c.accion, c.valor, c.dia) for c in resultado.cambios] == [("pasos_dia", 15000, HOY21)]

@@ -7,6 +7,11 @@ Unit 011: when there are saved recipes or fixed foods, their NAMES and aliases g
 Claude says, for each food, which one it is (`guardado`) and whether it is `exacta` or `parecida`;
 their kcal are put by the app, never by Claude. With nothing saved the request is as before. The client is created lazily and
 can be injected, so tests use a double and never call the API.
+Unit 021 (the assistant that acts, G-38): one more piece, `cambios`, in the SAME request. For it the request also
+carries the NAMES of what is logged on the day of the request (`apuntado(dia)`, never quantities or kcal) and the
+fixed list of the actions the assistant knows (`acciones()`, written by `nutricion.asistente`), both only when there
+are any. `CambioInterpretado` is generic so the next actions never touch this module; the code decides, Claude only
+understands.
 """
 from __future__ import annotations
 
@@ -85,6 +90,17 @@ día.
 y que no sabes dónde poner (p. ej. «y lo del martes ya sabes»). Cópialas tal cual, una por \
 elemento; no las conviertas en alimentos. Una palabra suelta que parece un alimento pero no \
 entiendes sigue la regla 6. Lista vacía si no hay.
+14. cambios: si pide cambiar, quitar o corregir algo que ya existe (lo apuntado, los pasos previstos de un \
+día, las kcal de un ingrediente…) o guardar un ingrediente con sus kcal, va a cambios, no a alimentos ni a \
+objetivo_dia. Puede venir la lista de los cambios que sabes proponer, con qué campos usa cada uno, y los \
+nombres de lo apuntado ese día: en accion pon uno de esa lista; si pide un cambio que no está en ella, \
+accion = "otra" y en texto lo que pide. objeto: lo que nombra, tal cual lo dice o como aparece en lo apuntado \
+o en lo guardado. dia: el día del que habla (como en la regla 2), o null si no dice ninguno. No pongas kcal, \
+cantidades ni valores de antes que la persona no haya dicho. No dejes nada a medias: si no entiendes una parte del \
+cambio o falta un dato (qué cambiar, qué poner, cuánto), pon en falta una frase corta para la persona que \
+diga qué no sabes (p. ej. «No sé qué quieres cambiar a …» o «No sé qué poner en lugar del yogur») y no \
+adivines lo demás. Una sustitución («quita X, al final fue Y») es un solo cambio, no dos. Cada cambio \
+independiente va en su elemento. Sin cambios, lista vacía.
 """
 
 
@@ -128,16 +144,58 @@ class ObjetivoDiaInterpretado(BaseModel):
     pasos: int | None = Field(description="Pasos previstos, o null")
 
 
+class LineaInterpretada(BaseModel):
+    """One line of a change that brings several (an ingredient of a recipe, unit 023)."""
+
+    model_config = ConfigDict(json_schema_extra=_todo_requerido)
+
+    nombre: str = Field(description="Nombre breve, tal cual lo dice")
+    cantidad: float | None = Field(description="Cantidad dicha, o null")
+    unidad: str | None = Field(description='"g", "ml" o "unidad", o null')
+    kcal_estimadas: float | None = Field(description="Kcal estimadas solo si es algo nuevo, no guardado; o null")
+
+
+class CambioInterpretado(BaseModel):
+    """One change Andrés asks for (unit 021, G-37). Generic: the meaning of each field is in the list of actions."""
+
+    model_config = ConfigDict(json_schema_extra=_todo_requerido)
+
+    accion: str = Field(description='Id de la lista de cambios que sabes proponer, u "otra"')
+    objeto: str | None = Field(default=None, description="Lo que nombra, tal cual (un alimento, un ingrediente…), o null")
+    campo: str | None = Field(default=None, description="Qué parte de lo nombrado cambia, si la acción lo pide; o null")
+    valor: float | None = Field(default=None, description="El valor nuevo que dice, como número; o null")
+    valores: list[float] | None = Field(default=None, description="Varios valores nuevos, si los dice; o null")
+    texto: str | None = Field(default=None, description="Un texto nuevo, o lo que pide si accion es otra; o null")
+    cantidad: float | None = Field(default=None, description="Una cantidad que dice, o null")
+    unidad: str | None = Field(default=None, description="La unidad de valor o de cantidad, como diga la lista; o null")
+    kcal_estimadas: float | None = Field(
+        default=None, description="Kcal estimadas solo de algo NUEVO que no está guardado ni apuntado; o null")
+    lineas: list[LineaInterpretada] | None = Field(default=None, description="Líneas, si la acción las pide; o null")
+    dia: date | None = Field(default=None, description="Día del que habla (AAAA-MM-DD), o null si no dice ninguno")
+    desde: date | None = Field(default=None, description="Desde qué día vale (AAAA-MM-DD), o null")
+    fecha: date | None = Field(default=None, description="Otra fecha que dice (AAAA-MM-DD), o null")
+    antes_dicho: str | None = Field(default=None, description="El valor de antes, solo si la persona lo dice; o null")
+    falta: str | None = Field(
+        default=None, description="Si no entiendes una parte o falta un dato, una frase corta que lo diga; o null")
+
+
+def _todo_requerido_menos_cambios(esquema: dict[str, Any]) -> None:
+    """Every piece is required, as before unit 021; `cambios` may be left out (it then means none)."""
+    esquema["required"] = [p for p in esquema.get("properties", {}) if p != "cambios"]
+
+
 class ListaInterpretada(BaseModel):
     """The whole interpretation of one text: every piece found in it."""
 
-    model_config = ConfigDict(json_schema_extra=_todo_requerido)
+    model_config = ConfigDict(json_schema_extra=_todo_requerido_menos_cambios)
 
     alimentos: list[AlimentoInterpretado]
     peso: PesoInterpretado | None = Field(default=None, description="Peso dicho en el texto, o null")
     objetivo_dia: ObjetivoDiaInterpretado | None = Field(
         default=None, description="Objetivo del día dicho al abrir el día, o null")
     dudosas: list[str] = Field(default_factory=list, description="Frases que no sabes dónde poner")
+    cambios: list[CambioInterpretado] = Field(
+        default_factory=list, description="Cambios de algo que ya existe que pide (regla 14); lista vacía si no hay")
 
 
 Interpretacion = ListaInterpretada  # the name the web uses: one interpretation, all its pieces
@@ -147,11 +205,17 @@ class ErrorInterpretacion(Exception):
     """Claude could not interpret the text (no key, no network, rate limit, refusal…)."""
 
 
-def construir_peticion(texto: str, hoy: date, modelo: str, guardados: list[str] | None = None) -> dict[str, Any]:
-    """The whole request: the fixed instruction, today's date, the saved NAMES (if any) and the text."""
+def construir_peticion(texto: str, hoy: date, modelo: str, guardados: list[str] | None = None,
+                       apuntado: list[str] | None = None, acciones: str | None = None) -> dict[str, Any]:
+    """The whole request: the fixed instruction, today's date, the saved NAMES (if any), the NAMES logged that
+    day (if any, unit 021), the fixed list of actions (if given) and the text."""
     lista = ""
     if guardados:
         lista = "Recetas y alimentos guardados (solo nombres y alias): " + ", ".join(f"«{n}»" for n in guardados) + "\n\n"
+    if apuntado:
+        lista += "Lo apuntado ese día (solo nombres): " + ", ".join(f"«{n}»" for n in apuntado) + "\n\n"
+    if acciones:
+        lista += acciones.strip() + "\n\n"
     return {
         "model": modelo,
         "max_tokens": 16000,
@@ -167,18 +231,30 @@ def construir_peticion(texto: str, hoy: date, modelo: str, guardados: list[str] 
 
 class InterpreteClaude:
     def __init__(self, cliente: Any = None, modelo: str | None = None,
-                 guardados: Callable[[], list[str]] | None = None) -> None:
-        """`guardados()` gives the names and aliases saved right now (`Recetario.nombres`), read on every call."""
+                 guardados: Callable[[], list[str]] | None = None,
+                 apuntado: Callable[[date], list[str]] | None = None,
+                 acciones: Callable[[], str] | None = None) -> None:
+        """`guardados()` gives the names and aliases saved right now (`Recetario.nombres`), read on every call.
+
+        Unit 021: `apuntado(dia)` the NAMES logged on the day of the request and `acciones()` the fixed list of what
+        the assistant knows (`nutricion.asistente`). Both are public attributes, so they can also be set later.
+        """
         self._cliente = cliente
         self.modelo = modelo or os.environ.get("TRIDATA_MODELO_TEXTO") or MODELO_POR_DEFECTO
         self._guardados = guardados
+        self.apuntado = apuntado
+        self.acciones = acciones
 
     def interpretar(self, texto: str, hoy: date) -> ListaInterpretada:
         try:
             if self._cliente is None:
                 self._cliente = anthropic.Anthropic(timeout=30.0)
             nombres = self._guardados() if self._guardados is not None else None
-            respuesta = self._cliente.messages.parse(**construir_peticion(texto, hoy, self.modelo, nombres))
+            apuntado = getattr(self, "apuntado", None)
+            acciones = getattr(self, "acciones", None)
+            respuesta = self._cliente.messages.parse(**construir_peticion(
+                texto, hoy, self.modelo, nombres, apuntado(hoy) if apuntado is not None else None,
+                acciones() if acciones is not None else None))
         except anthropic.AuthenticationError as exc:
             raise ErrorInterpretacion("la clave de la API no es válida") from exc
         except anthropic.RateLimitError as exc:

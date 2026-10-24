@@ -35,6 +35,10 @@
 // Unit 030: the app opens in Hoy (hoy.js paints its four cards from GET /api/hoy); `/`, `#hoy` and reloading in Hoy
 // stay in Hoy. The box and the microphone show in Hoy too: what is dictated there is reviewed in Hoy (the message,
 // the queue and the review move into it while it shows) and confirming refreshes its cards.
+// Unit 021: a change asked in the box («hoy son 15 mil pasos») comes in `cambios` of the interpretation and is shown
+// by asistente.js in a block «Cambios» above the usual pieces, each card confirmed or discarded on its own;
+// «Confirmar y guardar» saves the pieces and never touches the cards, and is not shown when only changes came. The
+// review closes when no list and no card is left to decide (a dictated list of the queue is removed then).
 
 import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
@@ -42,6 +46,7 @@ import { pintarBalance } from "./balance.js";
 import { buscador, cajaElegida, cargarGuardado, cosaGuardada, cuenta, leerOrigen, origenDe, textoReceta, unidadPropia } from "./buscador.js";
 import { pintarRecetas } from "./recetas.js";
 import { cargarHoy, iniciarHoy } from "./hoy.js";
+import { pintarCambios } from "./asistente.js";
 
 const $ = (id) => document.getElementById(id);
 // kcal with a thousands point always («1.040»): es-ES does not group 4 digits by default
@@ -65,7 +70,7 @@ const CLAVE_NIVEL = "tridata.nivel-que-miras"; // a screen preference of this ph
 const PESO_MIN = 30;
 const PESO_MAX = 250;
 
-let revision = null; // { texto, hoy, original, alimentos, peso, objetivo, dudosas, origen?, dicho? }
+let revision = null; // { texto, hoy, original, alimentos, peso, objetivo, dudosas, cambios, conCambios, origen?, dicho? }
 let hoyISO = null; // today, as the server says in every day it sends (unit 016: it moves at midnight)
 let diaVisto = null; // the day on screen (ISO)
 let ultimoDia = null;
@@ -675,7 +680,8 @@ function programarSimulacion() {
 }
 
 async function simularRevision() {
-  if (!revision) { $("simulacion").hidden = true; return; }
+  // unit 021: a review of only changes (or whose pieces are saved) has nothing to eat
+  if (!revision || (revision.conCambios && !hayPiezas())) { $("simulacion").hidden = true; return; }
   const turno = ++turnoSimulacion;
   const alimentos = paraSimular().map(({ anadida, ...a }) => a);
   const { ok, datos } = await api("/api/simular", { alimentos });
@@ -1049,8 +1055,40 @@ function pintarRevision() {
   });
   $("lista").replaceChildren(...tarjetas);
   $("piezas").replaceChildren(...tarjetasPiezas());
+  pintarCambios($("cambios"), revision.cambios, { api, alHecho: cambioHecho, alDecidir: cambioDecidido });
+  // unit 021: with only changes (or once the pieces are saved) there is nothing for «Confirmar y guardar»
+  const soloCambios = revision.conCambios && !hayPiezas();
+  $("revision-piezas").hidden = soloCambios;
   pintarBloqueo();
+  if (soloCambios) $("bloqueo").hidden = true;
   programarSimulacion();
+}
+
+// -- unit 021: the assistant's cards in the review -----------------------------------------------------------------
+
+const hayPiezas = () => Boolean(revision && (revision.alimentos.length || revision.peso || revision.objetivo || revision.dudosas.length));
+
+function sinPiezas() {
+  Object.assign(revision, { alimentos: [], peso: null, objetivo: null, dudosas: [] });
+  revision.original = huella(revision);
+}
+
+// «Hecho» with today's margin, and the day and Hoy painted again (R-65)
+function cambioHecho(datos) {
+  mensaje(datos.hecho, "bien");
+  if (diaVisto === datos.dia.fecha) pintarDia(datos.dia);
+  else cargarDia(diaVisto);
+  if (pestanaActual() === "hoy") cargarHoy();
+}
+
+// A card was decided: with nothing else left to decide the review closes (and its list of the queue goes)
+async function cambioDecidido() {
+  if (!revision) return;
+  if (revision.cambios.length || hayPiezas()) { pintarRevision(); return; }
+  const origen = revision.origen;
+  revision = null;
+  pintarRevision();
+  if (origen) { await cola.borrarLista(origen); await abrirSiguienteLista(); }
 }
 
 // Unit 019 (R5): a saved recipe or ingredient chosen on a review card. What is typed in the other cards is kept;
@@ -1213,8 +1251,9 @@ async function interpretar(evento) {
   mensaje("");
   revision = {
     texto, hoy: fecha ?? hoyISO, alimentos: datos.alimentos, peso: datos.peso ?? null,
-    objetivo: datos.objetivo_dia ?? null, dudosas: datos.dudosas ?? [],
+    objetivo: datos.objetivo_dia ?? null, dudosas: datos.dudosas ?? [], cambios: datos.cambios ?? [],
   };
+  revision.conCambios = revision.cambios.length > 0;
   if (textoDeLista) { // a dictated list Claude could not interpret: it is closed with this review
     revision.origen = textoDeLista.id;
     revision.dicho = textoDeLista.texto;
@@ -1258,6 +1297,17 @@ async function confirmar() {
   mensaje(partes.join(" "), "bien");
   const origen = revision.origen;
   if (!origen || $("texto").value === revision.dicho) $("texto").value = "";
+  if (revision.cambios.length) { // unit 021 (R-72): the pieces are saved, the cards keep waiting
+    sinPiezas();
+    revision.origen = null; // its list of the queue is saved: it goes, so the foods are never saved twice
+    if (origen) await cola.borrarLista(origen);
+    $("confirmar").disabled = false;
+    pintarRevision();
+    if (diaVisto === datos.dia.fecha) pintarDia(datos.dia);
+    else cargarDia(diaVisto);
+    if (pestanaActual() === "hoy") cargarHoy();
+    return;
+  }
   revision = null;
   pintarRevision();
   if (diaVisto === datos.dia.fecha) pintarDia(datos.dia);
@@ -1274,6 +1324,14 @@ $("descarte-no").addEventListener("click", () => preguntarDescarte(false));
 $("descarte-si").addEventListener("click", async () => {
   const origen = revision && revision.origen;
   preguntarDescarte(false);
+  if (revision && revision.cambios.length) { // unit 021: the list goes, the cards keep waiting
+    sinPiezas();
+    revision.origen = null;
+    pintarRevision();
+    mensaje("Lista descartada: no se ha guardado nada. Los cambios siguen esperando.");
+    if (origen) await cola.borrarLista(origen);
+    return;
+  }
   revision = null;
   pintarRevision();
   mensaje("Lista descartada: no se ha guardado nada.");
@@ -1492,7 +1550,9 @@ async function abrirLista(id) {
   revision = {
     texto: lista.texto, hoy: lista.fecha, alimentos: i.alimentos, peso: i.peso ?? null,
     objetivo: i.objetivo_dia ?? null, dudosas: i.dudosas ?? [], origen: lista.id, dicho: lista.texto,
+    cambios: i.cambios ?? [], // unit 021 (R-73): a change dictated without PC waits here with its list
   };
+  revision.conCambios = revision.cambios.length > 0;
   revision.original = huella(revision);
   $("confirmar").disabled = false;
   irAPestanaHoy();

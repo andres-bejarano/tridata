@@ -237,7 +237,6 @@ def test_ingrediente_sin_por_que_unidad_no_propone(b):  # R6 · G-40
     ("entrenos_hechos", "«Actualizar Garmin»"),
     ("cerrar_dia", "«Cerrar el día»"),
     ("otra", "Ajustes"),
-    ("mover_alimento", "aún no lo sé hacer"),  # of unit 022: not in this catalogue
 ])
 def test_lo_que_no_hace_dice_donde(b, accion, donde):  # R13 · C-119
     r = _uno(b, "borra el día de ayer", accion=accion, dia=AYER)

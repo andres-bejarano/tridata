@@ -18,7 +18,8 @@ from starlette.testclient import TestClient
 
 from tridata.ia import CambioInterpretado, ListaInterpretada
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, ObjetivosDia, RegistroComidas, RegistroPeso
-from tridata.nutricion.asistente import Contexto, Peticion, catalogo, confirmar, proponer, rehacer, texto_acciones
+from tridata.nutricion.asistente import (Cambiado, Contexto, Peticion, catalogo, confirmar, proponer, rehacer,
+                                         texto_acciones)
 from tridata.nutricion.recetas import Recetario
 from tridata.web import crear_app
 
@@ -93,7 +94,11 @@ def test_anadir_una_carrera(b):  # unit 032, R8: «apúntame esa carrera en Ajus
     assert t["tipo"] == "propuesta"
     assert t["texto"] == "Voy a añadir la carrera 10K del río el 2026-12-06, con 2 días de mantenimiento antes"
     confirmar(t, b.ctx)
-    nueva = next(c for c in b.ajustes.carreras() if c.nombre == "10K del río")
+    with pytest.raises(Cambiado):  # the same card confirmed twice does not add it twice
+        confirmar(t, b.ctx)
+    iguales = [c for c in b.ajustes.carreras() if c.nombre == "10K del río"]
+    assert len(iguales) == 1
+    nueva = iguales[0]
     assert nueva.fecha == date(2026, 12, 6) and nueva.dias_mantenimiento == 2
 
 

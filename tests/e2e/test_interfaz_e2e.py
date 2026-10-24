@@ -135,7 +135,7 @@ def test_lista_del_dia(servidor, abrir):  # R4
     _listo(p)
     expect(p.locator("#t-comido")).to_contain_text("Tu día")
     expect(p.locator("#t-comido")).to_contain_text("760 kcal comidas")
-    assert _textos(p.locator("#lista-dia .subtitulo")) == ["Comido", "Planeado"]
+    assert _textos(p.locator("#lista-dia .seccion-cab .seccion-nombre")) == ["Sin sección"]  # unit 035
     comido, planeado = _filas(p, "comido"), _filas(p, "planeado")
     assert _textos(comido.locator(".que strong")) == ["Avena", "Arroz con pollo"]
     assert _textos(planeado.locator(".que strong")) == ["Salmón al horno", "Fruta"]

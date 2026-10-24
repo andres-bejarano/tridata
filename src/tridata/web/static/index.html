@@ -132,12 +132,14 @@
         <p id="dicho" class="dicho" hidden></p>
         <p id="dia-grabacion" class="marca alerta" hidden></p>
         <p class="suave">Revísalo: corrige lo que haga falta y confirma. Hasta entonces no se guarda nada.</p>
+        <!-- unit 021: the assistant's cards (asistente.js), each confirmed or discarded on its own -->
+        <div id="cambios" class="cambios" hidden></div>
         <div id="piezas"></div>
         <div id="simulacion" class="tarjeta simulacion" hidden></div>
         <div id="lista"></div>
         <button id="anadir-revision" type="button" class="anadir">Añadir alimento</button>
         <p id="bloqueo" class="aviso" hidden></p>
-        <div class="acciones">
+        <div id="revision-piezas" class="acciones">
           <button id="confirmar" type="button" class="principal">Confirmar y guardar</button>
           <button id="descartar" type="button">Descartar</button>
         </div>
@@ -264,9 +266,9 @@
   <!-- ================= ABAJO: CAJA + PESTAÑAS ================= -->
   <div id="abajo" class="abajo">
     <form id="entrada" class="caja">
-      <label for="texto" class="oculto">¿Qué has comido o vas a comer? También tu peso o «nuevo día…»</label>
+      <label for="texto" class="oculto">¿Qué has comido o vas a comer? También tu peso, «nuevo día…» o un cambio («hoy son 15 mil pasos»)</label>
       <div class="texto-caja">
-        <textarea id="texto" rows="1" placeholder="Comida, «peso 72,4» o «nuevo día…»" required></textarea>
+        <textarea id="texto" rows="1" placeholder="Comida, «peso 72,4», «nuevo día…» o un cambio" required></textarea>
         <button id="enviar" type="submit" class="enviar" aria-label="Interpretar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
       </div>
       <button id="grabar" type="button" class="micro" aria-label="Grabar lo que has comido">

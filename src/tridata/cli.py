@@ -847,6 +847,7 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
 
         from .ia import InterpreteClaude, TranscriptorWhisper
         from .nutricion import Ajustes, ObjetivosDia, Recetario, RegistroComidas, RegistroPeso
+        from .nutricion.asistente import nombres_apuntados, texto_acciones
         from .web import crear_app
     except ImportError as exc:
         print(f"Missing the `app` extra ({exc}). Install it: pip install -e '.[app]'", file=sys.stderr)
@@ -871,8 +872,12 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
     else:
         print("Aviso: dictado desactivado: instala el extra voz (pip install -e '.[voz]').", file=sys.stderr)
     # Unit 011: Claude gets the NAMES and aliases of the saved recipes and fixed foods, read on every call.
+    # Unit 021: and the NAMES logged on the day of the request and the fixed list of the assistant's actions.
     recetario = Recetario(db_path)
-    app = crear_app(RegistroComidas(db_path), InterpreteClaude(guardados=recetario.nombres), ajustes,
+    registro = RegistroComidas(db_path)
+    interprete = InterpreteClaude(guardados=recetario.nombres)
+    interprete.apuntado, interprete.acciones = nombres_apuntados(registro), texto_acciones
+    app = crear_app(registro, interprete, ajustes,
                     pesos=RegistroPeso(db_path), objetivos=ObjetivosDia(db_path),
                     store=store, actualizar_garmin=_actualizador_garmin(store), transcriptor=transcriptor,
                     recetario=recetario)

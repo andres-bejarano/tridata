@@ -32,7 +32,8 @@
     POST /api/dia/objetivo        today or a future day: {"fecha"? (today by default), "porcentaje"?, "niveles"?,
                                   "previsto"?: {"actividad_id", "minutos"} | null}; changes `objetivo_dia` of that
                                   day, never the plan (R-16, R-18), and returns it recomputed. Unit 034: a past day
-                                  or a date that is not one is 422 and changes nothing
+                                  or a date that is not one is 422 and changes nothing. Unit 021: also "pasos"?
+                                  (0 to 50,000; null: the default steps of Ajustes)
     GET  /api/actividades-recientes  activities of the last 14 days, to choose the planned training
     POST /api/simular             {"alimentos": [...]} reviewed list -> margins and bar if eaten, and
                                   how much of each food fits; saves NOTHING (R-17, REC-2)
@@ -89,6 +90,11 @@ Every Balance route sends only totals (no food, no names) and computes each day 
 same `resumen_completo` as /api/dia. Unit 017 also adds `barras` (the 30 days, by day) to /api/peso.
 
 Unit 016: every day the screen gets also says `hoy` (today on the server), so the page sees midnight pass.
+
+Unit 021 (the assistant that acts, REC-12): /api/interpretar and /api/dictado also bring `cambios`, one result per
+change Claude understood (`nutricion.asistente.proponer` with «hoy» = the day of the request): a card «Voy a …», a
+choice between candidates or a `no` that says why; still nothing is saved (R-1). Confirming, correcting and
+discarding a card are the routes of `web/asistente.py` (/api/asistente/*); /api/confirmar does not touch them.
 
 Unit 018 (R-91): today's day also brings `garmin_sync` = `{ok_en, fallo_en, fallo_motivo, aviso, texto}`
 (`sync.aviso_sync` with the clock `ahora`); any other day brings it as null.
@@ -153,10 +159,12 @@ from ..nutricion.balance import (
 )
 from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
 from ..nutricion.margen import cabe_de_receta
+from ..nutricion.asistente import Contexto as ContextoAsistente, Peticion, proponer as proponer_cambios
 from ..nutricion.recetas import ErrorDatos, _numero
 from ..hoy import como_llegas, entreno, texto_sync
 from ..storage import DataStore
 from ..sync import MOTIVOS, SyncEnMarcha, aviso_sync, cerrojo_sync
+from .asistente import rutas as rutas_asistente
 from .recetas import rutas as rutas_recetas
 
 log = logging.getLogger(__name__)
@@ -327,6 +335,10 @@ def crear_app(
             return []
         dia_hoy = hoy()  # today's own activities already count as done: they are not offered
         return store.activities_between(dia_hoy - timedelta(days=DIAS_RECIENTES), dia_hoy - timedelta(days=1))
+
+    # unit 021: what the assistant's actions read and change, the same repositories as the screens by hand
+    asistente = ContextoAsistente(registro=registro, objetivos=objetivos, ajustes=ajustes, pesos=pesos,
+                                  recetario=recetario, hoy=hoy, store=store, cierres=cierres, recientes=_recientes)
 
     def _dia(fecha: date) -> dict:
         """The day as the screen shows it: `nutricion.dia.resumen_completo` (unit 015), the same nutricion.md uses."""
@@ -631,9 +643,14 @@ def crear_app(
         return JSONResponse({"semana": _vista_semana(dia_hoy), "dia": _dia(dia_hoy)})
 
     async def _interpretacion(texto: str, dia: date) -> dict:
-        """What /api/interpretar answers for `texto` with «hoy» = `dia`. Raises ErrorInterpretacion."""
+        """What /api/interpretar answers for `texto` with «hoy» = `dia`. Raises ErrorInterpretacion.
+
+        Unit 021: plus `cambios`, the cards of what Claude understood as changes, proposed with the day `dia`."""
         resultado = await run_in_threadpool(interprete.interpretar, texto.strip(), dia)
-        return {"texto": texto, **_piezas(resultado, recetario.resolver)}
+        piezas = _piezas(resultado, recetario.resolver)
+        cambios = getattr(resultado, "cambios", None) or []
+        tarjetas = await run_in_threadpool(proponer_cambios, list(cambios), asistente, Peticion(texto=texto, fecha=dia))
+        return {"texto": texto, **piezas, "cambios": tarjetas}
 
     async def interpretar(request: Request) -> Response:
         cuerpo = await _cuerpo(request) or {}
@@ -977,5 +994,6 @@ def crear_app(
         Route("/api/alimento/{id:int}/borrar", borrar, methods=["POST"]),
         Route("/api/alimento/{id:int}/comido", comido, methods=["POST"]),
         *rutas_recetas(recetario, hoy, registro),
+        *rutas_asistente(asistente, _dia),
         Mount("/static", StaticFiles(directory=ESTATICOS), name="static"),
     ])

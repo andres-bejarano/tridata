@@ -11,6 +11,9 @@ losing the rest. Levels: 1 to 5, each −50..+50 %; every change replaces the on
 
 Unit 018 extends it again (no new table): column `repartido`, set by «Aplicar» of the Balance spread
 (`cambiar(dia, porcentaje=…, repartido=True)`); any other change of the % of that day, or `guardar`, clears it.
+
+Unit 021: `cambiar(dia, pasos=…)` changes only the planned steps of that day (`None`: back to the default steps
+of Ajustes), checked as `objetivo_valido` does (`pasos_validos`); the assistant applies its card with it.
 """
 from __future__ import annotations
 
@@ -29,7 +32,7 @@ PORCENTAJE = (-50, 50)  # the same range as the plan target in Ajustes
 PASOS = (0, 50_000)
 NIVELES_MAX = 5
 CAMPOS = ("tipo", "porcentaje", "niveles", "entreno", "pasos")
-CAMBIABLES = ("porcentaje", "niveles", "previsto")
+CAMBIABLES = ("porcentaje", "niveles", "previsto", "pasos")
 _COLUMNAS = "dia, tipo, porcentaje, niveles, entreno, pasos, previsto, repartido, creado"
 
 _SCHEMA = """
@@ -100,12 +103,19 @@ def objetivo_valido(datos: Mapping[str, Any]) -> dict | None:
         if niveles is not None and len(niveles) > NIVELES_MAX:
             raise ValueError(f"los niveles del día son como mucho {NIVELES_MAX}")
     entreno = _texto(datos.get("entreno"), "el entreno previsto", 200)
-    pasos_n = _numero(datos.get("pasos"), "los pasos previstos")
+    limpio = {"tipo": tipo.lower() if tipo else None, "porcentaje": porcentaje, "niveles": niveles,
+              "entreno": entreno, "pasos": pasos_validos(datos.get("pasos"))}
+    return limpio if any(v is not None for v in limpio.values()) else None
+
+
+def pasos_validos(valor: Any) -> int | None:
+    """The planned steps of a day: a whole number from 0 to 50,000, or None. `ValueError` says what is wrong.
+
+    The one check of the screen of the day, of «nuevo día…» and of the assistant (unit 021, G-39)."""
+    pasos_n = _numero(valor, "los pasos previstos")
     if pasos_n is not None and (not pasos_n.is_integer() or not PASOS[0] <= pasos_n <= PASOS[1]):
         raise ValueError(f"los pasos previstos tienen que ser un número entero entre {PASOS[0]} y {PASOS[1]}")
-    limpio = {"tipo": tipo.lower() if tipo else None, "porcentaje": porcentaje, "niveles": niveles,
-              "entreno": entreno, "pasos": int(pasos_n) if pasos_n is not None else None}
-    return limpio if any(v is not None for v in limpio.values()) else None
+    return int(pasos_n) if pasos_n is not None else None
 
 
 class ObjetivosDia:
@@ -167,7 +177,8 @@ class ObjetivosDia:
         return datos
 
     def cambiar(self, dia: date, *, repartido: bool = False, **campos: Any) -> dict:
-        """Change the %, the levels and/or the planned training of `dia`, keeping the rest (unit 008).
+        """Change the %, the levels, the planned training and/or the planned steps of `dia`, keeping the rest (unit 008;
+        the steps, unit 021).
 
         Each one given replaces the one before for that day (`None` clears it: the plan's %, the
         default levels, no planned training). Everything is checked first: a `ValueError` changes nothing.
@@ -188,6 +199,8 @@ class ObjetivosDia:
             valores["niveles"] = None if campos["niveles"] is None else json.dumps(niveles_validos(campos["niveles"]))
         if "previsto" in campos:
             valores["previsto"] = None if campos["previsto"] is None else json.dumps(previsto_valido(campos["previsto"]))
+        if "pasos" in campos:
+            valores["pasos"] = pasos_validos(campos["pasos"])
         ahora = datetime.now().isoformat(timespec="seconds")
         nombres = list(valores)
         with self._connect() as conn:

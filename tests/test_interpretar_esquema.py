@@ -50,3 +50,15 @@ def test_varios_valores_viajan_en_un_texto_y_vuelven_a_ser_numeros():
     assert _cambio_enviado()["properties"]["valores"].get("type") == "string"
     cambio = CambioInterpretado.model_validate({"accion": "niveles_dia", "valores": "-10; -20;0"})
     assert cambio.valores == [-10, -20, 0]
+
+
+def test_un_numero_mal_escrito_no_tumba_la_interpretacion():
+    # Revisión 1: «1,5», «arroz» solo o «-10;a» no deben hacer fallar toda la respuesta.
+    cambio = CambioInterpretado.model_validate({
+        "accion": "nueva_receta", "valores": "-10;a;2,5", "lineas": ["1,5|g|arroz|", "arroz", "mucho|g|sal|unas"]})
+    assert cambio.valores == [-10, 2.5]
+    assert cambio.lineas == [
+        LineaInterpretada(nombre="arroz", cantidad=1.5, unidad="g", kcal_estimadas=None),
+        LineaInterpretada(nombre="arroz", cantidad=None, unidad=None, kcal_estimadas=None),
+        LineaInterpretada(nombre="sal", cantidad=None, unidad="g", kcal_estimadas=None),
+    ]

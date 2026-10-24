@@ -29,8 +29,10 @@
     GET  /api/peso                the weights of the 30 days up to ?hasta=AAAA-MM-DD (default today), the
                                   7-day mean of each of those days that has one and the weight goal
                                   (unit 010); writes nothing
-    POST /api/dia/objetivo        today only: {"porcentaje"?, "niveles"?, "previsto"?: {"actividad_id",
-                                  "minutos"} | null}; changes `objetivo_dia`, never the plan (R-16, R-18)
+    POST /api/dia/objetivo        today or a future day: {"fecha"? (today by default), "porcentaje"?, "niveles"?,
+                                  "previsto"?: {"actividad_id", "minutos"} | null}; changes `objetivo_dia` of that
+                                  day, never the plan (R-16, R-18), and returns it recomputed. Unit 034: a past day
+                                  or a date that is not one is 422 and changes nothing
     GET  /api/actividades-recientes  activities of the last 14 days, to choose the planned training
     POST /api/simular             {"alimentos": [...]} reviewed list -> margins and bar if eaten, and
                                   how much of each food fits; saves NOTHING (R-17, REC-2)
@@ -194,6 +196,17 @@ def _dia_de_la_lista(valor: Any, hoy: date) -> date:
     if dia > hoy:
         raise ValueError("la lista es de un día que aún no ha llegado")
     return dia
+
+
+def _fecha_ajustable(valor: Any, hoy: date) -> date | None:
+    """Unit 034 (R4): the day whose objective may change, today or one that has not come yet; None otherwise."""
+    if not isinstance(valor, str):
+        return None
+    try:
+        fecha = date.fromisoformat(valor)
+    except ValueError:
+        return None
+    return fecha if fecha >= hoy else None
 
 
 async def _cuerpo(request: Request) -> dict | None:
@@ -793,11 +806,18 @@ def crear_app(
         return JSONResponse({"alimento": marcado, "dia": _dia(date.fromisoformat(marcado["dia"]))})
 
     async def cambiar_objetivo(request: Request) -> Response:
-        """Today's %, levels and planned training; checked first, so a bad value changes nothing (R6)."""
+        """The %, levels and planned training of today or a future day (unit 034); checked first, so a bad value
+        changes nothing (R6)."""
         cuerpo = await _cuerpo(request)
         if not cuerpo:
             return _error("No hay nada que cambiar en el objetivo de hoy.", 400)
         campos = dict(cuerpo)
+        dia_hoy = hoy()
+        fecha = _fecha_ajustable(campos.pop("fecha"), dia_hoy) if "fecha" in campos else dia_hoy
+        if fecha is None:  # unit 034 (R4): a past day or a date that is not one
+            return _error("No se ha cambiado nada: solo se puede ajustar hoy o un día que aún no ha llegado.", 422)
+        if not campos:
+            return _error("No hay nada que cambiar en el objetivo del día.", 400)
         if isinstance(campos.get("previsto"), dict):
             elegido = campos["previsto"]
             actividad = next((a for a in _recientes() if a.get("activity_id") == elegido.get("actividad_id")), None)
@@ -810,10 +830,10 @@ def crear_app(
                 return _error(f"No se ha cambiado nada: {exc}.", 400)
             campos["previsto"] = {**_actividad_corta(actividad), "minutos": elegido["minutos"], "kcal": kcal}
         try:
-            guardado = objetivos.cambiar(hoy(), **campos)
+            guardado = objetivos.cambiar(fecha, **campos)
         except ValueError as exc:
             return _error(f"No se ha cambiado nada: {exc}.", 400)
-        return JSONResponse({"objetivo_dia": guardado, "dia": _dia(hoy())})
+        return JSONResponse({"objetivo_dia": guardado, "dia": _dia(fecha)})
 
     async def actividades_recientes(request: Request) -> Response:
         recientes = sorted(_recientes(), key=lambda a: (a.get("activity_date") or "", a.get("activity_id") or ""),

@@ -521,21 +521,33 @@ function pintarDesglose(dia) {
 
 const avisar = (id, texto) => { $(id).textContent = texto; $(id).hidden = !texto; };
 
-// The sheet «Ajustes de hoy»: on another day only the level being looked at and the expenditure (R5).
+// A day that has not come yet (unit 034): its objective, levels and planned training can be set too.
+const esFuturo = (fecha) => hoyISO !== null && fecha > hoyISO;
+
+// The sheet «Ajustes de hoy»: today and a future day (unit 034) everything but Garmin only today; a past day only
+// the level being looked at and the expenditure (R5).
 function pintarHoja(dia, esHoy) {
+  const ajustable = esHoy || esFuturo(dia.fecha);
   $("hoja-titulo").textContent = esHoy ? "Ajustes de hoy" : `Ajustes del ${deFecha(dia.fecha)}`;
   $("gasto-titulo").textContent = esHoy ? "Gasto de hoy" : "Gasto del día";
   $("gasto-total").textContent = `${kcalEnteras(dia.gasto.kcal)} kcal`;
   $("gasto").textContent = `${dia.gasto.origen === "garmin" ? "Gasto" : "Gasto estimado"} ${kcal(dia.gasto.kcal)}: ${dia.gasto.explicacion}.`;
   pintarDesglose(dia);
   pintarSegmentado(dia);
-  for (const id of ["abrir-niveles", "objetivo-hoy", "previsto", "bloque-garmin"]) $(id).hidden = !esHoy;
-  if (!esHoy) { $("niveles").hidden = true; $("garmin-estado").textContent = ""; return; }
+  for (const id of ["abrir-niveles", "objetivo-hoy", "previsto"]) $(id).hidden = !ajustable;
+  $("bloque-garmin").hidden = !esHoy;
+  if (!esHoy) $("garmin-estado").textContent = "";
+  if (!ajustable) { $("niveles").hidden = true; return; }
+  $("objetivo-titulo").textContent = esHoy ? "Objetivo de hoy" : "Objetivo del día";
+  $("objetivo-pct-etiqueta").textContent = esHoy ? "% de hoy (con signo)" : "% del día (con signo)";
+  $("objetivo-guardar").textContent = esHoy ? "Cambiar el de hoy" : "Cambiar el del día";
+  $("previsto-quitar").textContent = esHoy ? "Ya hecho" : "Quitar";
   const o = dia.objetivo;
   const cual = o.porcentaje === 0 ? "Mantenimiento" : `${signo(o.porcentaje)} %`;
-  $("objetivo-valor").textContent = `${cual} · ${o.origen === "dia" ? "hoy" : o.origen === "plan" ? "plan" : "sin plan"}`;
+  $("objetivo-valor").textContent = `${cual} · ${o.origen === "dia" ? (esHoy ? "hoy" : "del día") : o.origen === "plan" ? "plan" : "sin plan"}`;
   $("objetivo-kcal").textContent = `${kcalEnteras(o.kcal)} kcal de ${kcalEnteras(dia.gasto.kcal)} de gasto.`;
-  $("objetivo-actual").textContent = o.texto;
+  // the server words it for today (margen.py); another day says «del día» (unit 034, R5)
+  $("objetivo-actual").textContent = esHoy ? o.texto : o.texto.replace(/^Objetivo de hoy/, "Objetivo del día");
   const dicho = textoObjetivo(dia.objetivo_dia, dia.gasto);
   $("objetivo-dia").textContent = dicho;
   $("objetivo-dia").hidden = !dicho;
@@ -568,7 +580,8 @@ function pintarSegmentado(dia) {
 
 async function cambiarObjetivo(cuerpo, idError) {
   avisar(idError, "");
-  const { ok, datos } = await api("/api/dia/objetivo", cuerpo);
+  // unit 034: to the day being looked at (today or a future one), never always today
+  const { ok, datos } = await api("/api/dia/objetivo", { ...cuerpo, fecha: diaVisto ?? hoyISO });
   if (!ok) { avisar(idError, datos.error ?? "No se ha podido cambiar."); return false; }
   pintarDia(datos.dia);
   return true;
@@ -622,7 +635,7 @@ function enlazarControles() {
   conSigno($("objetivo-pct"));
   $("objetivo-guardar").addEventListener("click", () => {
     const n = comoNumero($("objetivo-pct").value.replace("−", "-"));
-    if (n === null || Number.isNaN(n)) { avisar("objetivo-error", "Escribe el % de hoy (por ejemplo −20, 0 o 10)."); return; }
+    if (n === null || Number.isNaN(n)) { avisar("objetivo-error", `Escribe el % ${diaVisto === hoyISO ? "de hoy" : "del día"} (por ejemplo −20, 0 o 10).`); return; }
     cambiarObjetivo({ porcentaje: n }, "objetivo-error");
   });
   $("objetivo-mantenimiento").addEventListener("click", () => cambiarObjetivo({ porcentaje: 0 }, "objetivo-error"));

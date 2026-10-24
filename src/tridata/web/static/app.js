@@ -40,6 +40,9 @@
 // «Confirmar y guardar» saves the pieces and never touches the cards, and is not shown when only changes came. The
 // review closes when no list and no card is left to decide (a dictated list of the queue is removed then).
 // Unit 031: the Fitness tab is painted by fitness.js (GET /api/fitness) every time it is entered.
+// Unit 032: the Asistente tab is conversaciones.js: `#asistente` its list, `#asistente/N` one conversation. Inside a
+// conversation the box and the microphone are the chat's (S-37): what is written goes to the conversation (never to
+// /api/interpretar), what is dictated is transcribed into the box, and «Pensar más» shows next to them.
 
 import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
@@ -49,6 +52,7 @@ import { pintarRecetas } from "./recetas.js";
 import { cargarHoy, iniciarHoy } from "./hoy.js";
 import { pintarCambios } from "./asistente.js";
 import { cargarFitness, iniciarFitness } from "./fitness.js";
+import { dictarAlChat, enConversacion, enviarAlChat, iniciarConversaciones, mostrarAsistente } from "./conversaciones.js";
 
 const $ = (id) => document.getElementById(id);
 // kcal with a thousands point always («1.040»): es-ES does not group 4 digits by default
@@ -1239,6 +1243,10 @@ async function interpretar(evento) {
   evento.preventDefault();
   const texto = $("texto").value;
   if (!texto.trim()) return;
+  if (pestanaActual() === "asistente" && enConversacion()) { // unit 032 (S-37): the box of the chat
+    if (enviarAlChat(texto.trim())) { $("texto").value = ""; $("texto").dispatchEvent(new Event("input")); }
+    return;
+  }
   irAPestanaHoy(); // the review lives in Hoy
   $("enviar").disabled = true;
   mensaje("Interpretando…");
@@ -1351,6 +1359,7 @@ enlazarControles();
 enlazarHoja();
 iniciarHoy({ api, alActualizarDia: (dia) => { if (diaVisto === dia.fecha) pintarDia(dia); } });
 iniciarFitness({ api }); // unit 031: the Fitness tab
+iniciarConversaciones({ api, alHecho: (datos) => { if (datos.dia && diaVisto === datos.dia.fecha) pintarDia(datos.dia); } });
 enlazarPestanas();
 vigilarAltoEntrada();
 $("fecha").textContent = deFecha(cola.fechaLocal()); // before the PC answers, or if it never does
@@ -1372,7 +1381,7 @@ function enlazarHoja() {
 
 function pestanaActual() {
   if (location.hash === "#peso") history.replaceState(null, "", "#balance"); // unit 027: an old bookmark
-  const h = location.hash.slice(1);
+  const h = location.hash.slice(1).split("/")[0]; // unit 032: «#asistente/N» is a conversation of Asistente
   if (!h) return "hoy"; // unit 030 (R1): the app opens in Hoy
   return SITIOS.includes(h) ? h : "dia"; // unit 029 (R6): an address that does not exist opens Nutrición › Día
 }
@@ -1419,11 +1428,17 @@ function mostrarPestana() {
     if (a.dataset.parte === actual) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
-  // unit 029 (S-16) and unit 030 (R8): the box and the microphone only where the day is logged: Día and Hoy
-  $("entrada").hidden = actual !== "dia" && actual !== "hoy";
+  // unit 029 (S-16) and unit 030 (R8): the box and the microphone only where the day is logged: Día and Hoy;
+  // unit 032 (S-37): and inside a conversation, where they are the chat's
+  const chat = actual === "asistente" && enConversacion();
+  $("entrada").hidden = actual !== "dia" && actual !== "hoy" && !chat;
+  $("pensar").hidden = !chat;
+  $("texto").placeholder = chat ? "Escribe o dicta tu pregunta" : "Comida, «peso 72,4», «nuevo día…» o un cambio";
+  $("grabar").setAttribute("aria-label", chat ? "Dictar tu pregunta" : "Grabar lo que has comido");
   colocarDictado(actual);
   if (actual === "hoy" && pestanaVista !== "hoy") cargarHoy();
   if (actual === "fitness" && pestanaVista !== "fitness") cargarFitness(); // unit 031: painted on entering
+  if (actual === "asistente") mostrarAsistente(); // unit 032: the list or a conversation, every time
   if ($("hoja").open) $("hoja").close();
   if (actual === "dia") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
   else document.title = `TriData · ${mayuscula(actual)}`;
@@ -1463,14 +1478,16 @@ async function alternarGrabacion() {
   if (!puedeGrabar()) { mensaje("Este navegador no puede grabar audio.", "error"); return; }
   const boton = $("grabar");
   const tiempo = $("grabar-tiempo");
+  const alChat = pestanaActual() === "asistente" && enConversacion(); // unit 032: dictating a question
   try {
     grabacion = await grabar({
       alSegundo: (s) => { tiempo.textContent = reloj(s); tiempo.hidden = false; },
       alTerminar: async ({ audio, tipo, segundos }) => {
         grabacion = null;
         tiempo.hidden = true;
-        boton.setAttribute("aria-label", "Grabar lo que has comido");
+        boton.setAttribute("aria-label", alChat ? "Dictar tu pregunta" : "Grabar lo que has comido");
         boton.classList.remove("grabando");
+        if (alChat) { await dictarAlChat(audio, tipo); return; } // transcribed into the box, never interpreted
         if (segundos >= MAX_SEGUNDOS) mensaje("La grabación ha llegado a 2 minutos y ha parado sola.");
         try {
           esperada = await cola.guardarGrabacion(audio, tipo);
@@ -1482,7 +1499,7 @@ async function alternarGrabacion() {
     });
     boton.classList.add("grabando");
     boton.setAttribute("aria-label", "Parar la grabación");
-    mensaje("Grabando… toca el micrófono otra vez al acabar (como mucho 2 minutos).");
+    if (!alChat) mensaje("Grabando… toca el micrófono otra vez al acabar (como mucho 2 minutos).");
   } catch (error) {
     grabacion = null;
     const sinPermiso = error && (error.name === "NotAllowedError" || error.name === "SecurityError");

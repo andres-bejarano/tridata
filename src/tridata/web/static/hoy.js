@@ -1,7 +1,8 @@
 // Unit 030 (REC-18 of `ver-dia-movil`): Hoy at a glance. Plain ES module, no build step.
 // Four cards from ONE answer, GET /api/hoy: Comida (eaten and what is left at the marked level, the same figures as
 // Nutrición › Día), Entreno (today's activities), Cómo llegas (sleep, resting HR, HRV with its 7-day mean and TSB,
-// plus the hour of the last good sync and «↻ Actualizar Garmin») and Asistente (empty until unit 032).
+// plus the hour of the last good sync and «↻ Actualizar Garmin») and Asistente (unit 032: the beginning of the last
+// answer; tapping it opens that conversation, R-97, R-98).
 // A Garmin datum that has not arrived says «aún no ha llegado» and one Garmin gave half-done «⚠ incompleto»: never
 // a 0 (G-47). Tapping a card goes to its place. The button reuses POST /api/garmin/actualizar: while it runs it
 // says so (Q-13); a failure says why with the words of the routine's warning and leaves data and hour as they were.
@@ -48,7 +49,17 @@ function pintarHoy(h) {
   pintarComoLlegas(h.como_llegas);
   motivos = h.garmin_sync.motivos ?? {};
   $("hoy-garmin-hora").textContent = h.garmin_sync.texto_hora;
-  $("hoy-asistente-texto").textContent = h.asistente ?? "Aún no has hablado con el asistente.";
+  pintarAsistente(h.asistente);
+}
+
+// Unit 032 (R11): the last answer, and the card and its link take to its conversation.
+function pintarAsistente(a) {
+  const tarjeta = $("hoy-asistente");
+  const destino = a ? `asistente/${a.conversacion_id}` : "asistente";
+  tarjeta.dataset.ir = destino;
+  tarjeta.querySelector(".ver-mas").setAttribute("href", `#${destino}`);
+  $("hoy-asistente-texto").textContent = a ? a.texto : "Aún no has hablado con el asistente.";
+  $("hoy-asistente-texto").title = a ? a.titulo : "";
 }
 
 function pintarComida(c) {

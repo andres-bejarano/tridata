@@ -74,10 +74,43 @@
       <h2 class="titulo-bloque">Recuperación</h2>
       <div id="fitness-recuperacion" class="datos recuperacion"></div>
     </section>
-    <!-- ================= ASISTENTE (unit 029: what it will bring; 032 fills it) ================= -->
-    <section id="asistente" class="pantalla pronto" data-pestana="asistente" aria-label="Asistente" hidden>
+    <!-- ================= ASISTENTE (unit 032: conversaciones.js; #asistente the list, #asistente/N one conversation) ================= -->
+    <section id="asistente" class="pantalla" data-pestana="asistente" aria-label="Asistente" hidden>
       <h1 class="titulo-pantalla">Asistente</h1>
-      <p class="tarjeta llega-pronto">Muy pronto, aquí: tus conversaciones con el asistente.</p>
+      <p id="conv-aviso" role="status" aria-live="polite" hidden></p>
+      <div id="conv-lista-vista">
+        <p class="suave intro-asistente">Aquí están tus conversaciones con el asistente. Ve siempre todo tu contexto: comidas, peso, entrenos, sueño, pulso, HRV, tu analítica y tu prueba de esfuerzo.</p>
+        <p id="conv-tope" class="aviso" hidden></p>
+        <ul id="conv-lista" class="tarjeta lista-conversaciones" hidden></ul>
+        <p id="conv-vacia" class="tarjeta conv-vacia">Aún no tienes ninguna. Pregúntale lo que quieras: «¿cómo voy para el 10K del 3 de diciembre?», «¿qué ceno hoy con lo que me queda?» o «¿cómo va mi peso este mes?».</p>
+        <button id="conv-ver-medicos" type="button" class="enlace-boton">Qué sabe de tu analítica y tu prueba de esfuerzo</button>
+        <div id="conv-medicos" class="tarjeta conv-medicos" hidden></div>
+        <button id="conv-nueva" type="button" class="principal conv-nueva">＋ Nueva conversación</button>
+      </div>
+      <div id="conv-chat" hidden>
+        <div class="conv-cabecera">
+          <button id="conv-volver" type="button" class="flecha" aria-label="Volver a tus conversaciones">◀</button>
+          <h2 id="conv-titulo"></h2>
+          <button id="conv-renombrar" type="button" class="icono-boton" aria-label="Cambiar el título">✎</button>
+          <button id="conv-borrar" type="button" class="icono-boton" aria-label="Borrar la conversación">🗑</button>
+        </div>
+        <div id="conv-renombrar-caja" class="tarjeta desplegable" hidden>
+          <label class="campo"><span>Título</span><input id="conv-titulo-nuevo" type="text" autocomplete="off" maxlength="120"></label>
+          <div class="acciones">
+            <button id="conv-renombrar-si" type="button" class="principal">Guardar</button>
+            <button id="conv-renombrar-no" type="button">Cancelar</button>
+          </div>
+        </div>
+        <div id="conv-borrar-caja" class="tarjeta confirmar-borrado" hidden>
+          <p>¿Borrar esta conversación? Se borra entera; tus comidas, tus pesos y las demás conversaciones no se tocan.</p>
+          <div class="acciones">
+            <button id="conv-borrar-si" type="button" class="peligro principal">Sí, borrar</button>
+            <button id="conv-borrar-no" type="button">No</button>
+          </div>
+        </div>
+        <p id="conv-linea" class="tarjeta conv-linea"></p>
+        <div id="conv-mensajes" class="conv-mensajes" aria-live="polite"></div>
+      </div>
     </section>
 
     <!-- ================= NUTRICIÓN: its selector Día · Balance · Recetas (unit 029) ================= -->
@@ -287,6 +320,8 @@
         <textarea id="texto" rows="1" placeholder="Comida, «peso 72,4», «nuevo día…» o un cambio" required></textarea>
         <button id="enviar" type="submit" class="enviar" aria-label="Interpretar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
       </div>
+      <!-- unit 032: in a conversation, «Pensar más» sends the next message with Sonnet -->
+      <button id="pensar" type="button" class="pensar" aria-pressed="false" hidden>Pensar más</button>
       <button id="grabar" type="button" class="micro" aria-label="Grabar lo que has comido">
         <svg class="micro-icono" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg>
         <span id="grabar-tiempo" class="micro-tiempo" hidden></span>

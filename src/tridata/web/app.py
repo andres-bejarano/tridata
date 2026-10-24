@@ -46,7 +46,8 @@
                                   left at the marked level, from the same day as /api/dia), `entreno` (today's
                                   activities), `como_llegas` (sleep, resting HR, HRV and its 7-day mean, TSB, each
                                   with its `estado`, `hoy.py`), `garmin_sync` (/api/dia's plus `texto_hora` and the
-                                  routine's `motivos`) and `asistente` (null until unit 032). Writes nothing new.
+                                  routine's `motivos`) and `asistente` (unit 032: the beginning of the last answer,
+                                  its conversation and title, R-97; null without any). Writes nothing new.
                                   Unit 030 (G-48): «Actualizar Garmin» also takes the routine's lock (`sync.lock`
                                   next to the database): with `tridata sync` running it is the same 409 «en_marcha»,
                                   and it brings at least yesterday and today
@@ -102,6 +103,11 @@ Unit 021 (the assistant that acts, REC-12): /api/interpretar and /api/dictado al
 change Claude understood (`nutricion.asistente.proponer` with «hoy» = the day of the request): a card «Voy a …», a
 choice between candidates or a `no` that says why; still nothing is saved (R-1). Confirming, correcting and
 discarding a card are the routes of `web/asistente.py` (/api/asistente/*); /api/confirmar does not touch them.
+
+Unit 032 (REC-20): the Asistente's conversations are the routes of `web/conversaciones.py` (/api/conversaciones*):
+every conversation sees all the context of this PC (`conversaciones.contexto`), its answer arrives as it is written and
+a change it proposes is a card of the 021. `conversador` (`ia.conversacion.ConversadorClaude`, or a test double),
+`medicos_dir` (the folder of `TRIDATA_MEDICOS_DIR`) and `transcriptor_medico` are given by `tridata web`.
 
 Unit 018 (R-91): today's day also brings `garmin_sync` = `{ok_en, fallo_en, fallo_motivo, aviso, texto}`
 (`sync.aviso_sync` with the clock `ahora`); any other day brings it as null.
@@ -172,7 +178,12 @@ from ..fitness import detalle_actividad, fitness, texto_pulso
 from ..hoy import como_llegas, entreno, texto_sync
 from ..storage import DataStore
 from ..sync import MOTIVOS, SyncEnMarcha, aviso_sync, cerrojo_sync
+from ..conversaciones import Conversaciones
+from ..conversaciones.contexto import Contexto as ContextoConversacion, montar as montar_contexto
+from ..conversaciones.medicos import Medicos
+from ..ia.conversacion import ConversadorClaude
 from .asistente import rutas as rutas_asistente
+from .conversaciones import rutas as rutas_conversaciones
 from .recetas import rutas as rutas_recetas
 
 log = logging.getLogger(__name__)
@@ -314,7 +325,8 @@ def crear_app(
     pesos: RegistroPeso | None = None, objetivos: ObjetivosDia | None = None,
     store: DataStore | None = None, actualizar_garmin: Callable[[date], None] | None = None,
     transcriptor: Any = None, recetario: Recetario | None = None, cierres: Cierres | None = None,
-    ahora: Callable[[], datetime] = datetime.now,
+    ahora: Callable[[], datetime] = datetime.now, conversador: Any = None, medicos_dir: Path | None = None,
+    transcriptor_medico: Any = None,
 ) -> Starlette:
     """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double).
 
@@ -329,6 +341,9 @@ def crear_app(
     `recetario` holds the recipes, fixed foods and pots (unit 011); by default, in the same SQLite.
     `cierres` is the close of the day (unit 014); by default, in the same SQLite with these settings and `store`.
     `ahora` is the clock of the Garmin warning and of the sync record (unit 018).
+    Unit 032: `conversador` answers the Asistente's conversations (by default the Claude one, created lazily: nothing
+    is called until a message is sent); `medicos_dir` is the folder of the medical PDFs (None: the context goes
+    without them and says so) and `transcriptor_medico` reads each one once (by default the Claude one).
     """
     recetario = recetario or Recetario(registro.db_path)
     pesos = pesos or RegistroPeso(registro.db_path)
@@ -347,6 +362,16 @@ def crear_app(
     # unit 021: what the assistant's actions read and change, the same repositories as the screens by hand
     asistente = ContextoAsistente(registro=registro, objetivos=objetivos, ajustes=ajustes, pesos=pesos,
                                   recetario=recetario, hoy=hoy, store=store, cierres=cierres, recientes=_recientes)
+
+    # unit 032: the conversations, what they cost and the medical documents, in the same SQLite
+    conversaciones = Conversaciones(registro.db_path)
+    medicos = Medicos(registro.db_path, medicos_dir, transcriptor_medico,
+                      al_gastar=lambda modelo, uso: conversaciones.apuntar_gasto(ahora(), modelo, uso, "transcripcion"))
+
+    def _contexto_conversacion() -> ContextoConversacion:
+        estado = medicos.al_dia()
+        return montar_contexto(registro=registro, pesos=pesos, ajustes=ajustes, store=store,
+                               transcripciones=medicos.transcripciones(), aviso_medico=estado["aviso"], hoy=hoy())
 
     def _dia(fecha: date) -> dict:
         """The day as the screen shows it: `nutricion.dia.resumen_completo` (unit 015), the same nutricion.md uses."""
@@ -954,7 +979,7 @@ def crear_app(
                 # unit 031 (R8): the TSB with the HR of each day in Ajustes, the same as Fitness
                 "como_llegas": (como_llegas(store, dia_hoy, limites=ajustes.historial_fc().limites)
                                 if store is not None else sin_garmin),
-                "garmin_sync": garmin_sync, "asistente": None}  # unit 032 brings the last answer
+                "garmin_sync": garmin_sync, "asistente": conversaciones.ultima_respuesta()}  # unit 032 (R-97)
 
     async def ver_hoy(request: Request) -> Response:
         await run_in_threadpool(_al_dia)
@@ -1029,5 +1054,7 @@ def crear_app(
         Route("/api/alimento/{id:int}/comido", comido, methods=["POST"]),
         *rutas_recetas(recetario, hoy, registro),
         *rutas_asistente(asistente, _dia),
+        *rutas_conversaciones(conversaciones, conversador if conversador is not None else ConversadorClaude(), medicos,
+                              _contexto_conversacion, asistente, hoy, ahora, transcriptor),
         Mount("/static", StaticFiles(directory=ESTATICOS), name="static"),
     ])

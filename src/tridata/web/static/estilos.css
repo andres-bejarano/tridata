@@ -626,3 +626,41 @@ button.candidato { min-height: 48px; text-align: left; padding: 8px 12px; white-
 .zonas-pulso { display: grid; gap: 6px; }
 .zonas-pulso .fila.dos { margin: 0; }
 .campo select { font: inherit; }
+
+/* -- unit 032: the Asistente's conversations (conversaciones.js), with the variables of unit 010 (light and dark) -- */
+.intro-asistente { margin: -4px 4px 12px; }
+#conv-aviso { margin: 0 4px 10px; }
+#conv-aviso.error { color: var(--error); }
+#conv-aviso.bien { color: var(--bien); }
+.lista-conversaciones { list-style: none; padding: 0; margin: 0 0 12px; overflow: hidden; }
+.lista-conversaciones li + li { border-top: 1px solid var(--borde); }
+button.conversacion { width: 100%; min-height: 64px; display: grid; gap: 2px; text-align: left; padding: 12px 16px; border: 0; border-radius: 0; background: transparent; color: var(--texto); font: inherit; cursor: pointer; }
+.conv-cab { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; min-width: 0; }
+.conv-cab strong { font-size: 1.05rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.conv-cab .suave { margin: 0; flex: none; font-size: .88rem; }
+.conv-ultima { margin: 0; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-vacia { display: block; padding: 16px; color: var(--suave); margin-bottom: 12px; }
+#conv-ver-medicos { display: block; min-height: 44px; margin: 0 4px 8px; }
+.conv-medicos { display: block; padding: 12px 14px; margin-bottom: 12px; }
+.doc-medico + .doc-medico { border-top: 1px solid var(--borde); margin-top: 10px; padding-top: 10px; }
+.doc-medico .valores { margin: 6px 0; padding-left: 1.1em; font-size: .92rem; overflow-wrap: anywhere; }
+button.conv-nueva { position: sticky; bottom: calc(var(--alto-abajo, 80px) + 12px); display: block; margin: 16px 0 0 auto; min-height: 52px; padding: 0 22px; border-radius: 999px; font-size: 1.05rem; font-weight: 700; box-shadow: var(--sombra-micro); }
+.conv-cabecera { display: flex; align-items: center; gap: 6px; margin: 6px 0 10px; }
+.conv-cabecera h2 { flex: 1; min-width: 0; margin: 0; font-size: 1.3rem; overflow-wrap: anywhere; }
+.conv-cabecera .flecha { width: 44px; height: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--acento); font-size: 1.15rem; flex: none; }
+button.icono-boton { width: 44px; height: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; font-size: 1.1rem; flex: none; color: var(--suave); }
+#conv-renombrar-caja, #conv-borrar-caja { display: block; padding: 12px 14px; margin-bottom: 10px; }
+.conv-linea { display: block; padding: 10px 14px; margin: 0 0 12px; color: var(--suave); font-size: .92rem; }
+.conv-mensajes { display: grid; gap: 10px; }
+.burbuja, .burbuja-espera { max-width: 86%; padding: 10px 14px; border-radius: 18px; overflow-wrap: anywhere; }
+.burbuja.andres { justify-self: end; background: var(--acento); color: var(--acento-texto); border-bottom-right-radius: 6px; }
+.burbuja.asistente, .burbuja-espera { justify-self: start; background: var(--tarjeta); border: 1px solid var(--borde); border-bottom-left-radius: 6px; }
+.con-cambios { display: grid; gap: 6px; }
+.con-cambios .burbuja { max-width: 86%; }
+.texto-burbuja { margin: 0; white-space: pre-wrap; }
+.texto-burbuja.escribiendo { color: var(--suave); letter-spacing: .2em; }
+.sin-respuesta-fila { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+.sin-respuesta { font-size: .85rem; font-weight: 650; opacity: .9; }
+.burbuja.andres button.reintentar { min-height: 40px; padding: 0 14px; border-radius: 999px; background: var(--acento-texto); color: var(--acento); border-color: var(--acento-texto); font-weight: 650; }
+button.pensar { flex: none; width: 60px; min-height: 44px; padding: 4px 6px; border-radius: 14px; font-size: .78rem; line-height: 1.1; font-weight: 650; color: var(--suave); }
+button.pensar[aria-pressed="true"] { background: var(--acento-suave); color: var(--acento); border-color: var(--acento); }

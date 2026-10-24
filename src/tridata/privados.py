@@ -4,7 +4,12 @@ It reads from the local database the HR max, HR rest and zone limits saved while
 (`HistorialFC.valores_de_prueba`) and looks for each one as a whole word in the repo — the tracked files and the
 lines added or removed in its whole history (`git log -p`) — and in the logs (`*.log` under the folders given, or
 the files given). It says HOW MANY times they appear, and where (relative file names), and NEVER which value: a
-checker that printed the values would be the leak itself. Unit 032 will add those of the blood test.
+checker that printed the values would be the leak itself.
+
+Unit 032 (R12 · R-119, C-160, G-50): it also looks for the values of the medical transcriptions saved in the same
+database (`conversaciones.medicos.valores_privados`): the blood test and the stress test the Asistente reads. Only
+their distinctive numbers (with decimals, in both spellings, or of 3 digits or more): one or two whole digits appear
+everywhere in a repository and would never let it say 0.
 """
 from __future__ import annotations
 
@@ -14,6 +19,7 @@ from collections import Counter
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
+from .conversaciones.medicos import valores_privados
 from .nutricion.ajustes import historial_fc_de
 
 HISTORIAL = "historial de git"
@@ -67,7 +73,7 @@ def _contar(patron: re.Pattern[str] | None, lineas: Iterable[str]) -> int:
 def comprobar(db_path: Path, repo: Path, registros: Iterable[Path], *, donde: Counter | None = None) -> dict[str, int]:
     """`{valores, repo, registros}`: how many values were looked for and how many times they appear. `donde`, if
     given, gets the count per place (a file of the repo, `historial de git`, or a log's file name)."""
-    valores = {str(v) for v in historial_fc_de(db_path).valores_de_prueba()}
+    valores = {str(v) for v in historial_fc_de(db_path).valores_de_prueba()} | valores_privados(db_path)
     patron = _patron(valores)
     donde = Counter() if donde is None else donde
     if patron is not None:
@@ -91,8 +97,9 @@ def _veces(n: int) -> str:
 def informe(resultado: dict[str, int], donde: Counter) -> str:
     """What the command prints: counts and places, never a value."""
     if not resultado["valores"]:
-        return "No hay valores de una prueba de esfuerzo guardados en Ajustes: nada que buscar."
-    lineas = [f"Valores de la prueba de esfuerzo buscados: {resultado['valores']} (no se muestran).",
+        return ("No hay valores de una prueba de esfuerzo en Ajustes ni de una analítica transcrita: "
+                "nada que buscar.")
+    lineas = [f"Valores privados buscados (prueba de esfuerzo y analítica): {resultado['valores']} (no se muestran).",
               f"Repo (ficheros y {HISTORIAL}): {_veces(resultado['repo'])}.",
               f"Registros: {_veces(resultado['registros'])}."]
     lineas += [f"  - {lugar}: {_veces(n)}" for lugar, n in sorted(donde.items()) if n]

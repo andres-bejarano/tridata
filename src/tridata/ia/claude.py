@@ -183,10 +183,20 @@ def _cambio_compacto(esquema: dict[str, Any]) -> None:
             propiedad["description"] = propiedad.get("description", "").replace("o null", "o vacío")
 
 
+def _numero_enviado(texto: str) -> float | None:
+    """A number Claude wrote as text («1,5» too); anything else is none, so one bad piece never sinks the answer."""
+    try:
+        return float(texto.strip().replace(",", "."))
+    except ValueError:
+        return None
+
+
 def _linea_enviada(texto: str) -> dict[str, Any]:
+    if "|" not in texto:  # just a name
+        return {"nombre": texto.strip(), "cantidad": None, "unidad": None, "kcal_estimadas": None}
     cantidad, unidad, nombre, kcal = (texto.split("|") + ["", "", "", ""])[:4]
-    return {"nombre": nombre.strip(), "cantidad": cantidad.strip() or None, "unidad": unidad.strip() or None,
-            "kcal_estimadas": kcal.strip() or None}
+    return {"nombre": nombre.strip(), "cantidad": _numero_enviado(cantidad), "unidad": unidad.strip() or None,
+            "kcal_estimadas": _numero_enviado(kcal)}
 
 
 class CambioInterpretado(BaseModel):
@@ -204,7 +214,8 @@ class CambioInterpretado(BaseModel):
         if isinstance(datos.get("lineas"), list):
             datos["lineas"] = [_linea_enviada(x) if isinstance(x, str) else x for x in datos["lineas"]]
         if isinstance(datos.get("valores"), str):
-            datos["valores"] = [v.strip() for v in datos["valores"].split(";") if v.strip()] or None
+            numeros = (_numero_enviado(v) for v in datos["valores"].split(";"))
+            datos["valores"] = [n for n in numeros if n is not None] or None
         return datos
 
     accion: str = Field(description='Id de la lista de cambios que sabes proponer, u "otra"')

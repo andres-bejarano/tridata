@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from .exporters import MarkdownExporter
-from .metrics import compute_pmc, daily_tss
+from .metrics import LimitesDelDia, compute_pmc, daily_tss, pmc_hasta
 from .storage import DataStore
 from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, _cuando
 
@@ -64,32 +64,26 @@ def _pulso(store: DataStore, dia: date, actividades: list[dict]) -> dict[str, An
     return {"estado": INCOMPLETO if dia_a_medias(stats, actividades) else OK, "valor": valor}
 
 
-def _frescura(store: DataStore, dia: date) -> dict[str, Any]:
+def _frescura(store: DataStore, dia: date, limites: LimitesDelDia | None = None) -> dict[str, Any]:
     """TSB of `dia` with `metrics.compute_pmc` over the whole history (the EMAs need it), carried over the rest days
-    up to `dia` the way `mcp_server.get_training_load` does."""
-    serie = compute_pmc(daily_tss(store.get_activities_with_laps(ALL_SPORT_TYPES)))
-    serie = [p for p in serie if p["date"] <= dia]
+    up to `dia` (`metrics.pmc_hasta`, the same as Fitness and the MCP). Unit 031: each day with the HR in force that
+    day (`limites`, from Ajustes)."""
+    serie = pmc_hasta(compute_pmc(daily_tss(store.get_activities_with_laps(ALL_SPORT_TYPES), limites)), dia)
     if not serie:
         return {"estado": NO_HA_LLEGADO, "valor": None}
-    ultimo = serie[-1]
-    ctl, atl, tsb, actual = ultimo["ctl"], ultimo["atl"], ultimo["tsb"], ultimo["date"]
-    while actual < dia:  # rest days: today's form is yesterday's fitness minus yesterday's fatigue
-        tsb = ctl - atl
-        ctl -= ctl / 42.0
-        atl -= atl / 7.0
-        actual += timedelta(days=1)
-    return {"estado": OK, "valor": round(tsb, 1)}
+    return {"estado": OK, "valor": round(serie[-1]["tsb"], 1)}
 
 
-def como_llegas(store: DataStore, dia: date) -> dict[str, dict[str, Any]]:
-    """`{sueno, pulso_reposo, hrv, frescura}` of `dia`, each with its `estado` (R-97, R-102)."""
+def como_llegas(store: DataStore, dia: date, limites: LimitesDelDia | None = None) -> dict[str, dict[str, Any]]:
+    """`{sueno, pulso_reposo, hrv, frescura}` of `dia`, each with its `estado` (R-97, R-102); unit 031: the TSB with
+    the HR of each day (`limites`)."""
     datos = store.export_all()
     actividades = store.activities_between(dia, dia)
     return {
         "sueno": _sueno(_por_dia(datos["sleep"], "sleep_date"), dia),
         "pulso_reposo": _pulso(store, dia, actividades),
         "hrv": _hrv(_por_dia(datos["hrv"], "hrv_date"), dia),
-        "frescura": _frescura(store, dia),
+        "frescura": _frescura(store, dia, limites),
     }
 
 

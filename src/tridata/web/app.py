@@ -50,10 +50,17 @@
                                   Unit 030 (G-48): «Actualizar Garmin» also takes the routine's lock (`sync.lock`
                                   next to the database): with `tridata sync` running it is the same 409 «en_marcha»,
                                   and it brings at least yesterday and today
+    GET  /api/fitness             unit 031 (REC-19): the Fitness tab in one answer (`fitness.py`): `carga` (CTL, ATL, TSB
+                                  of today and the 14 days that end today, and `pulso`: where today's HR comes from),
+                                  `ultima_actividad` and `recuperacion` (sleep, resting HR, HRV with their 7-day means,
+                                  each with its `estado`). Every day with the HR in force that day in Ajustes (G-49)
+    GET  /api/actividad/ID        unit 031: one activity with its laps (pace or speed, mean HR and its zone) and its
+                                  weather; 404 if it does not exist
     GET  /ajustes                 the settings page
     GET  /api/ajustes             settings in force (?fecha=, default today), changes to come, races
     POST /api/ajustes             {"datos": {...}, "desde": "AAAA-MM-DD"} save one or more settings
-                                  (`desde` defaults to today); says whether to ask for the limit
+                                  (`desde` defaults to today); says whether to ask for the limit. Unit 031: also
+                                  «Pulso y zonas» (`fc_max`, `fc_reposo`, `zonas_fc`, `fc_origen`), checked together
     POST /api/carrera             add a race {"nombre", "fecha", "dias_mantenimiento"}
     POST /api/carrera/N           change a race (same body)
     POST /api/carrera/N/quitar    remove a race; only with {"confirmado": true}
@@ -161,6 +168,7 @@ from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
 from ..nutricion.margen import cabe_de_receta
 from ..nutricion.asistente import Contexto as ContextoAsistente, Peticion, proponer as proponer_cambios
 from ..nutricion.recetas import ErrorDatos, _numero
+from ..fitness import detalle_actividad, fitness, texto_pulso
 from ..hoy import como_llegas, entreno, texto_sync
 from ..storage import DataStore
 from ..sync import MOTIVOS, SyncEnMarcha, aviso_sync, cerrojo_sync
@@ -943,12 +951,36 @@ def crear_app(
                       "frescura": {"estado": "no_ha_llegado", "valor": None}}
         return {"fecha": dia_hoy.isoformat(), "comida": comida,
                 "entreno": entreno(store, dia_hoy) if store is not None else [],
-                "como_llegas": como_llegas(store, dia_hoy) if store is not None else sin_garmin,
+                # unit 031 (R8): the TSB with the HR of each day in Ajustes, the same as Fitness
+                "como_llegas": (como_llegas(store, dia_hoy, limites=ajustes.historial_fc().limites)
+                                if store is not None else sin_garmin),
                 "garmin_sync": garmin_sync, "asistente": None}  # unit 032 brings the last answer
 
     async def ver_hoy(request: Request) -> Response:
         await run_in_threadpool(_al_dia)
         return JSONResponse(await run_in_threadpool(_hoy))
+
+    def _fitness() -> dict:
+        """Unit 031: the three blocks of Fitness; without Garmin data, an empty store's answer (nothing invented)."""
+        historial = ajustes.historial_fc()
+        if store is None:
+            falta = {"estado": "no_ha_llegado", "valor": None, "media_7d": None}
+            return {"fecha": hoy().isoformat(), "ultima_actividad": None,
+                    "carga": {"hoy": None, "serie": [], "pulso": texto_pulso(historial.vigente(hoy()))},
+                    "recuperacion": {"sueno": {"estado": "no_ha_llegado", "segundos": None, "puntuacion": None,
+                                               "media_7d": None}, "pulso_reposo": falta, "hrv": dict(falta)}}
+        return fitness(store, historial, hoy())
+
+    async def ver_fitness(request: Request) -> Response:
+        return JSONResponse(await run_in_threadpool(_fitness))
+
+    async def ver_actividad(request: Request) -> Response:
+        if store is None:
+            return _error("Esa actividad no está.", 404)
+        detalle = await run_in_threadpool(detalle_actividad, store, ajustes.historial_fc(), request.path_params["id"])
+        if detalle is None:
+            return _error("Esa actividad no está.", 404)
+        return JSONResponse(detalle)
 
     def _cargar_transcriptor() -> None:
         try:
@@ -981,6 +1013,8 @@ def crear_app(
         Route("/api/simular", simular_lista, methods=["POST"]),
         Route("/api/garmin/actualizar", actualizar, methods=["POST"]),
         Route("/api/hoy", ver_hoy),
+        Route("/api/fitness", ver_fitness),
+        Route("/api/actividad/{id}", ver_actividad),
         Route("/api/ajustes", ver_ajustes),
         Route("/api/ajustes", guardar_ajustes, methods=["POST"]),
         Route("/api/carrera", anadir_carrera, methods=["POST"]),

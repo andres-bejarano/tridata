@@ -17,6 +17,7 @@ your MCP client, e.g. for Claude Code:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import date, timedelta
 from typing import Any
 
@@ -28,8 +29,9 @@ from .exporters import (
     CyclingMarkdownExporter, GymMarkdownExporter, MarkdownExporter,
     MetricsMarkdownExporter, SwimmingMarkdownExporter,
 )
-from .metrics import compute_pmc, daily_tss, trimp_for_activity
-from .storage import DataStore
+from .metrics import LimitesDelDia, compute_pmc, daily_tss, pmc_hasta, trimp_for_activity
+from .nutricion.ajustes import historial_fc_de
+from .storage import DEFAULT_DB_PATH, DataStore
 from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES
 
 SPORTS: dict[str, tuple[str, ...]] = {
@@ -190,22 +192,16 @@ def get_daily_metrics(
     return body.replace("# Garmin Connect metrics export", f"# Daily metrics {start} → {end}", 1)
 
 
-def get_training_load(store: DataStore, days: int = 28) -> str:
+def get_training_load(store: DataStore, days: int = 28, limites: LimitesDelDia | None = None) -> str:
+    """Unit 031 (G-49): `limites(day)` is the HR confirmed in Ajustes for each day (else .env), as in Fitness."""
     if days < 1:
         raise ValueError("days must be >= 1")
     # The EMAs need the whole history to warm up; only the output is trimmed.
-    series = compute_pmc(daily_tss(store.get_activities_with_laps(ALL_SPORT_TYPES)))
+    series = compute_pmc(daily_tss(store.get_activities_with_laps(ALL_SPORT_TYPES), limites))
     if not series:
         return "_No activities stored yet._"
     # compute_pmc stops at the last activity; extend with rest days up to today.
-    last = series[-1]
-    ctl, atl, current = last["ctl"], last["atl"], last["date"] + timedelta(days=1)
-    while current <= date.today():
-        tsb = ctl - atl
-        ctl -= ctl / 42.0
-        atl -= atl / 7.0
-        series.append({"date": current, "tss": 0.0, "ctl": ctl, "atl": atl, "tsb": tsb})
-        current += timedelta(days=1)
+    series = pmc_hasta(series, max(date.today(), series[-1]["date"]))
 
     tail = series[-days:]
     today = tail[-1]
@@ -287,7 +283,8 @@ def get_records(store: DataStore) -> str:
 # -- MCP wiring ----------------------------------------------------------
 
 
-def build_server(store: DataStore) -> MCPServer:
+def build_server(store: DataStore, limites_fc: Callable[[], LimitesDelDia | None] | None = None) -> MCPServer:
+    """`limites_fc()` gives, on every call, the HR of each day confirmed in Ajustes (unit 031); None: .env only."""
     server = MCPServer(name="tridata", instructions=INSTRUCTIONS)
     read_only = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
@@ -320,7 +317,7 @@ def build_server(store: DataStore) -> MCPServer:
     @server.tool(name="get_training_load", annotations=read_only, structured_output=False)
     def get_training_load_tool(days: int = 28) -> str:
         """Fitness/fatigue/form (CTL/ATL/TSB) for the last `days` days, computed over the full history."""
-        return get_training_load(store, days)
+        return get_training_load(store, days, limites_fc() if limites_fc is not None else None)
 
     @server.tool(name="get_weekly_summary", annotations=read_only, structured_output=False)
     def get_weekly_summary_tool(weeks: int = 8) -> str:
@@ -340,7 +337,7 @@ def main() -> None:
     # stdout is the MCP channel on stdio; logs must go to stderr.
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
     load_dotenv()  # TRIDATA_HR_MAX / TRIDATA_HR_REST for TRIMP
-    build_server(DataStore()).run("stdio")
+    build_server(DataStore(), limites_fc=lambda: historial_fc_de(DEFAULT_DB_PATH).limites).run("stdio")
 
 
 if __name__ == "__main__":

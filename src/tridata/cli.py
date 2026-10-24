@@ -41,6 +41,9 @@ Examples:
     # Give back their foods to the days imported as one total line (bug 020); the totals do not change
     tridata importar-detalle --md deficit.md --simular
     tridata importar-detalle --md deficit.md
+
+    # Unit 031: how many times the stress-test values saved in Ajustes appear in the repo and the logs (never which)
+    tridata comprobar-privados --registros ~/.tridata /path/to/sync.log
 """
 from __future__ import annotations
 
@@ -52,6 +55,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+from collections import Counter
 from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -67,6 +71,7 @@ from .exporters import (
 )
 from .garmin_client import GarminAuthError, GarminClient, GarminRateLimitError
 from .metrics import compute_pmc, daily_tss
+from .nutricion.ajustes import historial_fc_de
 from .storage import DEFAULT_DB_PATH, DataStore
 from .sync import (
     ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncEnMarcha, SyncService, cerrojo_sync,
@@ -279,7 +284,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Dry run: show what each day would get, write nothing.",
     )
 
+    privados_cmd = sub.add_parser(
+        "comprobar-privados",
+        help="Count how many times the stress-test values saved in Ajustes appear in the repo and the logs",
+    )
+    privados_cmd.add_argument(
+        "--repo", type=Path, default=Path(__file__).resolve().parents[2],
+        help="The git repository to look in (default: this checkout).",
+    )
+    privados_cmd.add_argument(
+        "--registros", type=Path, nargs="*", default=None, metavar="PATH",
+        help="Log files, or folders whose *.log are read (default: ~/.tridata).",
+    )
+
     return parser
+
+
+def _cmd_comprobar_privados(repo: Path, registros: list[Path] | None) -> int:
+    """Unit 031 (R9): only counts and places; exit 1 if any value appears."""
+    from . import privados
+
+    donde: Counter = Counter()
+    try:
+        resultado = privados.comprobar(DEFAULT_DB_PATH, repo, registros or [DEFAULT_DB_PATH.parent], donde=donde)
+    except RuntimeError as exc:
+        print(f"comprobar-privados: {exc}", file=sys.stderr)
+        return 2
+    print(privados.informe(resultado, donde))
+    return 1 if resultado["repo"] or resultado["registros"] else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -301,6 +333,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_importar_detalle(args.md, args.simular, db_path=DEFAULT_DB_PATH, backup_dir=DEFAULT_BACKUP_DIR)
     if args.command == "export-nutricion":
         return _cmd_export_nutricion(args.out)
+    if args.command == "comprobar-privados":
+        return _cmd_comprobar_privados(args.repo, args.registros)
 
     store = DataStore()
 
@@ -389,7 +423,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "export-pmc":
         activities = store.get_activities_with_laps(ALL_SPORT_TYPES)
-        tss_series = daily_tss(activities)
+        # unit 031 (G-49): each day with the HR confirmed in Ajustes for it (else .env), as Fitness, Hoy and the MCP
+        tss_series = daily_tss(activities, historial_fc_de(DEFAULT_DB_PATH).limites)
         pmc_series = compute_pmc(tss_series)
         out_path = PMCMarkdownExporter().export(pmc_series, args.out)
         print(f"Wrote {out_path}")

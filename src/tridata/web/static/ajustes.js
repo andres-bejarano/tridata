@@ -3,6 +3,8 @@
 // overwritten: a change is a new value "desde" a date (by default today).
 // Unit 010: iOS-style rows (name, value in force, ›); tapping a row opens the same change card as
 // before. A «Conexión» row says whether the PC answered. The tabs at the bottom go back to /#….
+// Unit 031: «Pulso y zonas» is ONE row (HR max / rest and where they come from); its card saves the HR max, the HR
+// rest, the five zones and their origin together, from a date (the server checks they hang together, R7).
 
 const $ = (id) => document.getElementById(id);
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2, useGrouping: "always" });
@@ -32,6 +34,7 @@ let hoyISO = null;
 let abierto = null; // key of the setting whose change card is open
 let carreraAbierta = null; // id of the race being changed, or "nueva"
 let preguntaLimite = null; // { desde } while the healthy-limit question is shown
+const PULSO = "pulso"; // `abierto` when the «Pulso y zonas» card is open (unit 031)
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -200,6 +203,89 @@ function fichaLimite() {
     el("div", { className: "fila dos" }, limite, desde), aviso, el("div", { className: "acciones" }, guardar, ahoraNo));
 }
 
+// -- unit 031: «Pulso y zonas» --------------------------------------------------------
+
+function textoOrigen(origen) {
+  if (!origen) return null;
+  return origen.tipo === "prueba" ? `de tu prueba de esfuerzo de ${origen.mes}` : "de la configuración";
+}
+
+function filasPulso() {
+  const v = vista.vigentes;
+  const max = v.fc_max?.valor ?? null, reposo = v.fc_reposo?.valor ?? null;
+  const notas = [];
+  if (max !== null) {
+    const origen = textoOrigen(v.fc_origen?.valor);
+    if (origen) notas.push(origen);
+    if (v.fc_max.desde && v.fc_max.desde !== SIEMPRE) notas.push(desdeTexto(v.fc_max.desde));
+    if (v.zonas_fc?.valor) notas.push(v.zonas_fc.valor.map((z, i) => `Z${i + 1} ${z[0]}–${z[1]}`).join(" · "));
+  } else {
+    notas.push("tu carga usa la configuración hasta que la confirmes");
+  }
+  const futuros = vista.futuros.filter((f) => f.clave === "fc_max")
+    .map((f) => el("span", { className: "futuro", textContent: `FC máxima ${f.valor} a partir del ${fecha(f.desde)}` }));
+  const fila = el("button", { type: "button", className: "ajuste" },
+    el("span", { className: "que" }, "FC máxima / en reposo", el("span", { textContent: notas.join(" · ") }), ...futuros),
+    el("span", { className: "valor num", textContent: max === null ? "sin confirmar" : `${max} / ${reposo} ppm` }),
+    el("span", { className: "chev", textContent: "›" }));
+  fila.setAttribute("aria-expanded", String(abierto === PULSO));
+  fila.addEventListener("click", () => {
+    abierto = abierto === PULSO ? null : PULSO;
+    carreraAbierta = null;
+    mensaje("");
+    pintar();
+  });
+  return abierto === PULSO ? [fila, fichaPulso()] : [fila];
+}
+
+function fichaPulso() {
+  const v = vista.vigentes;
+  const max = campo("FC máxima (ppm)", v.fc_max?.valor, "text", numerico("numeric"));
+  const reposo = campo("FC en reposo (ppm)", v.fc_reposo?.valor, "text", numerico("numeric"));
+  const zonas = (v.zonas_fc?.valor ?? [[], [], [], [], []]).map((z, i) => [
+    campo(`Zona ${i + 1} desde`, z[0], "text", numerico("numeric")),
+    campo(`Zona ${i + 1} hasta`, z[1], "text", numerico("numeric")),
+  ]);
+  const origen = v.fc_origen?.valor;
+  const tipo = el("select", {},
+    el("option", { value: "prueba", textContent: "Prueba de esfuerzo" }),
+    el("option", { value: "configuracion", textContent: "Configuración (reloj o a mano)" }));
+  tipo.value = origen?.tipo ?? "prueba";
+  const deDonde = el("label", { className: "campo" }, el("span", { textContent: "De dónde salen" }), tipo);
+  const mes = campo("Mes de la prueba", origen?.mes ?? "", "month");
+  const verMes = () => { mes.hidden = tipo.value !== "prueba"; };
+  tipo.addEventListener("change", verMes);
+  verMes();
+  const desde = campo("Desde", hoyISO, "date");
+  const aviso = el("p", { className: "aviso", hidden: true });
+  const guardar = el("button", { type: "button", className: "principal", textContent: "Guardar" });
+  const cancelar = el("button", { type: "button", textContent: "Cancelar" });
+  cancelar.addEventListener("click", () => { abierto = null; mensaje(""); pintar(); });
+  guardar.addEventListener("click", async () => {
+    if (!desde.entrada.value) { aviso.textContent = "Di desde qué día vale."; aviso.hidden = false; return; }
+    const datos = {
+      fc_max: crudo(max.entrada) || null,
+      fc_reposo: crudo(reposo.entrada) || null,
+      zonas_fc: zonas.map(([d, h]) => [crudo(d.entrada) || null, crudo(h.entrada) || null]),
+      fc_origen: tipo.value === "prueba" ? { tipo: "prueba", mes: mes.entrada.value || null } : { tipo: "configuracion" },
+    };
+    guardar.disabled = true;
+    const { ok, datos: r } = await api("/api/ajustes", { datos, desde: desde.entrada.value });
+    guardar.disabled = false;
+    if (!ok) { aviso.textContent = r.error ?? "No se ha podido guardar."; aviso.hidden = false; return; }
+    abierto = null;
+    vista = r.ajustes;
+    mensaje(`Guardado: pulso y zonas ${desdeTexto(r.desde)}.`, "bien");
+    pintar();
+  });
+  setTimeout(() => max.entrada.focus(), 0);
+  return el("article", { className: "tarjeta nueva" },
+    el("div", { className: "fila dos" }, max, reposo),
+    el("p", { className: "suave nota", textContent: "Cinco zonas seguidas, sin huecos: la 1 empieza en tu FC en reposo y la 5 acaba en tu FC máxima." }),
+    el("div", { className: "zonas-pulso" }, ...zonas.map(([d, h]) => el("div", { className: "fila dos" }, d, h))),
+    el("div", { className: "fila dos" }, deDonde, mes), desde, aviso, el("div", { className: "acciones" }, guardar, cancelar));
+}
+
 // -- races ----------------------------------------------------------------------------
 
 function fichaCarrera(c) {
@@ -280,6 +366,7 @@ function pintar() {
   for (const seccion of ["perfil", "plan"]) {
     $(seccion).replaceChildren(...DATOS.filter((d) => d.seccion === seccion).flatMap(filaDato));
   }
+  $("pulso").replaceChildren(...filasPulso());
   $("plan-hoy").textContent = planDeHoy(vista.plan);
   $("pregunta-limite").replaceChildren(...(preguntaLimite ? [fichaLimite()] : []));
   $("carreras").replaceChildren(...vista.carreras.flatMap(filaCarrera));

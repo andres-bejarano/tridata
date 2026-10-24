@@ -299,3 +299,87 @@ def test_semilla_sin_entorno_dice_que_falta(db):  # R10
 
 def test_semilla_no_hace_falta_si_ya_hay_ajustes(ajustes):  # R10
     assert ajustes.sembrar_desde_entorno({}) is False
+
+
+# -- unit 031 (R6, R7 · R-108, C-149, G-49): «Pulso y zonas», with the date from which they apply ---------------
+# Every HR value here is invented.
+
+ZONAS_A = [[55, 120], [121, 140], [141, 155], [156, 168], [169, 180]]
+PULSO_A = {"fc_max": 180, "fc_reposo": 55, "zonas_fc": ZONAS_A, "fc_origen": {"tipo": "prueba", "mes": "2025-11"}}
+
+
+def test_pulso_y_zonas_se_guardan_con_su_fecha(ajustes):  # R6 · G-49
+    ajustes.cambiar(PULSO_A, desde=d(10))
+    historial = ajustes.historial_fc()
+    assert historial.vigente(d(9)) is None  # before: nothing confirmed
+    p = historial.vigente(d(10))
+    assert (p.fc_max, p.fc_reposo, p.desde) == (180, 55, d(10))
+    assert p.zonas == tuple(tuple(z) for z in ZONAS_A)
+    assert p.origen == {"tipo": "prueba", "mes": "2025-11"}
+    assert historial.limites(d(9)) is None
+    assert historial.limites(d(10)) == (180, 55)
+    vista = ajustes.valores_con_fecha(d(10))
+    assert vista["fc_max"] == {"valor": 180, "desde": "2026-03-10"}
+    assert vista["zonas_fc"]["valor"] == ZONAS_A
+
+
+def test_una_fc_nueva_no_cambia_los_dias_de_antes(ajustes):  # R6 · G-49
+    ajustes.cambiar(PULSO_A, desde=DESDE_SIEMPRE)
+    zonas_b = [[50, 118], [119, 139], [140, 156], [157, 170], [171, 186]]
+    ajustes.cambiar({"fc_max": 186, "fc_reposo": 50, "zonas_fc": zonas_b}, desde=d(10))
+    historial = ajustes.historial_fc()
+    assert historial.limites(d(9)) == (180, 55)
+    assert historial.limites(d(10)) == (186, 50)
+    assert historial.vigente(d(10)).origen == {"tipo": "prueba", "mes": "2025-11"}  # the origin in force stays
+
+
+def test_las_zonas_seguidas_sin_hueco_tambien_valen_tocandose(ajustes):  # R7
+    tocandose = [[55, 120], [120, 140], [140, 155], [155, 168], [168, 180]]
+    ajustes.cambiar({**PULSO_A, "zonas_fc": tocandose}, desde=HOY)
+    assert ajustes.historial_fc().vigente(HOY).zonas[1] == (120, 140)
+
+
+@pytest.mark.parametrize(("datos", "motivo"), [
+    ({**PULSO_A, "fc_max": 119}, "FC máxima"),
+    ({**PULSO_A, "fc_max": 231}, "FC máxima"),
+    ({**PULSO_A, "fc_reposo": 29}, "FC en reposo"),
+    ({**PULSO_A, "fc_reposo": 101}, "FC en reposo"),
+    ({"fc_max": 90, "fc_reposo": 95}, "FC máxima"),  # the ranges already keep the resting HR below the max
+    ({"fc_max": 125, "fc_reposo": 125, "zonas_fc": None}, "FC en reposo"),
+    ({"fc_max": 180}, "juntas"),
+    ({**PULSO_A, "zonas_fc": ZONAS_A[:4]}, "cinco zonas"),
+    ({**PULSO_A, "zonas_fc": [[55, 120], [125, 140], [141, 155], [156, 168], [169, 180]]}, "hueco"),
+    ({**PULSO_A, "zonas_fc": [[55, 120], [110, 140], [141, 155], [156, 168], [169, 180]]}, "se pisan"),
+    ({**PULSO_A, "zonas_fc": [[60, 120], [121, 140], [141, 155], [156, 168], [169, 180]]}, "FC en reposo"),
+    ({**PULSO_A, "zonas_fc": [[55, 120], [121, 140], [141, 155], [156, 168], [169, 178]]}, "FC máxima"),
+    ({**PULSO_A, "zonas_fc": [[55, 120], [121, 140], [141, 141], [142, 168], [169, 180]]}, "zona 3"),
+    ({**PULSO_A, "zonas_fc": "muchas"}, "cinco zonas"),
+    ({**PULSO_A, "fc_origen": {"tipo": "prueba", "mes": "2025-13"}}, "mes"),
+    ({**PULSO_A, "fc_origen": {"tipo": "adivinado"}}, "origen"),
+])
+def test_fc_y_zonas_fuera_de_rango_no_se_guardan(ajustes, db, datos, motivo):  # R7
+    datos = {k: v for k, v in datos.items() if v is not None}
+    with sqlite3.connect(db) as conn:
+        antes = conn.execute("SELECT COUNT(*) FROM ajuste").fetchone()[0]
+    with pytest.raises(ValueError, match=motivo):
+        ajustes.cambiar(datos, desde=HOY)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM ajuste").fetchone()[0] == antes
+
+
+def test_cambiar_la_fc_sin_cambiar_unas_zonas_que_ya_no_cuadran_no_se_guarda(ajustes):  # R7
+    ajustes.cambiar(PULSO_A, desde=DESDE_SIEMPRE)
+    with pytest.raises(ValueError, match="FC máxima"):
+        ajustes.cambiar({"fc_max": 186, "fc_reposo": 55}, desde=HOY)
+    assert ajustes.historial_fc().limites(HOY) == (180, 55)
+
+
+def test_historial_fc_de_lee_sin_crear_nada(tmp_path):  # the MCP and export-pmc read it, never write
+    from tridata.nutricion.ajustes import historial_fc_de
+
+    nada = tmp_path / "no-existe.sqlite3"
+    assert historial_fc_de(nada).limites(HOY) is None
+    assert not nada.exists()
+    db = tmp_path / "data.sqlite3"
+    Ajustes(db).cambiar(PULSO_A, desde=DESDE_SIEMPRE)
+    assert historial_fc_de(db).limites(HOY) == (180, 55)

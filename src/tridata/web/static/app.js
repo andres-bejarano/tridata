@@ -39,6 +39,7 @@
 // by asistente.js in a block «Cambios» above the usual pieces, each card confirmed or discarded on its own;
 // «Confirmar y guardar» saves the pieces and never touches the cards, and is not shown when only changes came. The
 // review closes when no list and no card is left to decide (a dictated list of the queue is removed then).
+// Unit 031: the Fitness tab is painted by fitness.js (GET /api/fitness) every time it is entered.
 
 import * as cola from "./cola.js";
 import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
@@ -47,6 +48,7 @@ import { buscador, cajaElegida, cargarGuardado, cosaGuardada, cuenta, leerOrigen
 import { pintarRecetas } from "./recetas.js";
 import { cargarHoy, iniciarHoy } from "./hoy.js";
 import { pintarCambios } from "./asistente.js";
+import { cargarFitness, iniciarFitness } from "./fitness.js";
 
 const $ = (id) => document.getElementById(id);
 // kcal with a thousands point always («1.040»): es-ES does not group 4 digits by default
@@ -1348,6 +1350,7 @@ $("ir-hoy").addEventListener("click", () => irA(hoyISO));
 enlazarControles();
 enlazarHoja();
 iniciarHoy({ api, alActualizarDia: (dia) => { if (diaVisto === dia.fecha) pintarDia(dia); } });
+iniciarFitness({ api }); // unit 031: the Fitness tab
 enlazarPestanas();
 vigilarAltoEntrada();
 $("fecha").textContent = deFecha(cola.fechaLocal()); // before the PC answers, or if it never does
@@ -1420,6 +1423,7 @@ function mostrarPestana() {
   $("entrada").hidden = actual !== "dia" && actual !== "hoy";
   colocarDictado(actual);
   if (actual === "hoy" && pestanaVista !== "hoy") cargarHoy();
+  if (actual === "fitness" && pestanaVista !== "fitness") cargarFitness(); // unit 031: painted on entering
   if ($("hoja").open) $("hoja").close();
   if (actual === "dia") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
   else document.title = `TriData · ${mayuscula(actual)}`;

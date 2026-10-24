@@ -11,8 +11,13 @@ from __future__ import annotations
 import logging
 import math
 import os
+from collections.abc import Callable
 from datetime import date, timedelta
 from typing import Any
+
+# (HR max, HR rest) of one day; unit 031: the ones confirmed in Ajustes with their date (G-49)
+Limites = tuple[float, float]
+LimitesDelDia = Callable[[date], Limites | None]
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +37,15 @@ _TRIMP_K = 0.64
 _TRIMP_Y = 1.92
 
 
-def hr_bounds() -> tuple[float, float]:
-    """Return (HR max, HR rest) from the environment, falling back to placeholders.
+def hr_bounds(limites: Limites | None = None) -> tuple[float, float]:
+    """Return (HR max, HR rest): `limites` when given (unit 031: the ones in force that day in Ajustes), else
+    from the environment, falling back to placeholders.
 
     Read on every call rather than at import: the CLI loads .env only after
     this module has been imported.
     """
+    if limites is not None:
+        return float(limites[0]), float(limites[1])
     global _warned_default_hr
     hr_max = os.environ.get("TRIDATA_HR_MAX")
     hr_rest = os.environ.get("TRIDATA_HR_REST")
@@ -53,17 +61,19 @@ def hr_bounds() -> tuple[float, float]:
     )
 
 
-def _trimp_segment(duration_seconds: float, avg_hr: float) -> float:
+def _trimp_segment(duration_seconds: float, avg_hr: float, bounds: Limites | None = None) -> float:
     """TRIMP for a single segment (lap or whole activity)."""
-    hr_max, hr_rest = hr_bounds()
+    hr_max, hr_rest = hr_bounds(bounds)
     duration_min = duration_seconds / 60.0
     hr_ratio = (avg_hr - hr_rest) / (hr_max - hr_rest)
     hr_ratio = max(0.0, min(1.0, hr_ratio))  # clamp — avoid nonsense for HR < rest
     return duration_min * hr_ratio * _TRIMP_K * math.exp(_TRIMP_Y * hr_ratio)
 
 
-def trimp_for_activity(activity: dict[str, Any], laps: list[dict[str, Any]]) -> float:
-    """Return the Banister TRIMP for one activity.
+def trimp_for_activity(
+    activity: dict[str, Any], laps: list[dict[str, Any]], bounds: Limites | None = None,
+) -> float:
+    """Return the Banister TRIMP for one activity (`bounds`: the HR of its day; None, the environment's).
 
     Strategy (in order):
     1. If the activity has laps and every lap has a non-None avg_hr, sum
@@ -80,7 +90,7 @@ def trimp_for_activity(activity: dict[str, Any], laps: list[dict[str, Any]]) -> 
         lap_hrs = [lap.get("avg_hr") for lap in laps]
         if all(hr is not None for hr in lap_hrs):
             return sum(
-                _trimp_segment(lap["duration_seconds"], lap["avg_hr"])
+                _trimp_segment(lap["duration_seconds"], lap["avg_hr"], bounds)
                 for lap in laps
                 if lap.get("duration_seconds")
             )
@@ -95,14 +105,19 @@ def trimp_for_activity(activity: dict[str, Any], laps: list[dict[str, Any]]) -> 
         )
         return 0.0
 
-    return _trimp_segment(duration, avg_hr)
+    return _trimp_segment(duration, avg_hr, bounds)
 
 
-def daily_tss(activities_with_laps: list[dict[str, Any]]) -> dict[date, float]:
+def daily_tss(
+    activities_with_laps: list[dict[str, Any]], limites: LimitesDelDia | None = None,
+) -> dict[date, float]:
     """Aggregate TRIMP per calendar date.
 
     Multiple activities on the same day are summed. Days with no activity
     are NOT included here — `compute_pmc` fills the gaps with 0.
+
+    Unit 031 (G-49): `limites(day)` gives the (HR max, HR rest) in force that day; a day it answers None for
+    (nothing confirmed yet), and every day without it, uses the environment's as before.
     """
     tss: dict[date, float] = {}
     for a in activities_with_laps:
@@ -112,7 +127,7 @@ def daily_tss(activities_with_laps: list[dict[str, Any]]) -> dict[date, float]:
             logger.warning("Skipping activity with invalid date: %s", a.get("activity_id"))
             continue
         laps = a.get("laps", [])
-        tss[d] = tss.get(d, 0.0) + trimp_for_activity(a, laps)
+        tss[d] = tss.get(d, 0.0) + trimp_for_activity(a, laps, limites(d) if limites else None)
     return tss
 
 
@@ -164,3 +179,20 @@ def compute_pmc(
         current += timedelta(days=1)
 
     return series
+
+
+def pmc_hasta(series: list[dict[str, Any]], dia: date) -> list[dict[str, Any]]:
+    """The series up to `dia`: trimmed after it, and extended with rest days (0 load) when the last activity is
+    older — today's form is yesterday's fitness minus yesterday's fatigue (unit 031; what Hoy and the MCP did)."""
+    tramo = [p for p in series if p["date"] <= dia]
+    if not tramo:
+        return []
+    ultimo = tramo[-1]
+    ctl, atl, actual = ultimo["ctl"], ultimo["atl"], ultimo["date"] + timedelta(days=1)
+    while actual <= dia:
+        tsb = ctl - atl
+        ctl -= ctl / 42.0
+        atl -= atl / 7.0
+        tramo.append({"date": actual, "tss": 0.0, "ctl": ctl, "atl": atl, "tsb": tsb})
+        actual += timedelta(days=1)
+    return tramo

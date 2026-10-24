@@ -574,3 +574,55 @@ button.anadir-linea { margin-top: 0; }
 .candidatos { display: grid; gap: 8px; }
 button.candidato { min-height: 48px; text-align: left; padding: 8px 12px; white-space: normal; line-height: 1.3; }
 .sin-corte { white-space: nowrap; }
+
+/* -- unit 031: Fitness (fitness.js) and Ajustes › Pulso y zonas -------------------------------------------------- */
+:root { --ctl: #1a6fe8; --atl: #d4621a; --tsb: #9cc0f7; }
+@media (prefers-color-scheme: dark) { :root { --ctl: #5b9bff; --atl: #ff9a4d; --tsb: #2f5794; } }
+.intro-fitness { margin: -4px 4px 10px; }
+.bloque-fitness { display: block; padding: 14px 16px; }
+.cifras-carga { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 10px 0 4px; }
+.cifra-carga { border: 1px solid var(--borde); border-radius: 14px; padding: 8px 10px; min-width: 0; }
+.cifra-carga span, .cifra-carga small { display: block; color: var(--suave); font-size: .85rem; }
+.cifra-carga strong { display: block; font-size: 1.6rem; line-height: 1.2; }
+.cifra-carga strong.bien { color: var(--bien); }
+.grafica-carga { padding: 6px 0 0; }
+.grafica .linea-ctl { fill: none; stroke: var(--ctl); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.grafica .linea-atl { fill: none; stroke: var(--atl); stroke-width: 2; stroke-dasharray: 4 3; stroke-linejoin: round; }
+.grafica .barra-tsb { fill: var(--tsb); }
+.grafica .barra-tsb.negativa { fill: var(--pista); stroke: var(--tsb); stroke-width: 1; }
+.leyenda-grafica .ley-ctl { color: var(--ctl); font-weight: 800; }
+.leyenda-grafica .ley-atl { color: var(--atl); font-weight: 800; }
+.leyenda-grafica .ley-tsb { color: var(--tsb); }
+.pulso-fitness { margin: 6px 0 0; }
+.pulso-fitness.aviso { margin: 8px 0 0; }
+.titulo-bloque { font-size: 1.15rem; margin: 18px 4px 8px; }
+.actividad-fitness { width: 100%; text-align: left; font: inherit; color: var(--texto); cursor: pointer; padding: 14px 16px; display: grid; gap: 10px; }
+.actividad-fitness:disabled { cursor: default; }
+.actividad-fitness .chips-hoy { margin: 0; }
+.cab-actividad { display: flex; gap: 12px; align-items: center; }
+.cab-actividad > div { flex: 1; min-width: 0; }
+.cab-actividad strong { display: block; font-size: 1.05rem; }
+.cab-actividad .suave { display: block; margin: 2px 0 0; }
+.cab-actividad .chev { color: var(--suave); font-size: 1.3rem; transition: transform .15s; }
+.actividad-fitness[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.icono-actividad { width: 44px; height: 44px; border-radius: 12px; background: var(--acento-suave); display: grid; place-items: center; font-size: 1.4rem; flex: none; }
+.detalle-fitness { display: block; padding: 12px 14px; border-color: var(--acento); }
+.detalle-fitness h3 { font-size: 1rem; margin: 4px 0 8px; }
+.vueltas { list-style: none; margin: 0 0 8px; padding: 0; }
+.vuelta { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--borde); font-size: .92rem; }
+.vuelta:first-child { border-top: 0; }
+.n-vuelta { width: 22px; color: var(--suave); text-align: right; flex: none; }
+.datos-vuelta { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.zona-vuelta { flex: none; min-width: 34px; text-align: center; border-radius: 999px; padding: 2px 8px; background: var(--pista); font-weight: 650; }
+.zona-vuelta.z1 { background: var(--pista); }
+.zona-vuelta.z2 { background: var(--acento-suave); color: var(--acento); }
+.zona-vuelta.z3 { background: var(--ico-fijo); color: var(--bien); }
+.zona-vuelta.z4 { background: var(--alerta-fondo); color: var(--alerta); }
+.zona-vuelta.z5 { background: var(--peligro); color: var(--tarjeta); }
+.recuperacion .dato-recuperacion strong { font-size: 1.3rem; display: block; }
+.recuperacion .dato-recuperacion small { display: block; color: var(--suave); font-size: .85rem; }
+.recuperacion .dato-recuperacion.falta strong { color: var(--suave); font-style: italic; font-size: 1rem; font-weight: 600; }
+.recuperacion .marca-incompleto { color: var(--alerta) !important; font-weight: 650; }
+.zonas-pulso { display: grid; gap: 6px; }
+.zonas-pulso .fila.dos { margin: 0; }
+.campo select { font: inherit; }

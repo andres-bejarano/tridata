@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from tridata.metrics import _trimp_segment, compute_pmc, daily_tss, trimp_for_activity
+from tridata.metrics import _trimp_segment, compute_pmc, daily_tss, hr_bounds, pmc_hasta, trimp_for_activity
 
 HR_MAX = 190
 HR_REST = 60
@@ -211,3 +211,40 @@ def test_compute_pmc_fills_gap_days():
 
 def test_compute_pmc_empty_input():
     assert compute_pmc({}) == []
+
+
+# ---------------------------------------------------------------------------
+# unit 031 (R6, R8 · R-108, G-49): each day with the HR in force that day
+# ---------------------------------------------------------------------------
+
+def test_hr_bounds_con_limites_del_dia_no_mira_el_entorno():
+    assert hr_bounds((185, 50)) == (185, 50)
+    assert hr_bounds(None) == (HR_MAX, HR_REST)
+
+
+def test_trimp_con_otros_limites_cambia():
+    otro = trimp_for_activity(_ACTIVITY, [], (200, 40))
+    assert otro != pytest.approx(trimp_for_activity(_ACTIVITY, []))
+    assert otro == pytest.approx(trimp_for_activity(_ACTIVITY, [], bounds=(200, 40)))
+
+
+def test_daily_tss_usa_los_limites_de_cada_dia():
+    acts = [{**_ACTIVITY, "activity_id": f"a{i}", "activity_date": f"2026-03-{10 + i}", "laps": []} for i in range(4)]
+    limites = {date(2026, 3, 12): (200, 40), date(2026, 3, 13): (200, 40)}
+    result = daily_tss(acts, limites=limites.get)
+    con_entorno = trimp_for_activity(_ACTIVITY, [])
+    con_otro = trimp_for_activity(_ACTIVITY, [], (200, 40))
+    assert result[date(2026, 3, 10)] == pytest.approx(con_entorno)
+    assert result[date(2026, 3, 11)] == pytest.approx(con_entorno)
+    assert result[date(2026, 3, 12)] == pytest.approx(con_otro)
+    assert result[date(2026, 3, 13)] == pytest.approx(con_otro)
+
+
+def test_pmc_hasta_alarga_con_dias_de_descanso_y_recorta():
+    serie = compute_pmc({date(2026, 1, 1): 100.0, date(2026, 1, 2): 50.0})
+    alargada = pmc_hasta(serie, date(2026, 1, 4))
+    assert [p["date"] for p in alargada] == [date(2026, 1, d) for d in (1, 2, 3, 4)]
+    assert alargada[2]["tss"] == 0.0
+    assert alargada[2]["tsb"] == pytest.approx(serie[1]["ctl"] - serie[1]["atl"])
+    assert [p["date"] for p in pmc_hasta(serie, date(2026, 1, 1))] == [date(2026, 1, 1)]
+    assert pmc_hasta([], date(2026, 1, 1)) == []

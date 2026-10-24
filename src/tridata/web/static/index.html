@@ -54,11 +54,27 @@
       </article>
     </section>
 
-    <!-- ================= FITNESS, ASISTENTE (unit 029: what they will bring; 031 and 032 fill them) ================= -->
-    <section id="fitness" class="pantalla pronto" data-pestana="fitness" aria-label="Fitness" hidden>
+    <!-- ================= FITNESS (unit 031: fitness.js paints it from GET /api/fitness) ================= -->
+    <section id="fitness" class="pantalla" data-pestana="fitness" aria-label="Fitness" hidden>
       <h1 class="titulo-pantalla">Fitness</h1>
-      <p class="tarjeta llega-pronto">Muy pronto, aquí: tu carga, tu último entreno y tu recuperación.</p>
+      <p class="suave intro-fitness">Aquí ves tu carga, tu último entreno y tu recuperación.</p>
+      <article id="fitness-carga" class="tarjeta bloque-fitness" aria-labelledby="t-carga">
+        <div class="cab-hoy"><h2 id="t-carga">Carga de entreno</h2><span class="suave">últimos 14 días</span></div>
+        <div class="cifras-carga">
+          <div class="cifra-carga"><span>Forma</span><strong id="fitness-ctl" class="num">—</strong><small>CTL</small></div>
+          <div class="cifra-carga"><span>Fatiga</span><strong id="fitness-atl" class="num">—</strong><small>ATL</small></div>
+          <div class="cifra-carga"><span>Frescura</span><strong id="fitness-tsb" class="num">—</strong><small>TSB</small></div>
+        </div>
+        <div id="fitness-grafica" class="grafica grafica-carga"></div>
+        <p id="fitness-pulso" class="suave pulso-fitness"></p>
+      </article>
+      <h2 class="titulo-bloque">Última actividad</h2>
+      <button id="fitness-ultima" type="button" class="tarjeta actividad-fitness" aria-expanded="false" aria-controls="fitness-detalle"></button>
+      <article id="fitness-detalle" class="tarjeta detalle-fitness" aria-label="Detalle de la actividad" hidden></article>
+      <h2 class="titulo-bloque">Recuperación</h2>
+      <div id="fitness-recuperacion" class="datos recuperacion"></div>
     </section>
+    <!-- ================= ASISTENTE (unit 029: what it will bring; 032 fills it) ================= -->
     <section id="asistente" class="pantalla pronto" data-pestana="asistente" aria-label="Asistente" hidden>
       <h1 class="titulo-pantalla">Asistente</h1>
       <p class="tarjeta llega-pronto">Muy pronto, aquí: tus conversaciones con el asistente.</p>

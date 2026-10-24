@@ -195,3 +195,68 @@ export function leyendaPesoDeficit(objetivo, { ver = "dos", eje = "kcal" } = {})
   });
   return p;
 }
+
+// Unit 031: the load of the Fitness tab — the 14 days that end today (`serie` of GET /api/fitness, each
+// {fecha, ctl, atl, tsb}). On top the form (CTL, solid line) and the fatigue (ATL, dashed); below the freshness
+// (TSB) as a bar per day from its 0 line. The same SVG, axes and colours as the weight chart; the server computes.
+export function graficaCarga(serie, ancho = ANCHO_POR_DEFECTO) {
+  const W = Math.max(260, Math.round(ancho || ANCHO_POR_DEFECTO));
+  const x0 = 34, x1 = W - 8;
+  const arriba = { arriba: 14, abajo: 120 };
+  const abajo = { arriba: 136, abajo: 196 };
+  const H = abajo.abajo + 26;
+  const n = Math.max(serie.length, 1);
+  const hueco = (x1 - x0) / n;
+  const xCentro = (i) => x0 + (i + 0.5) * hueco;
+  const partes = [];
+  if (!serie.length) {
+    partes.push(`<text class="eje" x="${(x0 + x1) / 2}" y="${H / 2}" text-anchor="middle">Aún no hay entrenos con carga</text>`);
+  } else {
+    const valores = serie.flatMap((p) => [p.ctl, p.atl]);
+    let min = Math.floor(Math.min(...valores) / 10) * 10;
+    let max = Math.ceil(Math.max(...valores) / 10) * 10;
+    if (max - min < 20) max = min + 20;
+    const paso = max - min <= 40 ? 10 : max - min <= 100 ? 20 : 50;
+    const y = escala(min, max, arriba.arriba, arriba.abajo);
+    for (let v = min; v <= max; v += paso) {
+      partes.push(`<line class="rejilla" x1="${x0}" y1="${f1(y(v))}" x2="${x1}" y2="${f1(y(v))}"/>`,
+        `<text class="eje" x="${x0 - 6}" y="${f1(y(v) + 4)}" text-anchor="end">${enteras.format(v)}</text>`);
+    }
+    const linea = (clave) => serie.map((p, i) => `${f1(xCentro(i))},${f1(y(p[clave]))}`).join(" ");
+    partes.push(`<polyline class="linea-atl" points="${linea("atl")}"/>`, `<polyline class="linea-ctl" points="${linea("ctl")}"/>`);
+
+    const tope = Math.max(5, ...serie.map((p) => Math.abs(p.tsb)));
+    const yb = escala(-tope, tope, abajo.arriba, abajo.abajo);
+    const w = Math.max(2, hueco * 0.6);
+    serie.forEach((p, i) => {
+      const alto = Math.max(1.5, Math.abs(yb(p.tsb) - yb(0)));
+      const top = p.tsb < 0 ? yb(0) : yb(0) - alto;
+      const signo = p.tsb > 0 ? "+" : p.tsb < 0 ? "−" : "";
+      partes.push(`<rect class="barra-tsb${p.tsb < 0 ? " negativa" : ""}" data-dia="${p.fecha}" x="${f1(xCentro(i) - w / 2)}" y="${f1(top)}" width="${f1(w)}" height="${f1(alto)}"><title>${etiquetaDia(p.fecha)}: forma ${enteras.format(p.ctl)}, fatiga ${enteras.format(p.atl)}, frescura ${signo}${enteras.format(Math.abs(p.tsb))}</title></rect>`);
+    });
+    partes.push(`<line class="linea-cero" x1="${x0}" y1="${f1(yb(0))}" x2="${x1}" y2="${f1(yb(0))}"/>`,
+      `<text class="eje" x="${x0 - 6}" y="${f1(yb(0) + 4)}" text-anchor="end">0</text>`);
+    const cada = Math.max(1, Math.ceil(SEPARACION_MIN / hueco));
+    serie.forEach((p, i) => {
+      if ((serie.length - 1 - i) % cada !== 0) return; // always today's label, the rest every `cada` days
+      const xt = Math.min(Math.max(xCentro(i), 18), W - 18);
+      partes.push(`<text class="etiqueta-x" x="${f1(xt)}" y="${abajo.abajo + 18}" text-anchor="middle">${etiquetaDia(p.fecha)}</text>`);
+    });
+  }
+  const lienzo = document.createElement("div");
+  lienzo.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Forma y fatiga arriba, frescura abajo, de los últimos 14 días">${partes.join("")}</svg>`;
+  return lienzo.firstChild;
+}
+
+export function leyendaCarga() {
+  const p = document.createElement("p");
+  p.className = "leyenda-grafica";
+  [["ley-ctl", "—", "forma (CTL)"], ["ley-atl", "┄", "fatiga (ATL)"], ["ley-tsb", "▮", "frescura (TSB)"]].forEach(([clase, marca, texto], i) => {
+    if (i) p.append(" · ");
+    const s = document.createElement("span");
+    s.className = clase;
+    s.textContent = marca;
+    p.append(s, ` ${texto}`);
+  });
+  return p;
+}

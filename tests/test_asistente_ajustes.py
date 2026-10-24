@@ -18,7 +18,8 @@ from starlette.testclient import TestClient
 
 from tridata.ia import CambioInterpretado, ListaInterpretada
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, ObjetivosDia, RegistroComidas, RegistroPeso
-from tridata.nutricion.asistente import Contexto, Peticion, catalogo, confirmar, proponer, rehacer, texto_acciones
+from tridata.nutricion.asistente import (Cambiado, Contexto, Peticion, catalogo, confirmar, proponer, rehacer,
+                                         texto_acciones)
 from tridata.nutricion.recetas import Recetario
 from tridata.web import crear_app
 
@@ -85,6 +86,26 @@ def test_la_fecha_de_una_carrera(b):  # R9
 def test_una_carrera_que_no_esta(b):
     r = _uno(b, accion="cambiar_carrera", objeto="maratón de prueba", fecha=date(2026, 11, 15))
     assert r["tipo"] == "no" and "maratón de prueba" in r["texto"]
+
+
+def test_anadir_una_carrera(b):  # unit 032, R8: «apúntame esa carrera en Ajustes»
+    t = _uno(b, "apúntame el 10K del río el 6 de diciembre", accion="anadir_carrera", texto="10K del río",
+             fecha=date(2026, 12, 6))
+    assert t["tipo"] == "propuesta"
+    assert t["texto"] == "Voy a añadir la carrera 10K del río el 2026-12-06, con 2 días de mantenimiento antes"
+    confirmar(t, b.ctx)
+    with pytest.raises(Cambiado):  # the same card confirmed twice does not add it twice
+        confirmar(t, b.ctx)
+    iguales = [c for c in b.ajustes.carreras() if c.nombre == "10K del río"]
+    assert len(iguales) == 1
+    nueva = iguales[0]
+    assert nueva.fecha == date(2026, 12, 6) and nueva.dias_mantenimiento == 2
+
+
+def test_anadir_una_carrera_que_ya_esta(b):
+    r = _uno(b, accion="anadir_carrera", texto="Carrera de prueba", fecha=date(2026, 12, 6))
+    assert r["tipo"] == "no" and "Ya tienes" in r["texto"]
+    assert len(b.ajustes.carreras()) == 1
 
 
 def test_el_objetivo_de_peso_vale_desde_hoy_y_se_corrige(b):  # R9

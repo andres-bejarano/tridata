@@ -4,7 +4,7 @@
 // from a cache and nothing that is not a GET is touched. Served from the root (/sw.js) so its
 // scope is the whole app.
 
-const VERSION = "tridata-cascaron-v10"; // change it when the list below changes (v10: unit 031, fitness.js)
+const VERSION = "tridata-cascaron-v11"; // change it when the list below changes (v11: unit 032, conversaciones.js)
 const CASCARON = [
   "/", "/static/app.js", "/static/cola.js", "/static/dictado.js", "/static/estilos.css",
   // unit 010: the Peso tab, the settings page and the home-screen icon
@@ -24,6 +24,8 @@ const CASCARON = [
   "/static/asistente.js",
   // unit 031: the Fitness tab
   "/static/fitness.js",
+  // unit 032: the Asistente's conversations
+  "/static/conversaciones.js",
 ];
 const ESPERA_RED_MS = 4000; // a PC that is off over Tailscale may hang instead of failing
 

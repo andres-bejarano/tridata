@@ -98,3 +98,72 @@ def test_sin_valores_de_prueba_no_busca_nada(repo, tmp_path, capsys, monkeypatch
     monkeypatch.setattr(cli, "DEFAULT_DB_PATH", d)
     assert cli.main(["comprobar-privados", "--repo", str(repo)]) == 0
     assert "nada que buscar" in capsys.readouterr().out
+
+
+# -- unit 032 (R12 · R-119, C-160, G-50): the values of the blood test too ----------------------------------------
+
+class _TranscriptorFijo:
+    """The transcriber double: an invented blood test, never the API."""
+
+    def transcribir(self, pdf: bytes):
+        from tridata.conversaciones.medicos import TranscripcionMedica, ValorMedico
+
+        valores = [ValorMedico(prueba="hemoglobina de prueba", valor="13,87", unidad="g/dL", rango="13-17", fecha=None),
+                   ValorMedico(prueba="ferritina de prueba", valor="2468", unidad="ng/mL", rango=None, fecha=None),
+                   ValorMedico(prueba="glucosa de prueba", valor="91", unidad="mg/dL", rango=None, fecha=None),
+                   ValorMedico(prueba="orina de prueba", valor="negativo", unidad=None, rango=None, fecha=None)]
+        uso = {"entrada": 0, "salida": 0, "cache_escritura": 0, "cache_lectura": 0}
+        return TranscripcionMedica(tipo="analitica", titulo="Analítica de prueba", fecha="2026-03-02",
+                                   valores=valores, notas=[]), uso, "claude-haiku-5-5"
+
+
+@pytest.fixture
+def db_con_analitica(db, tmp_path) -> Path:
+    from tridata.conversaciones.medicos import Medicos
+
+    carpeta = tmp_path / "medicos"
+    carpeta.mkdir()
+    (carpeta / "analitica-de-prueba.pdf").write_bytes(b"%PDF-1.4 inventado\n%%EOF\n")
+    Medicos(db, carpeta, _TranscriptorFijo()).al_dia()
+    return db
+
+
+def test_la_analitica_limpia_cuenta_cero(repo, db_con_analitica, tmp_path):  # R12 · C-160
+    r = privados.comprobar(db_con_analitica, repo, [tmp_path / "no-hay"])
+    assert r["valores"] > 10 and (r["repo"], r["registros"]) == (0, 0)
+
+
+def test_un_valor_de_la_analitica_cuenta_en_el_repo_y_en_los_registros(repo, db_con_analitica, tmp_path):  # R12
+    (repo / "notas.md").write_text("hemoglobina 13.87 y glucosa 91\n")  # 91: two digits are too common to look for
+    _git(repo, "add", "notas.md")
+    registros = tmp_path / "registros"
+    registros.mkdir()
+    (registros / "web.log").write_text("ferritina 2468\n")
+    r = privados.comprobar(db_con_analitica, repo, [registros])
+    assert (r["repo"], r["registros"]) == (1, 1)
+
+
+def test_la_salida_nunca_dice_un_valor_de_la_analitica(repo, db_con_analitica, capsys, monkeypatch):  # R12 · C-160
+    from tridata import cli
+
+    (repo / "notas.md").write_text("13,87\n")
+    _git(repo, "add", "notas.md")
+    monkeypatch.setattr(cli, "DEFAULT_DB_PATH", db_con_analitica)
+    assert cli.main(["comprobar-privados", "--repo", str(repo)]) == 1
+    salida = capsys.readouterr()
+    for valor in ("13,87", "13.87", "2468", "hemoglobina", "ferritina"):
+        assert valor not in salida.out + salida.err
+    assert "analítica" in salida.out and "1 aparici" in salida.out
+
+
+def test_solo_la_analitica_sin_prueba_de_esfuerzo_tambien_busca(repo, tmp_path):  # R12
+    from tridata.conversaciones.medicos import Medicos
+
+    d = tmp_path / "solo.sqlite3"
+    carpeta = tmp_path / "medicos-solo"
+    carpeta.mkdir()
+    (carpeta / "a.pdf").write_bytes(b"%PDF-1.4 inventado\n%%EOF\n")
+    Medicos(d, carpeta, _TranscriptorFijo()).al_dia()
+    (repo / "fuga.txt").write_text("2468\n")
+    _git(repo, "add", "fuga.txt")
+    assert privados.comprobar(d, repo, [])["repo"] == 1

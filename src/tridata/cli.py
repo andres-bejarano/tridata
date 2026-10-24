@@ -42,7 +42,8 @@ Examples:
     tridata importar-detalle --md deficit.md --simular
     tridata importar-detalle --md deficit.md
 
-    # Unit 031: how many times the stress-test values saved in Ajustes appear in the repo and the logs (never which)
+    # Unit 031: how many times the stress-test values saved in Ajustes appear in the repo and the logs (never which);
+    # unit 032: also the values of the blood test and stress test transcribed for the Asistente
     tridata comprobar-privados --registros ~/.tridata /path/to/sync.log
 """
 from __future__ import annotations
@@ -881,6 +882,7 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
         import uvicorn
 
         from .ia import InterpreteClaude, TranscriptorWhisper
+        from .ia.conversacion import ConversadorClaude
         from .nutricion import Ajustes, ObjetivosDia, Recetario, RegistroComidas, RegistroPeso
         from .nutricion.asistente import nombres_apuntados, texto_acciones
         from .web import crear_app
@@ -912,10 +914,17 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
     registro = RegistroComidas(db_path)
     interprete = InterpreteClaude(guardados=recetario.nombres)
     interprete.apuntado, interprete.acciones = nombres_apuntados(registro), texto_acciones
+    # Unit 032: the Asistente's conversations (Haiku 5.5 unless TRIDATA_MODELO_ASISTENTE says otherwise) and the
+    # folder of the medical PDFs, read once each on this PC (TRIDATA_MEDICOS_DIR; without it, the context says so).
+    medicos_dir = os.environ.get("TRIDATA_MEDICOS_DIR", "").strip()
+    if not medicos_dir:
+        print("Aviso: sin TRIDATA_MEDICOS_DIR en .env el asistente no verá tu analítica ni tu prueba de esfuerzo.",
+              file=sys.stderr)
     app = crear_app(registro, interprete, ajustes,
                     pesos=RegistroPeso(db_path), objetivos=ObjetivosDia(db_path),
                     store=store, actualizar_garmin=_actualizador_garmin(store), transcriptor=transcriptor,
-                    recetario=recetario)
+                    recetario=recetario, conversador=ConversadorClaude(),
+                    medicos_dir=Path(medicos_dir).expanduser() if medicos_dir else None)
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(f"Warning: listening on {host}, reachable from outside this PC.", file=sys.stderr)
     print(f"TriData web on http://{host}:{port} (Ctrl+C to stop)")

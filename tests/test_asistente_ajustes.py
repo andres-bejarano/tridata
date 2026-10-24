@@ -87,6 +87,22 @@ def test_una_carrera_que_no_esta(b):
     assert r["tipo"] == "no" and "maratón de prueba" in r["texto"]
 
 
+def test_anadir_una_carrera(b):  # unit 032, R8: «apúntame esa carrera en Ajustes»
+    t = _uno(b, "apúntame el 10K del río el 6 de diciembre", accion="anadir_carrera", texto="10K del río",
+             fecha=date(2026, 12, 6))
+    assert t["tipo"] == "propuesta"
+    assert t["texto"] == "Voy a añadir la carrera 10K del río el 2026-12-06, con 2 días de mantenimiento antes"
+    confirmar(t, b.ctx)
+    nueva = next(c for c in b.ajustes.carreras() if c.nombre == "10K del río")
+    assert nueva.fecha == date(2026, 12, 6) and nueva.dias_mantenimiento == 2
+
+
+def test_anadir_una_carrera_que_ya_esta(b):
+    r = _uno(b, accion="anadir_carrera", texto="Carrera de prueba", fecha=date(2026, 12, 6))
+    assert r["tipo"] == "no" and "Ya tienes" in r["texto"]
+    assert len(b.ajustes.carreras()) == 1
+
+
 def test_el_objetivo_de_peso_vale_desde_hoy_y_se_corrige(b):  # R9
     t = _uno(b, "mi objetivo es 70 kilos para el 1 de marzo", accion="cambiar_ajuste", campo="objetivo_peso",
              valor=70, fecha=date(2027, 3, 1))

@@ -228,6 +228,53 @@ def _aplicar_carrera(parametros: dict, ctx: Contexto) -> str:
     return f"{guardada['nombre']} es el {guardada['fecha']}"
 
 
+# -- anadir_carrera -------------------------------------------------------------------------------------------------
+
+DIAS_POR_DEFECTO = 2  # the same default as the race form of Ajustes
+
+
+def _proponer_nueva_carrera(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
+    if not cambio.texto:
+        return no("No sé cómo se llama la carrera")
+    if cambio.fecha is None:
+        return no(f"No sé qué día es {cambio.texto}")
+    buscado = normalizar(cambio.texto)
+    if any(normalizar(c.nombre) == buscado for c in ctx.ajustes.carreras()):
+        return no(f"Ya tienes «{cambio.texto}» en Ajustes: dime qué quieres cambiarle")
+    parametros = {"nombre": cambio.texto, "fecha": cambio.fecha.isoformat(), "dias": cambio.valor}
+    return _rehacer_nueva_carrera(parametros, {}, ctx, peticion)
+
+
+def _rehacer_nueva_carrera(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
+    nombre = parametros.get("nombre")
+    if not isinstance(nombre, str) or not nombre.strip():
+        raise TarjetaMal("la tarjeta no dice qué carrera")
+    fecha = valores.get("fecha", parametros.get("fecha"))
+    dias = _como_numero(valores.get("dias", parametros.get("dias")))
+    dias = DIAS_POR_DEFECTO if dias is None else dias
+    error = None
+    try:
+        nombre, dia, dias = _carrera_valida(nombre, fecha, dias)
+        despues = dia.isoformat()
+    except ValueError as exc:
+        error, despues = str(exc), str(fecha)
+    antes_txt = "1 día" if dias == 1 else f"{dias} días"
+    return tarjeta(accion="anadir_carrera", parametros={"nombre": nombre, "fecha": str(fecha), "dias": dias},
+                   peticion=peticion,
+                   texto=f"Voy a añadir la carrera {_capital(nombre)} el {despues}, con {antes_txt} de mantenimiento "
+                         f"antes",
+                   antes=None, despues=despues, desde=peticion.fecha,
+                   donde="en Ajustes › Carreras, y en el plan de esos días", avisos=[],
+                   campos=[campo("fecha", "Fecha de la carrera", "fecha", str(fecha)),
+                           campo("dias", "Días de mantenimiento antes", "numero", dias)],
+                   error=error)
+
+
+def _aplicar_nueva_carrera(parametros: dict, ctx: Contexto) -> str:
+    guardada = ctx.ajustes.anadir_carrera(parametros["nombre"], parametros["fecha"], parametros["dias"])
+    return f"{guardada['nombre']} está en Ajustes, el {guardada['fecha']}"
+
+
 # -- peso_dia -------------------------------------------------------------------------------------------------------
 
 def _kg(n: float) -> str:
@@ -300,6 +347,9 @@ ACCIONES: list[Accion] = [
            "nombre de la carrera; fecha: su fecha nueva, o null; valor: los días de mantenimiento antes, solo si los "
            "dice; antes_dicho: la fecha de antes, solo si la dice.",
            _proponer_carrera, _rehacer_carrera, _aplicar_carrera),
+    Accion("anadir_carrera", "añadir una carrera nueva a Ajustes («apúntame la carrera X el día tal»). texto: su "
+           "nombre; fecha: su día; valor: los días de mantenimiento antes, solo si los dice.",
+           _proponer_nueva_carrera, _rehacer_nueva_carrera, _aplicar_nueva_carrera),
     Accion("peso_dia", "corregir el peso de un día ya apuntado («ayer pesé tanto, no tanto», «corrige el peso del "
            "lunes»). Un peso dicho sin corregir nada va en la pieza peso, no aquí. valor: los kg nuevos; dia: el día "
            "del peso, o null si es hoy; antes_dicho: el peso de antes, solo si lo dice.",

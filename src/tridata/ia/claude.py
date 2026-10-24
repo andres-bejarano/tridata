@@ -22,7 +22,7 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 import anthropic
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 log = logging.getLogger(__name__)
 
@@ -155,10 +155,57 @@ class LineaInterpretada(BaseModel):
     kcal_estimadas: float | None = Field(description="Kcal estimadas solo si es algo nuevo, no guardado; o null")
 
 
+def _cambio_compacto(esquema: dict[str, Any]) -> None:
+    """Bug 036: the schema SENT for a change, small enough for the API's grammar limit.
+
+    Texts and dates travel as a plain string («» = none) instead of string-or-null, and each line as one text
+    «cantidad|unidad|nombre|kcal» instead of a nested object; `_desde_lo_enviado` turns them back on the way in.
+    `valores` travels as one text «-10;-20» too; plain numbers keep their null.
+    """
+    _todo_requerido(esquema)
+    for nombre, propiedad in esquema.get("properties", {}).items():
+        ramas = propiedad.get("anyOf")
+        if not ramas:
+            continue
+        otra = next(r for r in ramas if r != {"type": "null"})
+        if nombre == "lineas":
+            del propiedad["anyOf"]
+            propiedad.update(type="array", items={"type": "string"}, description=(
+                "Líneas, si la acción las pide, cada una «cantidad|unidad|nombre|kcal» (vacío lo que no se sabe, "
+                "p. ej. «100|g|arroz|»); lista vacía si no"))
+        elif nombre == "valores":
+            del propiedad["anyOf"]
+            propiedad.update(type="string", description="Varios valores nuevos, si los dice, separados por «;» "
+                                                        "(p. ej. «-10;-20»); vacío si no")
+        elif otra.get("type") == "string":
+            del propiedad["anyOf"]
+            propiedad["type"] = "string"
+            propiedad["description"] = propiedad.get("description", "").replace("o null", "o vacío")
+
+
+def _linea_enviada(texto: str) -> dict[str, Any]:
+    cantidad, unidad, nombre, kcal = (texto.split("|") + ["", "", "", ""])[:4]
+    return {"nombre": nombre.strip(), "cantidad": cantidad.strip() or None, "unidad": unidad.strip() or None,
+            "kcal_estimadas": kcal.strip() or None}
+
+
 class CambioInterpretado(BaseModel):
     """One change Andrés asks for (unit 021, G-37). Generic: the meaning of each field is in the list of actions."""
 
-    model_config = ConfigDict(json_schema_extra=_todo_requerido)
+    model_config = ConfigDict(json_schema_extra=_cambio_compacto)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _desde_lo_enviado(cls, datos: Any) -> Any:
+        """«» and [] mean none; a line given as text becomes a LineaInterpretada (bug 036)."""
+        if not isinstance(datos, dict):
+            return datos
+        datos = {k: (None if v == "" or v == [] else v) for k, v in datos.items()}
+        if isinstance(datos.get("lineas"), list):
+            datos["lineas"] = [_linea_enviada(l) if isinstance(l, str) else l for l in datos["lineas"]]
+        if isinstance(datos.get("valores"), str):
+            datos["valores"] = [v.strip() for v in datos["valores"].split(";") if v.strip()] or None
+        return datos
 
     accion: str = Field(description='Id de la lista de cambios que sabes proponer, u "otra"')
     objeto: str | None = Field(default=None, description="Lo que nombra, tal cual (un alimento, un ingrediente…), o null")

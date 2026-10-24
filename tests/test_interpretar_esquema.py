@@ -28,7 +28,7 @@ def test_lo_que_llega_vacio_es_nada_y_las_lineas_vuelven_a_ser_lineas():
         "accion": "crear_receta", "objeto": "", "campo": "", "valor": None, "valores": [], "texto": "prueba",
         "cantidad": None, "unidad": "", "kcal_estimadas": None, "dia": "", "desde": "", "fecha": "2026-10-24",
         "antes_dicho": "", "falta": "",
-        "lineas": ["100|g|arroz|", "1|unidad|huevo|78", "|||sal|"],
+        "lineas": ["100|g|arroz|", "1|unidad|huevo|78", "||sal|"],
     })
     assert cambio.objeto is None and cambio.dia is None and cambio.valores is None and cambio.falta is None
     assert str(cambio.fecha) == "2026-10-24" and cambio.texto == "prueba"
@@ -44,3 +44,9 @@ def test_un_cambio_hecho_en_python_sigue_igual():
     linea = LineaInterpretada(nombre="arroz", cantidad=100, unidad="g", kcal_estimadas=None)
     cambio = CambioInterpretado(accion="crear_receta", texto="prueba", lineas=[linea])
     assert cambio.lineas == [linea] and cambio.objeto is None
+
+
+def test_varios_valores_viajan_en_un_texto_y_vuelven_a_ser_numeros():
+    assert _cambio_enviado()["properties"]["valores"].get("type") == "string"
+    cambio = CambioInterpretado.model_validate({"accion": "niveles_dia", "valores": "-10; -20;0"})
+    assert cambio.valores == [-10, -20, 0]

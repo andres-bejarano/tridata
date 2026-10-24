@@ -249,6 +249,9 @@ def _rehacer_nueva_carrera(parametros: dict, valores: dict, ctx: Contexto, petic
     nombre = parametros.get("nombre")
     if not isinstance(nombre, str) or not nombre.strip():
         raise TarjetaMal("la tarjeta no dice qué carrera")
+    buscado = normalizar(nombre)  # redone on confirm: the same card confirmed twice does not add it twice
+    if any(normalizar(c.nombre) == buscado for c in ctx.ajustes.carreras()):
+        return no(f"Ya tienes «{nombre}» en Ajustes: dime qué quieres cambiarle")
     fecha = valores.get("fecha", parametros.get("fecha"))
     dias = _como_numero(valores.get("dias", parametros.get("dias")))
     dias = DIAS_POR_DEFECTO if dias is None else dias

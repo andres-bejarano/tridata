@@ -40,11 +40,14 @@ CREATE INDEX IF NOT EXISTS idx_alimento_apuntado_dia ON alimento_apuntado(dia);
 
 _COLUMNAS = (
     "id, dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, grasa_g, estado, estimado, "
-    "supuestos, pendiente_cantidad, creado, origen, provisional"
+    "supuestos, pendiente_cantidad, creado, origen, provisional, seccion"
 )
 # unit 011 (D8): where the kcal came from («de tu receta …») and whether they were provisional;
 # added to an existing store with ALTER TABLE, saved on confirming and never recomputed.
-_COLUMNAS_NUEVAS = (("origen", "TEXT"), ("provisional", "INTEGER NOT NULL DEFAULT 0"))
+# unit 035 (R-121, R-126, G-51): the meal of the day a food belongs to, chosen by Andrés by dragging it;
+# NULL («Sin sección») for everything logged and for what was already in the store.
+_COLUMNAS_NUEVAS = (("origen", "TEXT"), ("provisional", "INTEGER NOT NULL DEFAULT 0"), ("seccion", "TEXT"))
+SECCIONES = ("desayuno", "media_manana", "comida", "merienda", "cena")
 
 
 def _estado(dia: date, hoy: date) -> str:
@@ -244,6 +247,19 @@ class RegistroComidas:
             if date.fromisoformat(fila["dia"]) > hoy:
                 raise ValueError(f"«{fila['nombre']}» es de un día que aún no ha llegado: no se puede marcar comido")
             conn.execute("UPDATE alimento_apuntado SET estado = 'comido' WHERE id = ?", (alimento_id,))
+            return self._fila(self._leer(conn, alimento_id))
+
+    def mover_seccion(self, alimento_id: int, seccion: str | None) -> dict:
+        """Unit 035 (R-123, G-52): put a food in one of the five sections, or back «Sin sección» with None.
+
+        Only the section changes: kcal, quantity and state stay as they were. ValueError if `seccion` is not one
+        of `SECCIONES` nor None, KeyError if the food does not exist; in both cases nothing changes.
+        """
+        if seccion is not None and not (isinstance(seccion, str) and seccion in SECCIONES):
+            raise ValueError(f"«{seccion}» no es una sección: tiene que ser una de {', '.join(SECCIONES)}")
+        with self._connect() as conn:
+            self._leer(conn, alimento_id)
+            conn.execute("UPDATE alimento_apuntado SET seccion = ? WHERE id = ?", (seccion, alimento_id))
             return self._fila(self._leer(conn, alimento_id))
 
     def cerrar_planeados(self, dia: date, conn: sqlite3.Connection | None = None) -> int:

@@ -855,6 +855,19 @@ def crear_app(
             return _error(str(exc), 422)
         return JSONResponse({"alimento": marcado, "dia": _dia(date.fromisoformat(marcado["dia"]))})
 
+    async def seccion(request: Request) -> Response:
+        """Unit 035 (R-123, G-52): only the section of a food changes; the day goes back recomputed."""
+        cuerpo = await _cuerpo(request)
+        if cuerpo is None or "seccion" not in cuerpo:
+            return _error("No se ha cambiado nada: falta la sección a la que va el alimento.", 422)
+        try:
+            movido = registro.mover_seccion(request.path_params["id"], cuerpo["seccion"])
+        except KeyError:
+            return _error(f"No se ha cambiado nada: {NO_ESTA[0].lower()}{NO_ESTA[1:]}", 404)
+        except ValueError as exc:
+            return _error(f"No se ha cambiado nada: {exc}.", 422)
+        return JSONResponse({"alimento": movido, "dia": _dia(date.fromisoformat(movido["dia"]))})
+
     async def cambiar_objetivo(request: Request) -> Response:
         """The %, levels and planned training of today or a future day (unit 034); checked first, so a bad value
         changes nothing (R6)."""
@@ -1052,6 +1065,7 @@ def crear_app(
         Route("/api/alimento/{id:int}", cambiar, methods=["POST"]),
         Route("/api/alimento/{id:int}/borrar", borrar, methods=["POST"]),
         Route("/api/alimento/{id:int}/comido", comido, methods=["POST"]),
+        Route("/api/alimento/{id:int}/seccion", seccion, methods=["POST"]),
         *rutas_recetas(recetario, hoy, registro),
         *rutas_asistente(asistente, _dia),
         *rutas_conversaciones(conversaciones, conversador if conversador is not None else ConversadorClaude(), medicos,

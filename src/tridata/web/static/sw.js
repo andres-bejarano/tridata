@@ -4,7 +4,7 @@
 // from a cache and nothing that is not a GET is touched. Served from the root (/sw.js) so its
 // scope is the whole app.
 
-const VERSION = "tridata-cascaron-v11"; // change it when the list below changes (v11: unit 032, conversaciones.js)
+const VERSION = "tridata-cascaron-v12"; // change it when the list below changes (v11: unit 032, conversaciones.js; v12: unit 035, the sections of the day)
 const CASCARON = [
   "/", "/static/app.js", "/static/cola.js", "/static/dictado.js", "/static/estilos.css",
   // unit 010: the Peso tab, the settings page and the home-screen icon

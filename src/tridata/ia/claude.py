@@ -202,7 +202,7 @@ class CambioInterpretado(BaseModel):
             return datos
         datos = {k: (None if v == "" or v == [] else v) for k, v in datos.items()}
         if isinstance(datos.get("lineas"), list):
-            datos["lineas"] = [_linea_enviada(l) if isinstance(l, str) else l for l in datos["lineas"]]
+            datos["lineas"] = [_linea_enviada(x) if isinstance(x, str) else x for x in datos["lineas"]]
         if isinstance(datos.get("valores"), str):
             datos["valores"] = [v.strip() for v in datos["valores"].split(";") if v.strip()] or None
         return datos

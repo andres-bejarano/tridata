@@ -351,7 +351,7 @@ def test_las_zonas_seguidas_sin_hueco_tambien_valen_tocandose(ajustes):  # R7
     ({**PULSO_A, "zonas_fc": [[55, 120], [125, 140], [141, 155], [156, 168], [169, 180]]}, "hueco"),
     ({**PULSO_A, "zonas_fc": [[55, 120], [110, 140], [141, 155], [156, 168], [169, 180]]}, "se pisan"),
     ({**PULSO_A, "zonas_fc": [[60, 120], [121, 140], [141, 155], [156, 168], [169, 180]]}, "FC en reposo"),
-    ({**PULSO_A, "zonas_fc": [[55, 120], [121, 140], [141, 155], [156, 168], [169, 178]]}, "FC máxima"),
+    ({**PULSO_A, "zonas_fc": [[55, 120], [121, 140], [141, 155], [156, 168], [169, 177]]}, "FC máxima"),
     ({**PULSO_A, "zonas_fc": [[55, 120], [121, 140], [141, 141], [142, 168], [169, 180]]}, "zona 3"),
     ({**PULSO_A, "zonas_fc": "muchas"}, "cinco zonas"),
     ({**PULSO_A, "fc_origen": {"tipo": "prueba", "mes": "2025-13"}}, "mes"),

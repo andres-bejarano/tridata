@@ -239,8 +239,10 @@ def _aplicar_nota(parametros: dict, ctx: Contexto) -> str:
     return "la nota está en tu plan"
 
 
+# no figure in a line for Claude (G-38): the example goes in words
 _SESION = ("texto: «título | bloque | bloque…», cada bloque en números redondos con su tiempo o distancia, su ritmo o "
-           "esfuerzo y su recuperación (p. ej. «Series 3×1000 | 20' a 5:30 | 3×1000 a 4:05 (2' rec) | 15' suave»)")
+           "esfuerzo y su recuperación (p. ej. «Series | calentamiento suave | series a ritmo de diez mil con "
+           "recuperación al trote | vuelta a la calma»)")
 
 ACCIONES = [
     Accion("plan_cambiar_sesion", "cambiar una sesión prevista del plan en curso, de hoy o de un día que aún no ha "

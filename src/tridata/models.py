@@ -48,6 +48,7 @@ class Activity:
     total_strokes: float | None = None
     pool_length_m: float | None = None
     avg_water_temp_c: float | None = None
+    moving_duration_seconds: float | None = None  # unit 040: Garmin's `movingDuration` (the time in movement)
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:

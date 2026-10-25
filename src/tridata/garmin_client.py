@@ -149,6 +149,7 @@ class GarminClient:
                     total_strokes=raw.get("strokes"),
                     pool_length_m=_pool_length_m(raw),
                     avg_water_temp_c=raw.get("averageTemperature"),
+                    moving_duration_seconds=raw.get("movingDuration"),
                     raw=raw,
                 )
             )

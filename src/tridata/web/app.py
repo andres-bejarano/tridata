@@ -57,6 +57,8 @@
                                   each with its `estado`). Every day with the HR in force that day in Ajustes (G-49)
     GET  /api/actividad/ID        unit 031: one activity with its laps (pace or speed, mean HR and its zone) and its
                                   weather; 404 if it does not exist
+    GET  /api/plan*               unit 040 (REC-22): Fitness › Plan, the routes of `web/plan.py` (the plan of the
+                                  current objective, its weeks, importing the .md and downloading it)
     GET  /ajustes                 the settings page
     GET  /api/ajustes             settings in force (?fecha=, default today), changes to come, races
     POST /api/ajustes             {"datos": {...}, "desde": "AAAA-MM-DD"} save one or more settings
@@ -185,6 +187,9 @@ from ..ia.conversacion import ConversadorClaude
 from .asistente import rutas as rutas_asistente
 from .conversaciones import rutas as rutas_conversaciones
 from .recetas import rutas as rutas_recetas
+from .plan import rutas as rutas_plan
+from ..ia.plan import OrdenadorPlan
+from ..plan import Planes
 
 log = logging.getLogger(__name__)
 
@@ -326,7 +331,7 @@ def crear_app(
     store: DataStore | None = None, actualizar_garmin: Callable[[date], None] | None = None,
     transcriptor: Any = None, recetario: Recetario | None = None, cierres: Cierres | None = None,
     ahora: Callable[[], datetime] = datetime.now, conversador: Any = None, medicos_dir: Path | None = None,
-    transcriptor_medico: Any = None,
+    transcriptor_medico: Any = None, ordenador_plan: Any = None,
 ) -> Starlette:
     """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double).
 
@@ -344,6 +349,8 @@ def crear_app(
     Unit 032: `conversador` answers the Asistente's conversations (by default the Claude one, created lazily: nothing
     is called until a message is sent); `medicos_dir` is the folder of the medical PDFs (None: the context goes
     without them and says so) and `transcriptor_medico` reads each one once (by default the Claude one).
+    Unit 040: `ordenador_plan` orders each section of an imported plan (by default the Claude one, created lazily);
+    the plans live in the same SQLite (`plan.Planes`) and their routes are `web/plan.py`.
     """
     recetario = recetario or Recetario(registro.db_path)
     pesos = pesos or RegistroPeso(registro.db_path)
@@ -1070,5 +1077,7 @@ def crear_app(
         *rutas_asistente(asistente, _dia),
         *rutas_conversaciones(conversaciones, conversador if conversador is not None else ConversadorClaude(), medicos,
                               _contexto_conversacion, asistente, hoy, ahora, transcriptor),
+        *rutas_plan(Planes(registro.db_path), store, ajustes,
+                    ordenador_plan if ordenador_plan is not None else OrdenadorPlan(), conversaciones, hoy, ahora),
         Mount("/static", StaticFiles(directory=ESTATICOS), name="static"),
     ])

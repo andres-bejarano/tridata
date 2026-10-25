@@ -54,9 +54,15 @@
       </article>
     </section>
 
-    <!-- ================= FITNESS (unit 031: fitness.js paints it from GET /api/fitness) ================= -->
+    <!-- ================= FITNESS (unit 031: fitness.js paints «Forma» from GET /api/fitness; unit 040: plan.js
+         paints «Plan», `#fitness/plan`, from GET /api/plan) ================= -->
     <section id="fitness" class="pantalla" data-pestana="fitness" aria-label="Fitness" hidden>
       <h1 class="titulo-pantalla">Fitness</h1>
+      <nav id="fitness-partes" class="segmentado partes" aria-label="Parte de Fitness">
+        <a href="#fitness" data-parte="forma">Forma</a>
+        <a href="#fitness/plan" data-parte="plan">Plan</a>
+      </nav>
+      <div id="fitness-forma">
       <p class="suave intro-fitness">Aquí ves tu carga, tu último entreno y tu recuperación.</p>
       <article id="fitness-carga" class="tarjeta bloque-fitness" aria-labelledby="t-carga">
         <div class="cab-hoy"><h2 id="t-carga">Carga de entreno</h2><span class="suave">últimos 14 días</span></div>
@@ -73,6 +79,14 @@
       <article id="fitness-detalle" class="tarjeta detalle-fitness" aria-label="Detalle de la actividad" hidden></article>
       <h2 class="titulo-bloque">Recuperación</h2>
       <div id="fitness-recuperacion" class="datos recuperacion"></div>
+      </div>
+      <div id="fitness-plan" class="plan" hidden>
+        <p id="plan-aviso" role="status" aria-live="polite" hidden></p>
+        <input id="plan-fichero" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
+        <div id="plan-vista"></div>
+        <div id="plan-semana" hidden></div>
+        <div id="plan-importar" hidden></div>
+      </div>
     </section>
     <!-- ================= ASISTENTE (unit 032: conversaciones.js; #asistente the list, #asistente/N one conversation) ================= -->
     <section id="asistente" class="pantalla" data-pestana="asistente" aria-label="Asistente" hidden>

@@ -196,7 +196,7 @@ def test_la_parte_fija_va_primero_con_su_marca_de_cache_y_sin_hora():  # R10 · 
     assert p["system"][-1]["cache_control"] == {"type": "ephemeral"}
     assert all("cache_control" not in b for b in p["system"][:-1])  # one mark, at the end of the fixed part
     assert p["messages"] == historial + [{"role": "user", "content": "¿cómo voy?"}]
-    assert {h["name"] for h in p["tools"]} == {"proponer_cambio", "poner_titulo"}
+    assert {h["name"] for h in p["tools"]} == {"proponer_cambio", "poner_titulo", "abrir_actividad"}  # 041: + R4
     # the same fixed part and tools whatever is said: the cache is by exact prefix
     otra = construir_peticion(BLOQUES, [], "otra cosa", MODELO_POR_DEFECTO)
     assert (otra["system"], otra["tools"]) == (p["system"], p["tools"])

@@ -11,6 +11,12 @@ Own tables in the same SQLite (as `nutricion/ajustes.py`):
 - `gasto_asistente`: what each call to the API cost, with the use the API gave back (R9). Deleting a conversation
   never gives back what was spent: the cap of the month counts every call.
 
+Unit 041 (REC-23): a conversation is born with a role (`conversacion.papel`, `conversaciones/papeles.py`; the ones of
+before are the Asistente's) and each answer keeps the role and the model that gave it (`mensaje.papel`,
+`mensaje.modelo`): «Pedir opinión a…» makes another role answer in the same conversation. `modelo_papel` keeps the
+model of each role chosen in Ajustes › El equipo, among the ones of the catalogue (`ia/modelos.py`), from which the
+prices come too. The columns are added if they are missing (an additive migration, as the other tables do).
+
 Nothing here talks to the API. The logs of this package carry ids, counts and token use, never a text (R12).
 """
 from __future__ import annotations
@@ -23,22 +29,22 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-TOPE_DOLARES_MES = 5.0  # decided by Andrés on 2026-10-23: at 5 $ it warns and sends nothing more that month
+from ..ia.modelos import MAS_CARO, MODELOS
+from .papeles import PAPELES, POR_DEFECTO
+
+# 5 $ decided by Andrés on 2026-10-23; 15 $ since unit 041 (R10: Sonnet in three roles, about 10 $ a month of normal
+# use). At the cap it warns and sends nothing more that month.
+TOPE_DOLARES_MES = 15.0
 LARGO_TITULO = 30
 LARGO_AVANCE = 140  # how much of the last answer the list and the card of Hoy show (R-97)
-# $ per million tokens: (input, output, cache write 5 min, cache read). Official prices of the SDK reference
-# (2026-10-06): Haiku 5.5 0.10 / 0.50 up to 100K tokens, Sonnet 5.5 2 / 10; a write is 1.25x and a read 0.1x the input.
-PRECIOS: dict[str, tuple[float, float, float, float]] = {
-    "claude-haiku-5-5": (0.10, 0.50, 0.125, 0.01),
-    "claude-sonnet-5-5": (2.0, 10.0, 2.5, 0.20),
-}
-# Haiku 5.5 above 100K tokens in one call (input + cache write + cache read): 0.50 / 2.50, write 1.25x and read 0.1x
-# the input (bug 038; SDK reference 2026-10-06). The tier goes per call, so each round is priced on its own.
+# $ per million tokens (input, output, cache write 5 min, cache read), from the catalogue of models (unit 041, G-56).
+PRECIOS: dict[str, tuple[float, float, float, float]] = {k: m.precios for k, m in MODELOS.items()}
+# Above 100K tokens in one call (input + cache write + cache read), the long tier of the model (bug 038). The tier goes
+# per call, so each round is priced on its own.
 LARGO_DESDE = 100_000
 PRECIOS_LARGOS: dict[str, tuple[float, float, float, float]] = {
-    "claude-haiku-5-5": (0.50, 2.50, 0.625, 0.05),
-}
-_MAS_CARO = "claude-sonnet-5-5"  # an unknown model is counted at the dearest price: the cap never falls short
+    k: m.precios_largos for k, m in MODELOS.items() if m.precios_largos is not None}
+_MAS_CARO = MAS_CARO
 USO_VACIO = {"entrada": 0, "salida": 0, "cache_escritura": 0, "cache_lectura": 0}
 
 _SCHEMA = """
@@ -66,6 +72,10 @@ CREATE TABLE IF NOT EXISTS mensaje (
     propuesto TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS mensaje_de_conversacion ON mensaje (conversacion_id, id);
+CREATE TABLE IF NOT EXISTS modelo_papel (
+    papel TEXT PRIMARY KEY,
+    modelo TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS gasto_asistente (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     hora TEXT NOT NULL,
@@ -126,8 +136,22 @@ def _hora(cuando: datetime) -> str:
     return cuando.isoformat(timespec="seconds")
 
 
+# unit 041: columns added to the tables of unit 032 when they are missing (table, column, its definition)
+_COLUMNAS_NUEVAS = (
+    ("conversacion", "papel", f"TEXT NOT NULL DEFAULT '{POR_DEFECTO}'"),
+    ("mensaje", "papel", "TEXT"),
+)
+
+
 def _conversacion(fila: sqlite3.Row) -> dict[str, Any]:
-    return {"id": fila["id"], "titulo": fila["titulo"], "creada": fila["creada"], "usada": fila["usada"]}
+    return {"id": fila["id"], "titulo": fila["titulo"], "creada": fila["creada"], "usada": fila["usada"],
+            "papel": fila["papel"]}
+
+
+def _papel_valido(papel: str) -> str:
+    if papel not in PAPELES:
+        raise ValueError(f"No hay nadie en el equipo que se llame {papel!r}.")
+    return papel
 
 
 def _mensaje(fila: sqlite3.Row) -> dict[str, Any]:
@@ -138,6 +162,8 @@ def _mensaje(fila: sqlite3.Row) -> dict[str, Any]:
     return {"id": fila["id"], "conversacion_id": fila["conversacion_id"], "quien": fila["quien"],
             "texto": fila["texto"], "hora": fila["hora"], "contexto_hasta": fila["contexto_hasta"],
             "sin_respuesta": bool(fila["sin_respuesta"]), "modelo": fila["modelo"], "uso": uso,
+            # an answer of before unit 041 is the Asistente's; Andrés's messages have no role
+            "papel": fila["papel"] or (POR_DEFECTO if fila["quien"] == "asistente" else None),
             "tarjetas": json.loads(fila["tarjetas"]), "propuesto": json.loads(fila["propuesto"])}
 
 
@@ -148,6 +174,9 @@ class Conversaciones:
         self._db_path = Path(db_path)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            for tabla, columna, definicion in _COLUMNAS_NUEVAS:
+                if columna not in {c["name"] for c in conn.execute(f"PRAGMA table_info({tabla})")}:
+                    conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {definicion}")
 
     @property
     def db_path(self) -> Path:
@@ -166,10 +195,12 @@ class Conversaciones:
 
     # -- conversations -----------------------------------------------------------------------------------------------
 
-    def crear(self, titulo: str, ahora: datetime) -> dict[str, Any]:
+    def crear(self, titulo: str, ahora: datetime, papel: str = POR_DEFECTO) -> dict[str, Any]:
+        """A new conversation, of `papel` (R1); ValueError if that role does not exist."""
+        _papel_valido(papel)
         with self._connect() as conn:
-            cur = conn.execute("INSERT INTO conversacion (titulo, titulo_auto, creada, usada) VALUES (?, 1, ?, ?)",
-                               (titulo, _hora(ahora), _hora(ahora)))
+            cur = conn.execute("INSERT INTO conversacion (titulo, titulo_auto, creada, usada, papel) "
+                               "VALUES (?, 1, ?, ?, ?)", (titulo, _hora(ahora), _hora(ahora), papel))
             return _conversacion(conn.execute("SELECT * FROM conversacion WHERE id = ?", (cur.lastrowid,)).fetchone())
 
     def conversacion(self, ident: int) -> dict[str, Any]:
@@ -235,18 +266,20 @@ class Conversaciones:
 
     def anadir_mensaje(self, ident: int, quien: str, texto: str, ahora: datetime, *, sin_respuesta: bool = False,
                        contexto_hasta: datetime | None = None, modelo: str | None = None,
-                       uso: dict[str, int] | None = None, tarjetas: list[dict] | None = None) -> dict[str, Any]:
+                       uso: dict[str, int] | None = None, tarjetas: list[dict] | None = None,
+                       papel: str | None = None) -> dict[str, Any]:
+        """`papel`: the role that gave an answer (unit 041, R3); None for Andrés's messages."""
         uso = uso or {}
         propuesto = [t.get("texto", "") for t in tarjetas or [] if t.get("tipo") in ("propuesta", "elegir")]
         with self._connect() as conn:
             cur = conn.execute(
                 "INSERT INTO mensaje (conversacion_id, quien, texto, hora, contexto_hasta, sin_respuesta, modelo, "
-                "tokens_entrada, tokens_salida, tokens_cache_escritura, tokens_cache_lectura, tarjetas, propuesto) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "tokens_entrada, tokens_salida, tokens_cache_escritura, tokens_cache_lectura, tarjetas, propuesto, "
+                "papel) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (ident, quien, texto, _hora(ahora), _hora(contexto_hasta) if contexto_hasta else None,
                  int(sin_respuesta), modelo, uso.get("entrada"), uso.get("salida"), uso.get("cache_escritura"),
                  uso.get("cache_lectura"), json.dumps(tarjetas or [], ensure_ascii=False),
-                 json.dumps(propuesto, ensure_ascii=False)))
+                 json.dumps(propuesto, ensure_ascii=False), papel))
             conn.execute("UPDATE conversacion SET usada = ? WHERE id = ?", (_hora(ahora), ident))
             return _mensaje(conn.execute("SELECT * FROM mensaje WHERE id = ?", (cur.lastrowid,)).fetchone())
 
@@ -276,6 +309,26 @@ class Conversaciones:
         if fila is None:
             return None
         return {"texto": avance(fila["texto"]), "conversacion_id": fila["id"], "titulo": fila["titulo"]}
+
+    # -- the model of each role (unit 041, R7, G-56) ------------------------------------------------------------------
+
+    def modelos_de_papeles(self) -> dict[str, str]:
+        """`{papel: modelo}` of the four roles: the one chosen in Ajustes, or the role's by default."""
+        with self._connect() as conn:
+            elegidos = {f["papel"]: f["modelo"] for f in conn.execute("SELECT papel, modelo FROM modelo_papel")}
+        return {k: elegidos[k] if elegidos.get(k) in MODELOS else p.modelo for k, p in PAPELES.items()}
+
+    def modelo_de(self, papel: str) -> str:
+        return self.modelos_de_papeles()[_papel_valido(papel)]
+
+    def elegir_modelo(self, papel: str, modelo: str) -> None:
+        """The model of a role, among the ones of the catalogue (ValueError otherwise: nothing changes)."""
+        _papel_valido(papel)
+        if modelo not in MODELOS:
+            raise ValueError("Ese modelo no está entre los que la app conoce.")
+        with self._connect() as conn:
+            conn.execute("INSERT INTO modelo_papel (papel, modelo) VALUES (?, ?) "
+                         "ON CONFLICT (papel) DO UPDATE SET modelo = excluded.modelo", (papel, modelo))
 
     # -- what it costs (R9) ------------------------------------------------------------------------------------------
 

@@ -126,7 +126,7 @@ def test_nueva_conversacion_se_titula_sola_y_guarda_la_respuesta(tmp_path):  # R
     assert [(m["quien"], m["texto"], m["sin_respuesta"]) for m in vista["mensajes"]] == [
         ("andres", PRIMERO, False), ("asistente", fin["mensaje"]["texto"], False)]
     assert all(m["contexto_hasta"] == "2026-10-24T09:42:00" for m in vista["mensajes"])
-    assert vista["linea"].endswith("hasta hoy 9:42")
+    assert vista["linea"].endswith("hasta hoy 9:42 · Haiku")  # unit 041 (R7): and the model
     # Andrés changes the title, and a later answer never puts it back
     r = web.cliente.post(f"/api/conversaciones/{ident}/titulo", json={"titulo": "Mi 10K"})
     assert r.status_code == 200 and r.json()["conversacion"]["titulo"] == "Mi 10K"
@@ -161,9 +161,9 @@ def test_cada_conversacion_manda_solo_lo_suyo_y_el_contexto_al_dia(tmp_path):  #
     assert ultima["messages"] == [{"role": "user", "content": PRIMERO},
                                   {"role": "assistant", "content": "Primera respuesta de la carrera."},
                                   {"role": "user", "content": "¿qué tal la carrera de ayer?"}]
-    assert "Carrera de ayer de prueba" in ultima["system"][-1]["text"]
+    assert "Carrera de ayer de prueba" in ultima["system"][-2]["text"]  # unit 041: the role goes after it
     vista = web.ver(a)
-    assert len(vista["mensajes"]) == 4 and vista["linea"].endswith("hasta hoy 9:42")
+    assert len(vista["mensajes"]) == 4 and vista["linea"].endswith("hasta hoy 9:42 · Haiku")
 
 
 def test_404_y_400(tmp_path):  # R2
@@ -474,8 +474,8 @@ def test_pedir_opinion_mal_pedida_no_llama(tmp_path):  # R3
 # -- R4 · C-181: a role opens an activity ----------------------------------------------------------------------------
 
 def _series(web) -> None:
-    """An invented session of 4 repetitions on Wednesday 21-10, with its laps (pace, HR, cadence, climb)."""
-    web.store.save_activities([Activity(activity_id="series-1", activity_date=AHORA.date() - timedelta(days=3),
+    """An invented session of 4 repetitions on Thursday 22-10, with its laps (pace, HR, cadence, climb)."""
+    web.store.save_activities([Activity(activity_id="series-1", activity_date=AHORA.date() - timedelta(days=2),
                                         activity_type="running", name="Series de prueba", duration_seconds=3000,
                                         distance_meters=10000, avg_hr=158, avg_cadence=176)])
     web.store.save_activity_laps([
@@ -488,9 +488,9 @@ def _series(web) -> None:
 def test_un_papel_abre_una_actividad_por_su_fecha_o_su_id(tmp_path):  # R4 · C-181, S-54
     web = _web(tmp_path)
     _series(web)
-    web.claude.responder("Abro el miércoles.", ("abrir_actividad", {"fecha": "2026-10-21", "id": ""}))
+    web.claude.responder("Abro el jueves.", ("abrir_actividad", {"fecha": "2026-10-22", "id": ""}))
     web.claude.responder(" La cuarta serie fue la más rápida, a 3:56 con 172 de pulso.")
-    fin = web.nueva("¿cómo me salieron las series del miércoles?", papel="entrenador")
+    fin = web.nueva("¿cómo me salieron las series del jueves?", papel="entrenador")
     assert fin["tipo"] == "fin" and "3:56" in fin["mensaje"]["texto"]
     resultado = web.claude.peticiones[1]["messages"][-1]["content"][0]
     assert resultado["type"] == "tool_result"
@@ -543,5 +543,6 @@ def test_el_equipo_en_ajustes_elige_el_modelo_de_cada_papel(tmp_path):  # R7 · 
     import sqlite3
 
     with sqlite3.connect(web.db) as conn:
-        assert [f[0] for f in conn.execute("SELECT modelo FROM gasto_asistente")] == ["claude-haiku-5-5"]
-    assert Conversaciones(web.db).gasto_del_mes(AHORA) == pytest.approx(dolares("claude-haiku-5-5", fin["mensaje"]["uso"]))
+        filas = conn.execute("SELECT modelo, dolares FROM gasto_asistente WHERE que = 'mensaje'").fetchall()
+    assert [f[0] for f in filas] == ["claude-haiku-5-5"]  # the medical transcription goes apart («transcripcion»)
+    assert filas[0][1] == pytest.approx(dolares("claude-haiku-5-5", fin["mensaje"]["uso"]))

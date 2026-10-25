@@ -7,6 +7,10 @@
 // stays «sin respuesta» with «Reintentar» (R-117): on the PC when the API failed, on this phone (localStorage) when
 // the PC did not answer. A change the answer proposes is the card of the 021 (asistente.js), confirmed with
 // /api/asistente/*; the cards still waiting are written back to the answer. Every text is painted as text.
+// Unit 041 (REC-23): the team. A conversation that starts lets Andrés choose who he talks to (Entrenador, Fisio,
+// Nutricionista or the Asistente of always, the default); under what was said, «Pedir opinión a…» makes another role
+// answer in the same conversation (POST …/opinion). Each answer carries the name of its role (not in a conversation
+// where only the Asistente spoke, as before) and the line says the model.
 
 import { pintarCambios } from "./asistente.js";
 
@@ -21,6 +25,8 @@ let alHecho = () => {}; // app.js: a card was confirmed (the day changed)
 let vista = null; // { id (null while new), conversacion, mensajes }
 let enviando = false;
 let peticion = 0; // drops a late answer of the list or of a conversation
+let papeles = []; // unit 041: the team, with the model of each role (/api/conversaciones, /api/equipo)
+let papelNuevo = "asistente"; // who a conversation that starts goes to
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = Object.assign(document.createElement(etiqueta), props);
@@ -69,6 +75,74 @@ export function iniciarConversaciones(opciones) {
 }
 
 // Called by app.js every time #asistente… shows.
+// -- unit 041: the team ---------------------------------------------------------------------------------------------
+
+const papelDe = (id) => papeles.find((p) => p.id === id) ?? { id, nombre: "Asistente", icono: "💬", modelo_nombre: "" };
+
+async function cargarEquipo() {
+  if (papeles.length) return;
+  const { ok, datos } = await api("/api/equipo");
+  if (ok) papeles = datos.papeles;
+}
+
+// The name on an answer: always for a role of the team; for the Asistente only where another role spoke too.
+function conNombre(papel) {
+  if (papel && papel !== "asistente") return true;
+  return Boolean(vista?.mensajes?.some((m) => m.quien === "asistente" && m.papel && m.papel !== "asistente"));
+}
+
+function nombrePapel(papel) {
+  return el("p", { className: `papel-nombre papel-${papel}`, textContent: papelDe(papel).nombre });
+}
+
+function pintarPapeles() {
+  const nueva = vista && vista.id === null;
+  $("conv-papeles-caja").hidden = !nueva;
+  $("conv-icono").textContent = papelDe(nueva ? papelNuevo : vista?.conversacion?.papel ?? "asistente").icono;
+  if (!nueva) return;
+  $("conv-papeles").replaceChildren(...papeles.map((p) => {
+    const boton = el("button", { type: "button", className: "papel" },
+      el("span", { className: "papel-icono", textContent: p.icono, ariaHidden: "true" }),
+      el("span", { className: "papel-texto" }, el("strong", { textContent: p.nombre }),
+        el("span", { className: "suave", textContent: p.descripcion })));
+    boton.dataset.papel = p.id;
+    boton.setAttribute("aria-pressed", String(p.id === papelNuevo));
+    boton.addEventListener("click", () => {
+      papelNuevo = p.id;
+      pintarPapeles();
+      pintarLineaNueva();
+      $("texto").focus();
+    });
+    return boton;
+  }));
+}
+
+function pintarLineaNueva() {
+  if (vista?.lineaBase === undefined) return;
+  const modelo = papelDe(papelNuevo).modelo_nombre;
+  $("conv-linea").textContent = vista.lineaBase + (modelo ? ` · ${modelo}` : "");
+}
+
+// «Pedir opinión a: 🩺 Fisio · 🥗 Nutricionista · 💬 Asistente» (R-138), under what was said.
+function pintarOpinion() {
+  const caja = $("conv-opinion");
+  const hay = vista && vista.id !== null && vista.mensajes.some((m) => m.quien === "asistente");
+  caja.hidden = !hay;
+  if (!hay) return;
+  const otros = papeles.filter((p) => p.id !== vista.conversacion.papel);
+  caja.replaceChildren(el("span", { className: "suave", textContent: "Pedir opinión a…" }), ...otros.map((p) => {
+    const boton = el("button", { type: "button", className: "opinion", textContent: `${p.icono} ${p.nombre}` });
+    boton.dataset.papel = p.id;
+    boton.addEventListener("click", () => opinar(p.id));
+    return boton;
+  }));
+}
+
+async function opinar(papel) {
+  if (enviando || !vista || vista.id === null) return;
+  await conversar(`/api/conversaciones/${vista.id}/opinion`, { papel }, null, papel);
+}
+
 export function mostrarAsistente() {
   const s = sub();
   const enChat = Boolean(s);
@@ -102,10 +176,14 @@ async function cargarLista() {
   const { ok, datos } = await api("/api/conversaciones");
   if (mia !== peticion) return;
   if (!ok) { aviso(datos.error ?? "No he podido traer tus conversaciones.", "error"); return; }
+  papeles = datos.papeles ?? papeles;
   const filas = datos.conversaciones.map((c) => {
-    const boton = el("button", { type: "button", className: "conversacion" },
+    const papel = papelDe(c.papel ?? "asistente");
+    const ultima = c.papel && c.papel !== "asistente" ? `${papel.nombre} · ${c.ultima}` : c.ultima;
+    const boton = el("button", { type: "button", className: "conversacion con-papel" },
+      el("span", { className: "papel-icono", textContent: papel.icono, ariaHidden: "true" }),
       el("span", { className: "conv-cab" }, el("strong", { textContent: c.titulo }), el("span", { className: "suave", textContent: cuando(c.usada) })),
-      el("span", { className: "suave conv-ultima", textContent: c.ultima }));
+      el("span", { className: "suave conv-ultima", textContent: ultima }));
     boton.addEventListener("click", () => { location.hash = `asistente/${c.id}`; });
     return el("li", {}, boton);
   });
@@ -177,18 +255,23 @@ function guardarPendientes(todos) {
 const claveDe = (id) => String(id ?? "nueva");
 
 async function abrirNueva() {
-  vista = { id: null, conversacion: { titulo: "Nueva conversación" }, mensajes: [] };
+  papelNuevo = "asistente";
+  vista = { id: null, conversacion: { titulo: "Nueva conversación", papel: "asistente" }, mensajes: [] };
   pintarChat();
   $("texto").focus();
   const mia = ++peticion;
   const { ok, datos } = await api("/api/conversaciones");
-  if (ok && mia === peticion) $("conv-linea").textContent = datos.linea ?? "";
+  if (!ok || mia !== peticion) return;
+  papeles = datos.papeles ?? papeles;
+  vista.lineaBase = datos.linea ?? "";
+  pintarPapeles();
+  pintarLineaNueva();
 }
 
 async function abrir(id) {
   const mia = ++peticion;
   $("conv-mensajes").replaceChildren(el("p", { className: "suave", textContent: "Cargando…" }));
-  const { ok, estado, datos } = await api(`/api/conversaciones/${id}`);
+  const [{ ok, estado, datos }] = await Promise.all([api(`/api/conversaciones/${id}`), cargarEquipo()]);
   if (mia !== peticion) return;
   if (!ok) {
     if (estado === 404) { location.hash = "asistente"; return; }
@@ -212,10 +295,13 @@ function pintarChat() {
   if (vista.linea) $("conv-linea").textContent = vista.linea;
   const locales = (pendientes()[claveDe(vista.id)] ?? []).map((p) => ({ ...p, quien: "andres", local: true, sin_respuesta: true }));
   $("conv-mensajes").replaceChildren(...vista.mensajes.map(burbuja), ...locales.map(burbuja));
+  pintarPapeles();
+  pintarOpinion();
 }
 
 function burbuja(m) {
   const nodo = el("div", { className: `burbuja ${m.quien}` });
+  if (m.quien === "asistente" && conNombre(m.papel)) nodo.append(nombrePapel(m.papel ?? "asistente"));
   nodo.append(el("p", { className: "texto-burbuja", textContent: m.texto }));
   if (m.quien === "andres" && m.sin_respuesta) {
     const reintentar = el("button", { type: "button", className: "reintentar", textContent: "Reintentar" });
@@ -242,7 +328,7 @@ export function enviarAlChat(texto) {
   const pensar = $("pensar").getAttribute("aria-pressed") === "true";
   $("pensar").setAttribute("aria-pressed", "false");
   const ruta = vista.id === null ? "/api/conversaciones" : `/api/conversaciones/${vista.id}/mensajes`;
-  conversar(ruta, { texto, pensar }, texto);
+  conversar(ruta, vista.id === null ? { texto, pensar, papel: papelNuevo } : { texto, pensar }, texto);
   return true;
 }
 
@@ -258,7 +344,7 @@ async function reenviarLocal(m) {
   todos[claveDe(vista.id)] = (todos[claveDe(vista.id)] ?? []).filter((p) => p.lid !== m.lid);
   guardarPendientes(todos);
   const ruta = vista.id === null ? "/api/conversaciones" : `/api/conversaciones/${vista.id}/mensajes`;
-  await conversar(ruta, { texto: m.texto }, m.texto);
+  await conversar(ruta, vista.id === null ? { texto: m.texto, papel: papelNuevo } : { texto: m.texto }, m.texto);
 }
 
 function guardarLocal(texto) {
@@ -286,15 +372,20 @@ async function* lineas(respuesta) {
   if (resto.trim()) yield JSON.parse(resto);
 }
 
-async function conversar(ruta, cuerpo, texto) {
+// `texto` null: «Pedir opinión a…» (`papel` answers; nothing of Andrés is written).
+async function conversar(ruta, cuerpo, texto, papel = null) {
   enviando = true;
   aviso("");
   const propia = vista;
-  const pregunta = el("div", { className: "burbuja andres" }, el("p", { className: "texto-burbuja", textContent: texto }));
+  const quien = papel ?? (propia.id === null ? papelNuevo : propia.conversacion.papel) ?? "asistente";
+  const pregunta = texto === null ? null : el("div", { className: "burbuja andres" }, el("p", { className: "texto-burbuja", textContent: texto }));
   const escribe = el("p", { className: "texto-burbuja escribiendo", textContent: "…" });
   // «…» while it thinks; it becomes a message (`.burbuja`) with its first words
-  const respuesta = el("div", { className: "burbuja-espera", ariaLabel: "El asistente está escribiendo" }, escribe);
-  $("conv-mensajes").append(pregunta, respuesta);
+  const respuesta = el("div", { className: "burbuja-espera", ariaLabel: `${papelDe(quien).nombre} está escribiendo` },
+    conNombre(quien) || papel ? nombrePapel(quien) : null, escribe);
+  $("conv-mensajes").append(...[pregunta, respuesta].filter(Boolean));
+  $("conv-papeles-caja").hidden = true;
+  $("conv-opinion").hidden = true;
   abajo();
   let r;
   try {
@@ -305,6 +396,7 @@ async function conversar(ruta, cuerpo, texto) {
   if (!r) { // the PC did not answer: kept on this phone, «sin respuesta»
     enviando = false;
     if (vista !== propia) return;
+    if (texto === null) { pintarChat(); aviso("Sin conexión con el PC: pide la opinión cuando vuelva.", "error"); return; }
     guardarLocal(texto);
     pintarChat();
     aviso("Sin conexión con el PC: tu mensaje se queda aquí; pulsa «Reintentar» cuando vuelva.", "error");
@@ -313,10 +405,11 @@ async function conversar(ruta, cuerpo, texto) {
   if (!r.ok) { // not sent (the cap, an empty message…): the text goes back to the box
     const datos = await r.json().catch(() => ({}));
     enviando = false;
-    pregunta.remove();
+    pregunta?.remove();
     respuesta.remove();
     aviso(datos.error ?? "No se ha podido enviar.", "error");
-    if (!$("texto").value) $("texto").value = texto;
+    if (texto !== null && !$("texto").value) $("texto").value = texto;
+    if (vista === propia) pintarChat();
     return;
   }
   let dicho = "";
@@ -348,10 +441,10 @@ async function conversar(ruta, cuerpo, texto) {
   if (!final) { await abrir(propia.id); return; } // the stream broke: what the PC kept
   propia.conversacion = final.conversacion ?? propia.conversacion;
   if (final.tipo === "fin") {
-    propia.mensajes.push(final.pregunta, final.mensaje);
+    propia.mensajes.push(...[final.pregunta, final.mensaje].filter(Boolean));
     propia.linea = final.linea;
   } else {
-    propia.mensajes.push(final.mensaje);
+    if (final.mensaje) propia.mensajes.push(final.mensaje);
     aviso(final.error, "error");
   }
   pintarChat();

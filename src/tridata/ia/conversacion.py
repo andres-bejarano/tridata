@@ -9,10 +9,15 @@ cache (`usage.cache_read_input_tokens`).
 The model is the one Andrés chose on 2026-10-23: Haiku 5.5 by default (`TRIDATA_MODELO_ASISTENTE` in .env changes
 it) and, for one message with «pensar más», Sonnet 5.5. Both count for the same cap (R9, done by the web).
 
-Two tools, always the same (so the prefix never changes): `proponer_cambio`, whose input is a `CambioInterpretado` of
+Fixed tools, always the same (so the prefix never changes): `proponer_cambio`, whose input is a `CambioInterpretado` of
 unit 021 (the code turns it into the usual card; nothing changes until Andrés confirms, R-96), and `poner_titulo`,
 the title of a conversation that starts. When Claude calls them the turn goes on with their results (the manual
 loop of the SDK, at most `RONDAS` requests) and the text of every round is one answer.
+
+Unit 041 (REC-23): the team. A request carries, AFTER the cache mark, a small block with the role that answers
+(`conversaciones.papeles.bloque`), and the model of that role (`modelo`); the fixed part stays the same for the four
+roles, so they share the cache (R2). A third fixed tool, `abrir_actividad`, gives the laps of one activity by its date
+or its id (R4): the laps never go in the fixed part (S-54). Its schema is flat, two texts (bug 036).
 
 The client is created lazily and can be injected: the tests use a double and never call the API. Failures are
 `ErrorConversacion` with a sentence for the screen, as `ErrorInterpretacion`. Nothing here logs a text.
@@ -55,6 +60,21 @@ HERRAMIENTAS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {"titulo": {"type": "string"}}, "required": ["titulo"],
                          "additionalProperties": False},
     },
+    {
+        "name": "abrir_actividad",
+        "description": ("Abre un entreno hecho para ver sus vueltas una a una (distancia, tiempo, ritmo, pulso, "
+                        "cadencia y desnivel de cada vuelta) y su clima. Por su fecha (todas las de ese día) o por su "
+                        "id. Úsala cuando necesites el detalle de una sesión; el contexto solo trae su resumen."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fecha": {"type": "string", "description": "El día del entreno (AAAA-MM-DD), o \"\" si das su id"},
+                "id": {"type": "string", "description": "El id del entreno, o \"\" si das su fecha"},
+            },
+            "required": ["fecha", "id"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -82,11 +102,14 @@ class Respuesta:
 
 
 def construir_peticion(bloques: Sequence[str], historial: list[dict[str, Any]], mensaje: str, modelo: str, *,
-                       pensar: bool = False) -> dict[str, Any]:
-    """The request: the fixed part (`bloques`, the last one with the cache mark), what was said and the message."""
+                       pensar: bool = False, papel: str | None = None) -> dict[str, Any]:
+    """The request: the fixed part (`bloques`, the last one with the cache mark), the role that answers after the
+    mark (unit 041, R2), what was said and the message."""
     system: list[dict[str, Any]] = [{"type": "text", "text": b} for b in bloques]
     if system:
         system[-1]["cache_control"] = {"type": "ephemeral"}
+    if papel:
+        system.append({"type": "text", "text": papel})
     return {
         "model": modelo,
         "max_tokens": MAX_TOKENS,
@@ -128,12 +151,14 @@ class ConversadorClaude:
 
     def responder(self, bloques: Sequence[str], historial: list[dict[str, Any]], mensaje: str, *,
                   pensar: bool = False,
-                  al_usar: Callable[[str, dict[str, Any]], str] | None = None) -> Iterator[str | Respuesta]:
+                  al_usar: Callable[[str, dict[str, Any]], str] | None = None,
+                  modelo: str | None = None, papel: str | None = None) -> Iterator[str | Respuesta]:
         """Yields each piece of text as it arrives and, last, the `Respuesta`. Raises `ErrorConversacion`.
 
-        `al_usar(nombre, entrada)` runs each tool Claude calls and returns the text of its result."""
-        modelo = self.modelo_para(pensar)
-        peticion = construir_peticion(bloques, historial, mensaje, modelo, pensar=pensar)
+        `al_usar(nombre, entrada)` runs each tool Claude calls and returns the text of its result. `modelo` is the
+        one of the role that answers (unit 041; «pensar más» is still `modelo_pensar`) and `papel` its block."""
+        modelo = self.modelo_pensar if pensar else (modelo or self.modelo)
+        peticion = construir_peticion(bloques, historial, mensaje, modelo, pensar=pensar, papel=papel)
         uso = {"entrada": 0, "salida": 0, "cache_escritura": 0, "cache_lectura": 0}
         usos: list[dict[str, int]] = []
         flujo: Any = None  # the round on the way: if it breaks, what the SDK saw of its use is paid too

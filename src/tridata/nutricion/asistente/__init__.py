@@ -11,7 +11,8 @@ applies nothing and gives the redone card (G-41, R-78, S-20). A card does not ex
 
 The catalogue is split by families so the next units do not collide: `dia` (steps of a day, remove a logged food),
 `recetas` (save an ingredient or correct its kcal), `ajustes` (empty: unit 022) and `fuera` (what the assistant
-does not change and where it is done, R-89). Each action declares its id, its line for Claude, how it is proposed,
+does not change and where it is done, R-89). Unit 041: `plan.acciones`, the cards that change the training plan
+(they need `Contexto.planes`). Each action declares its id, its line for Claude, how it is proposed,
 how it is redone with corrected values and how it is applied (`Accion`).
 
 What stays: table `tarjeta_asistente` (same SQLite, created when the context is built), one row per card confirmed
@@ -111,6 +112,7 @@ class Contexto:
     store: Any = None
     cierres: Cierres | None = None
     recientes: Callable[[], list[dict]] = field(default=lambda: [])
+    planes: Any = None  # unit 041: the training plans (`plan.Planes`), for the cards of `plan.acciones`
     tarjetas: Tarjetas = field(init=False)
 
     def __post_init__(self) -> None:
@@ -238,10 +240,11 @@ def nombres_apuntados(registro: RegistroComidas) -> Callable[[date], list[str]]:
 # -- the catalogue -------------------------------------------------------------------------------------------------
 
 def catalogo() -> dict[str, Accion]:
+    from ...plan import acciones as plan  # unit 041
     from . import ajustes, dia, fuera, recetas  # the families import the helpers above
 
     acciones: dict[str, Accion] = {}
-    for familia in (dia, recetas, ajustes, fuera):
+    for familia in (dia, recetas, ajustes, plan, fuera):
         for accion in familia.ACCIONES:
             acciones[accion.id] = accion
     return acciones

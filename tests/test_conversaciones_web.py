@@ -546,3 +546,179 @@ def test_el_equipo_en_ajustes_elige_el_modelo_de_cada_papel(tmp_path):  # R7 · 
         filas = conn.execute("SELECT modelo, dolares FROM gasto_asistente WHERE que = 'mensaje'").fetchall()
     assert [f[0] for f in filas] == ["claude-haiku-5-5"]  # the medical transcription goes apart («transcripcion»)
     assert filas[0][1] == pytest.approx(dolares("claude-haiku-5-5", fin["mensaje"]["uso"]))
+
+
+# -- unit 045 (REC-25): «Adjuntar ruta», its profile in the message and the strategy by stretches -------------------
+
+from pathlib import Path  # noqa: E402
+
+GPX_INVENTADO = (Path(__file__).parent / "fixtures" / "ruta-inventada.gpx").read_text()
+COORDENADAS = ("10.5", "10,5", "-30.2", "-30,2", "30.2", "30,2")  # of the invented GPX: never towards the model
+
+
+class GarminDeRutas:
+    """Garmin doubled where the app connects to it (`plan.reloj.cliente_garmin`): two saved routes and the GPX of an
+    activity, all invented; `falla` makes every call fail as the unofficial way sometimes does."""
+
+    def __init__(self) -> None:
+        from tridata.plan.rutas import puntos_gpx
+
+        self.llamadas: list[tuple] = []
+        self.falla: Exception | None = None
+        self._puntos = [{"distancia_m": x.distancia_m, "altitud_m": x.altitud_m, "lat": x.lat, "lon": x.lon}
+                        for x in puntos_gpx(GPX_INVENTADO)]
+
+    def _llamada(self, *que):
+        self.llamadas.append(que)
+        if self.falla is not None:
+            raise self.falla
+
+    def rutas_guardadas(self) -> list[dict]:
+        self._llamada("rutas_guardadas")
+        return [{"id": 11, "nombre": "Ruta de prueba", "distancia_m": 20000.0, "sube_m": 118.0, "baja_m": 117.0},
+                {"id": 12, "nombre": "Ruta llana de prueba", "distancia_m": 10000.0, "sube_m": None, "baja_m": None}]
+
+    def ruta(self, ident: int) -> list[dict]:
+        self._llamada("ruta", ident)
+        if ident == 12:  # a course without altitude
+            return [{**p, "altitud_m": None} for p in self._puntos]
+        return self._puntos
+
+    def gpx_actividad(self, ident: str) -> bytes:
+        self._llamada("gpx_actividad", ident)
+        return GPX_INVENTADO.encode()
+
+
+@pytest.fixture
+def garmin(monkeypatch):
+    from tridata.plan import reloj
+
+    doble = GarminDeRutas()
+    monkeypatch.setattr(reloj, "cliente_garmin", lambda entorno=None: doble)
+    return doble
+
+
+def _con_el_entrenador(web: Web) -> int:
+    web.claude.responder("Cuéntame qué carrera preparamos.")
+    return web.nueva("quiero preparar una carrera", papel="entrenador")["conversacion"]["id"]
+
+
+def test_adjuntar_ruta_ensena_las_de_garmin_y_las_actividades(tmp_path, garmin):  # R1 · C-193
+    web = _web(tmp_path)
+    r = web.cliente.get("/api/rutas")
+    assert r.status_code == 200, r.text
+    datos = r.json()
+    assert datos["garmin"] == [{"id": 11, "nombre": "Ruta de prueba", "distancia_km": 20.0, "sube_m": 118},
+                               {"id": 12, "nombre": "Ruta llana de prueba", "distancia_km": 10.0, "sube_m": None}]
+    assert [(a["id"], a["nombre"], a["fecha"], a["distancia_km"]) for a in datos["actividades"]] == [
+        ("a1", "Carrera de prueba al río", "2026-10-21", 10.0)]  # what was run (not the bike)
+    assert datos["aviso"] is None
+
+
+def test_una_ruta_de_garmin_da_su_perfil_y_queda_en_la_conversacion(tmp_path, garmin):  # R1, R2 · C-193, C-194
+    web = _web(tmp_path)
+    ident = _con_el_entrenador(web)
+    r = web.cliente.post(f"/api/conversaciones/{ident}/ruta", json={"garmin": 11})
+    assert r.status_code == 200, r.text
+    ruta = r.json()["ruta"]
+    assert ruta["nombre"] == "Ruta de prueba" and ruta["fuente"] == "garmin"
+    assert [t["terreno"] for t in ruta["tramos"]].count("subida") == 2
+    assert ("ruta", 11) in garmin.llamadas
+    assert web.ver(ident)["ruta"] == ruta  # kept with the conversation, drawn when it is opened again
+    assert "ruta adjunta: Ruta de prueba" in web.ver(ident)["linea"]
+    # an activity already run, by its GPX
+    r = web.cliente.post(f"/api/conversaciones/{ident}/ruta", json={"actividad": "a1"})
+    assert r.status_code == 200, r.text
+    assert r.json()["ruta"]["nombre"] == "Carrera de prueba al río" and r.json()["ruta"]["fuente"] == "actividad"
+    assert ("gpx_actividad", "a1") in garmin.llamadas
+    assert web.ver(ident)["ruta"]["nombre"] == "Carrera de prueba al río"  # the last one attached
+
+
+def test_sin_altitud_o_sin_garmin_lo_dice_y_ofrece_el_gpx(tmp_path, garmin):  # R3 · C-195
+    from tridata.garmin_client import GarminRutaError
+
+    web = _web(tmp_path)
+    ident = _con_el_entrenador(web)
+    r = web.cliente.post(f"/api/conversaciones/{ident}/ruta", json={"garmin": 12})
+    assert r.status_code == 422 and "altitud" in r.json()["error"] and r.json()["subir_gpx"] is True
+    sin_ele = GPX_INVENTADO.replace("<ele>", "<!--").replace("</ele>", "-->")
+    r = web.cliente.post(f"/api/conversaciones/{ident}/ruta", json={"gpx": sin_ele, "nombre": "sin-altitud.gpx"})
+    assert r.status_code == 422 and "altitud" in r.json()["error"]
+    assert web.ver(ident)["ruta"] is None  # no profile invented
+    garmin.falla = GarminRutaError("no answer")
+    lista = web.cliente.get("/api/rutas").json()
+    assert lista["garmin"] == [] and "Garmin" in lista["aviso"] and "GPX" in lista["aviso"]
+    assert lista["actividades"]  # what is on the PC is still there
+    r = web.cliente.post(f"/api/conversaciones/{ident}/ruta", json={"garmin": 11})
+    assert r.status_code == 502 and "GPX" in r.json()["error"] and r.json()["subir_gpx"] is True
+    assert web.ver(ident)["ruta"] is None
+    r = web.cliente.post(f"/api/conversaciones/{ident}/ruta", json={"gpx": "esto no es un gpx"})
+    assert r.status_code == 422
+    assert web.cliente.post(f"/api/conversaciones/{ident}/ruta", json={}).status_code == 400
+    assert web.cliente.post("/api/conversaciones/999/ruta", json={"gpx": GPX_INVENTADO}).status_code == 404
+
+
+def test_al_modelo_va_el_perfil_en_el_mensaje_y_la_parte_fija_no_cambia(tmp_path, garmin):  # R4 · C-196, G-57
+    web = _web(tmp_path)
+    ident = _con_el_entrenador(web)
+    r = web.cliente.post(f"/api/conversaciones/{ident}/ruta", json={"gpx": GPX_INVENTADO, "nombre": "mi-ruta.gpx"})
+    assert r.status_code == 200, r.text
+    assert r.json()["ruta"]["nombre"] == "Ruta inventada"  # the name inside the GPX
+    web.claude.responder("Vamos con ello.")
+    web.enviar(ident, "prepárame la carrera para 1:25")
+    sin_ruta, con_ruta = web.claude.peticiones[0], web.claude.peticiones[-1]
+    assert con_ruta["system"] == sin_ruta["system"] and con_ruta["tools"] == sin_ruta["tools"]  # the cache holds
+    mensaje = con_ruta["messages"][-1]
+    assert mensaje["role"] == "user" and isinstance(mensaje["content"], str)
+    assert "Ruta adjunta" in mensaje["content"] and "subida" in mensaje["content"] and "cada 100 m" in mensaje["content"]
+    assert mensaje["content"].rstrip().endswith("prepárame la carrera para 1:25")  # and what Andrés said
+    todo = json.dumps(con_ruta, ensure_ascii=False)
+    for c in COORDENADAS:  # not one coordinate in the whole request
+        assert c not in todo, c
+    assert "Ruta adjunta" not in json.dumps(con_ruta["system"], ensure_ascii=False)
+    # what stays of Andrés is what he said; the line says the route
+    assert web.ver(ident)["mensajes"][-2]["texto"] == "prepárame la carrera para 1:25"
+    assert "ruta adjunta: Ruta inventada" in web.ver(ident)["linea"]
+
+
+def test_una_conversacion_nueva_puede_empezar_por_la_ruta(tmp_path, garmin):  # R1
+    web = _web(tmp_path)
+    r = web.cliente.post("/api/conversaciones/ruta", json={"papel": "entrenador", "gpx": GPX_INVENTADO})
+    assert r.status_code == 200, r.text
+    conversacion = r.json()["conversacion"]
+    assert conversacion["papel"] == "entrenador" and "Ruta inventada" in conversacion["titulo"]
+    assert web.ver(conversacion["id"])["ruta"]["nombre"] == "Ruta inventada"
+    assert web.claude.peticiones == []  # attaching never calls the API
+    r = web.cliente.post("/api/conversaciones/ruta", json={"papel": "nadie", "gpx": GPX_INVENTADO})
+    assert r.status_code == 400
+
+
+def test_la_estrategia_por_tramos_se_pide_y_se_guarda_en_la_carrera_al_confirmar(tmp_path, garmin):  # R5, R6
+    from test_plan import plan_de_prueba
+
+    from tridata.plan import Planes
+
+    web = _web(tmp_path)
+    planes = Planes(web.db)
+    plan_id = planes.crear(plan_de_prueba(), AHORA)
+    ident = _con_el_entrenador(web)
+    assert web.cliente.post(f"/api/conversaciones/{ident}/ruta", json={"gpx": GPX_INVENTADO}).status_code == 200
+    tabla = ("- km 0-4 · llano · 4:15/km · paso 17:00\n- km 4-6,5 · subida · por esfuerzo · paso 28:40\n"
+             "- km 6,5-20 · bajada y llano · 4:10/km · paso 1:24:55\nGeles: km 6,5.")
+    web.claude.responder(tabla, ("proponer_cambio", {
+        "accion": "guardar_estrategia", "objeto": "Maratón de ejemplo",
+        "texto": "km 0-4 · llano · 4:15/km · paso 17:00 | km 4-6,5 · subida · por esfuerzo · paso 28:40 | "
+                 "km 6,5-20 · bajada y llano · 4:10/km · paso 1:24:55 | gel: km 6,5"}))
+    web.claude.responder(" ¿La guardo en tu plan?")
+    fin = web.enviar(ident, "prepárame la carrera para 1:25")
+    pedido = web.claude.peticiones[-2]["messages"][-1]["content"]
+    assert "estrategia" in pedido and "tramo" in pedido and "paso" in pedido and "gel" in pedido  # R5: asked for
+    assert "guardar_estrategia" in pedido
+    (tarjeta,) = fin["mensaje"]["tarjetas"]
+    assert tarjeta["texto"] == "Voy a guardar en el plan: estrategia de Maratón de ejemplo (3 tramos, 1 gel)"
+    assert planes.estrategia(plan_id, "Maratón de ejemplo") == []  # G-55: not until it is confirmed
+    r = web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta})
+    assert r.status_code == 200, r.text
+    assert planes.estrategia(plan_id, "Maratón de ejemplo") == [
+        "km 0-4 · llano · 4:15/km · paso 17:00", "km 4-6,5 · subida · por esfuerzo · paso 28:40",
+        "km 6,5-20 · bajada y llano · 4:10/km · paso 1:24:55", "gel: km 6,5"]

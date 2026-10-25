@@ -80,6 +80,7 @@ from .sync import (
 )
 
 DEFAULT_BACKUP_DIR = DEFAULT_DB_PATH.parent / "backups"
+PRIVADOS_ACEPTADOS = DEFAULT_DB_PATH.parent / "privados-aceptados"  # bug 037: leaks the user accepted, local
 
 EXPORTERS = {
     "json": JSONExporter,
@@ -307,7 +308,8 @@ def _cmd_comprobar_privados(repo: Path, registros: list[Path] | None) -> int:
 
     donde: Counter = Counter()
     try:
-        resultado = privados.comprobar(DEFAULT_DB_PATH, repo, registros or [DEFAULT_DB_PATH.parent], donde=donde)
+        resultado = privados.comprobar(DEFAULT_DB_PATH, repo, registros or [DEFAULT_DB_PATH.parent], donde=donde,
+                                       aceptados=privados.aceptados_de(PRIVADOS_ACEPTADOS))
     except RuntimeError as exc:
         print(f"comprobar-privados: {exc}", file=sys.stderr)
         return 2

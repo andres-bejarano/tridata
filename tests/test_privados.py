@@ -47,7 +47,7 @@ def test_sin_fugas_cuenta_cero(repo, db, tmp_path):  # R9 · C-151
     registros.mkdir()
     (registros / "sync.log").write_text("sync: todo bien a las 08:01\n")
     r = privados.comprobar(db, repo, [registros])
-    assert r == {"valores": 10, "repo": 0, "registros": 0}
+    assert r == {"valores": 10, "repo": 0, "registros": 0, "aceptadas": 0}
 
 
 def test_un_valor_en_un_fichero_del_repo_cuenta_uno(repo, db, tmp_path):  # R9 · C-151
@@ -235,7 +235,7 @@ def test_la_lista_de_aceptados_se_lee_de_su_fichero_local(repo, db, tmp_path, ca
     monkeypatch.setattr(cli, "PRIVADOS_ACEPTADOS", lista)
     assert cli.main(["comprobar-privados", "--repo", str(repo)]) == 1  # the commit that removed it is not listed
     salida = capsys.readouterr().out
-    assert "1 aparición" in salida and "aceptad" in salida
+    assert "1 aparición" in salida and "aceptad" in salida.lower()
     lista.write_text(f"{añadido}\n" + subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,  # noqa: S603,S607
                                                       capture_output=True, text=True).stdout)
     assert cli.main(["comprobar-privados", "--repo", str(repo)]) == 0

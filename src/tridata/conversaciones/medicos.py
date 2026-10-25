@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import sqlite3
+import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime
@@ -252,8 +253,16 @@ def _distintivos(valor: str) -> set[str]:
     return encontrados
 
 
-def valores_privados(db_path: Path | str) -> set[str]:
-    """Every distinctive value of the medical transcriptions saved in `db_path`, read only (nothing is created)."""
+def normalizar_nombre(texto: str) -> str:
+    """Lowercase, without accents and with single spaces: how a test's name is compared (bug 037)."""
+    sin_tildes = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
+    return " ".join(sin_tildes.lower().split())
+
+
+def valores_privados(db_path: Path | str) -> set[tuple[str, str]]:
+    """Every `(name of the test, distinctive number)` of the medical transcriptions saved in `db_path`, read only
+    (nothing is created). Bug 037: a number counts only next to the name of its test — on its own, «13.87» or «2468»
+    is just as likely a constant of the code."""
     ruta = Path(db_path)
     if not ruta.exists():
         return set()
@@ -263,11 +272,13 @@ def valores_privados(db_path: Path | str) -> set[str]:
         filas = conn.execute("SELECT valores FROM transcripcion_medica").fetchall() if hay else []
     finally:
         conn.close()
-    valores: set[str] = set()
+    pares: set[tuple[str, str]] = set()
     for (texto,) in filas:
         for v in json.loads(texto):
-            valores |= _distintivos(str(v.get("valor") or ""))
-    return valores
+            nombre = normalizar_nombre(str(v.get("prueba") or ""))
+            if nombre:
+                pares |= {(nombre, n) for n in _distintivos(str(v.get("valor") or ""))}
+    return pares
 
 
 __all__ = ["ErrorMedico", "Medicos", "TranscripcionMedica", "TranscriptorPDF", "ValorMedico", "valores_privados"]

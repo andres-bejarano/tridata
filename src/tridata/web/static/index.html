@@ -80,6 +80,10 @@
       <p id="conv-aviso" role="status" aria-live="polite" hidden></p>
       <div id="conv-lista-vista">
         <p class="suave intro-asistente">Aquí están tus conversaciones con el asistente. Ve siempre todo tu contexto: comidas, peso, entrenos, sueño, pulso, HRV, tu analítica y tu prueba de esfuerzo.</p>
+        <p id="conv-gasto" class="suave conv-gasto"></p>
+        <!-- unit 039: what the month has cost of the cap; from 80 % (high) the meter takes the warning colour -->
+        <meter id="conv-gasto-barra" class="conv-gasto-barra" min="0" max="5" low="4" high="4" optimum="0" value="0"
+               aria-labelledby="conv-gasto" style="display:block;width:100%;height:0.75rem;margin:0.25rem 0 0.75rem"></meter>
         <p id="conv-tope" class="aviso" hidden></p>
         <ul id="conv-lista" class="tarjeta lista-conversaciones" hidden></ul>
         <p id="conv-vacia" class="tarjeta conv-vacia">Aún no tienes ninguna. Pregúntale lo que quieras: «¿cómo voy para el 10K del 3 de diciembre?», «¿qué ceno hoy con lo que me queda?» o «¿cómo va mi peso este mes?».</p>

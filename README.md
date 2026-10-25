@@ -1,173 +1,170 @@
-# tridata
+<p align="center">
+  <img src="src/tridata/web/static/icono-512.png" width="112" alt="TriData logo">
+</p>
 
-Pull your own Garmin Connect data (activities, sleep, HRV, daily stats) and
-hand it to Claude for analysis — free, local, and yours. No TrainingPeaks
-subscription, no Strava premium, no third-party connector required.
+<h1 align="center">TriData</h1>
 
-## Why
+**A personal, local-first training and nutrition app for one triathlete — with an AI coach that sees the whole picture.**
 
-Garmin Connect already has all your training data. This tool exports it into
-a clean, structured file you can paste straight into Claude (or attach) and
-ask questions like *"how has my resting heart rate trended since I started
-marathon training?"* or *"summarize my training load this month."*
+TriData started as a script that pulled Garmin Connect data into a file you could paste into Claude. It has grown
+into a phone app that runs on your own PC: it tracks what you eat, how you train, how you sleep and recover, and
+puts an AI assistant on top of *all of it at once*.
 
-It keeps a local SQLite database of everything it has pulled, so:
-- re-runs only fetch what's new (no re-downloading a year of data every time)
-- you can build up a full history over time and query all of it at once
+<p align="center">
+  <img src="docs/screenshots/today.png" width="200" alt="Today: food left, training and recovery at a glance">
+  <img src="docs/screenshots/nutrition.png" width="200" alt="Nutrition: the day's kcal budget and meals">
+  <img src="docs/screenshots/fitness.png" width="200" alt="Fitness: training load, last activity and recovery">
+  <img src="docs/screenshots/assistant.png" width="200" alt="Assistant: a conversation about a 10K goal">
+</p>
+<p align="center"><sub>Screenshots from the end-to-end tests, with invented data. The interface is in Spanish.</sub></p>
+
+## The step forward: an AI coach with full context
+
+Most training apps see one slice of you: the watch sees your runs, the food app sees your meals, the lab report
+sits in a drawer. A coach that only sees one slice can only give generic advice.
+
+TriData's assistant sees **everything, together**:
+
+- **Training** — every Garmin activity with laps and weather, training load (CTL / ATL / TSB), heart-rate zones.
+- **Recovery** — sleep, HRV, resting heart rate.
+- **Nutrition** — every meal logged, the daily kcal budget, weight trend and the deficit over time.
+- **Health** — your blood tests and stress-test reports, read from their PDFs on your own disk.
+
+That changes the conversation. You can *negotiate* a training plan instead of receiving one — «I want to run
+10 km under 45 minutes on December 3rd, but this week I slept badly and I'm eating in a deficit» — and you can
+discuss health questions with something that has actually read your numbers.
+
+It is only a seed. Today the metrics are those of a consumer watch and a yearly blood test, and the models are
+the ones we can afford to call. As sensors get more precise and models get more capable, this is what a personal
+coach will look like: one that knows your body as a whole, remembers all of it, and reasons about it with you.
+
+## What it does today
+
+| Tab | What you get |
+|---|---|
+| **Hoy** (Today) | One screen: kcal left for the day, today's training, how you arrive (sleep, HRV, resting HR, freshness) and the last assistant answer. |
+| **Nutrición** | The day's kcal budget from your basal expenditure, your Garmin steps and a chosen deficit level; meals in sections with drag and drop; a balance and weight chart between any two dates; recipes with versions and pot tares; 80+ common foods preloaded. |
+| **Fitness** | Training load of the last 14 days, the last activity with laps and weather, sleep, HRV and resting HR against their 7-day averages. |
+| **Asistente** | Conversations with Claude over your whole context. It can propose changes (a food, a recipe, a day's plan) as cards you confirm or discard: nothing is written without you. Shows what the month has cost. |
+| **Ajustes** | Basal kcal, kcal per step, deficit level, HR max / rest and zones (with their origin: a stress test or a setting). |
+
+And everywhere:
+
+- **Write or dictate** «arroz con pollo 350 g, yogur, peso 72,4» and it is understood and turned into entries to
+  review. Dictation runs **locally on your GPU** (Whisper large-v3-turbo): the audio never leaves the PC.
+- **Daily Garmin sync** at 08:00, retrying every hour until 14:00, backing off when Garmin rate-limits; the app warns
+  when Garmin is behind and can catch up on demand.
+- **Installable on the phone** (it is a web app served by your PC; reach it from outside through Tailscale).
+- **MCP server** so Claude Code or Claude Desktop can query the same data, read-only.
+
+## Privacy and cost
+
+- **Everything lives in one SQLite file on your PC** (`~/.tridata/data.sqlite3`), with verified backups before
+  every sync. No cloud of ours, no account, no telemetry.
+- **The only thing that leaves the PC** is what you ask the assistant, sent to the Anthropic API with the context
+  it needs. Garmin credentials stay in a local `.env` and only talk to Garmin.
+- **A monthly spending cap** (5 $ by default): every API call is priced and recorded — including the ones that fail
+  half-way — and at the cap the assistant stops until the 1st. The daily use costs cents.
+- **Health data never reaches this repository.** Tests and fixtures are invented, and
+  `tridata comprobar-privados` checks the code, the git history and the logs for the values of your own medical
+  documents, printing only counts.
 
 ## Install
+
+Python 3.10 or 3.11.
 
 ```bash
 git clone https://github.com/andres-bejarano/tridata.git
 cd tridata
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-cp .env.example .env
-# edit .env with your Garmin Connect email/password
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[app]"          # the app; add ,voz for local dictation and ,mcp for the MCP server
+cp .env.example .env             # Garmin email/password, Anthropic API key, optional settings
+tridata sync --since 2026-01-01  # first backfill from Garmin
+tridata web                      # http://127.0.0.1:8765 — this PC only by default
 ```
 
-Your credentials stay local in `.env` (git-ignored) and are only used to
-authenticate directly against Garmin Connect via
-[`garminconnect`](https://github.com/cyberjunky/python-garminconnect) /
-[`garth`](https://github.com/matin/garth). Nothing is sent anywhere else.
+| Extra | For |
+|---|---|
+| `app` | `tridata web`: the Claude API client and the web server. |
+| `voz` | Local dictation: faster-whisper on an NVIDIA GPU (~3 GB to download the first time, no system CUDA needed). |
+| `mcp` | `tridata-mcp`, the read-only MCP server. |
+| `dev` | Tests, linters and the security checks. |
+| `e2e` | End-to-end tests of the phone screen in a real Chromium (Playwright). |
 
-## Usage
+Optional settings in `.env`: `TRIDATA_MODELO_ASISTENTE` (default `claude-haiku-5-5`; «Pensar más» uses Sonnet),
+`TRIDATA_MODELO_VOZ`, `TRIDATA_MEDICOS_DIR` (the folder with your medical PDFs; they are read there, never copied).
 
-Backfill your history (first run):
+## Commands
 
-```bash
-tridata sync --since 2026-02-01
-```
+| Command | Does |
+|---|---|
+| `tridata web` | Runs the app. |
+| `tridata sync` | Pulls what is new from Garmin Connect (`--since` to backfill, `--revalidate-days` to re-check recent days). |
+| `tridata backup` | A verified copy of the store in `~/.tridata/backups/`. |
+| `tridata export` · `export-metrics` · `export-running` · `export-cycling` · `export-swimming` · `export-gym` · `export-pmc` · `export-nutricion` | Markdown / JSON exports, for reading or for any AI chat. |
+| `tridata show-laps` | Per-lap splits of one activity. |
+| `tridata importar-deficit` · `importar-recetas` · `importar-detalle` | One-off imports from a previous Markdown food diary, reviewing the dubious lines first. |
+| `tridata comprobar-privados` | Counts appearances of your private health values in the repo, its history and the logs (never prints them). |
+| `tridata-mcp` | The MCP server: `list_activities`, `get_activity`, `get_daily_metrics`, `get_training_load`, `get_weekly_summary`, `get_records`. |
 
-Daily catch-up (only fetches what's missing):
+## Daily sync
 
-```bash
-tridata sync
-```
-
-Export everything to a Claude-ready Markdown file:
-
-```bash
-tridata export --format markdown --out garmin_export.md
-```
-
-Then paste `garmin_export.md` into a Claude conversation, or attach it, and
-ask away.
-
-## Automating the daily sync
-
-The repo includes `daily_update.sh`, a single script that runs the full
-pipeline (`tridata sync`, laps, weather, and every `export-*`) and logs
-everything with a timestamp to `sync.log`. Run it daily (see below) and it
-takes care of two things by itself:
-
-- **Short daily revalidation** (cheap): re-checks the last few days even
-  where a row already exists, in case Garmin finalized a day's totals
-  (steps, calories) *after* its own calendar date — see
-  `SyncService.RECENT_REVALIDATE_DAYS`.
-- **Wide revalidation sweep** (occasional): every ~7 days, the same script
-  automatically runs `tridata sync --revalidate-days 45` instead of the
-  short version, catching a day that slipped past the short window before
-  anyone noticed (this happened for real: 2026-08-20 and 2026-08-24 sat
-  wrong for over two weeks). It tracks the last successful wide sweep in
-  `~/.tridata/last_wide_sync` — no separate script or second timer needed.
-  If Garmin's login flakes transiently (it does, occasionally, with
-  "Failed to retrieve social profile" — unrelated to your password), each
-  step retries automatically before giving up; if a wide sweep still fails
-  after retries, it simply tries again on the next daily run instead of
-  waiting a whole week.
-
-### Linux (systemd — recommended)
-
-Ideal for laptops: if the machine is off at the scheduled time, the job runs
-automatically on next boot.
+`daily_update.sh` runs a backup, `tridata sync`, laps, weather and the exports, logging to `sync.log`. On Linux a
+systemd user timer runs it every hour from 08:00 to 14:00 until a sync succeeds (and on the next boot if the PC was
+off):
 
 ```bash
-# Copy the unit files
-cp daily_update.sh ~/projects/tridata/
-chmod +x ~/projects/tridata/daily_update.sh
-mkdir -p ~/.config/systemd/user
 cp .config/systemd/user/tridata-sync.* ~/.config/systemd/user/
-
-# Enable and start
-systemctl --user daemon-reload
-systemctl --user enable --now tridata-sync.timer
+systemctl --user daemon-reload && systemctl --user enable --now tridata-sync.timer
 ```
 
-The timer fires every day at **08:00**. If the computer was off at that time,
-it runs as soon as you log in.
+Recent days are re-checked on every run (Garmin sometimes finalizes a day's totals late) and a wider 45-day sweep
+runs about once a week. `cron` works too, without the catch-up after a missed run.
 
-Check status and logs:
-
-```bash
-systemctl --user status tridata-sync.timer   # next trigger time
-journalctl --user -u tridata-sync.service    # execution log
-tail -20 ~/projects/tridata/sync.log         # script output log
-```
-
-### macOS / Linux (cron fallback)
-
-```bash
-crontab -e
-# Run every day at 08:00
-0 8 * * * /path/to/tridata/daily_update.sh
-```
-
-Note: cron does not recover missed runs if the machine was off.
-
-## Project structure
+## Architecture
 
 ```
 src/tridata/
-├── garmin_client.py   # GarminClient — auth + typed fetch methods
-├── models.py           # Activity, DailyStats, SleepRecord, HRVRecord
-├── storage.py           # DataStore — local SQLite repository
-├── exporters.py         # Exporter (abstract) -> JSONExporter, MarkdownExporter
-├── sync.py               # SyncService — orchestrates incremental sync
-├── mcp_server.py         # MCP server — read-only query tools over the store
-└── cli.py                 # command-line entry point
+├── cli.py                # the `tridata` command
+├── garmin_client.py      # Garmin Connect: auth and typed fetches
+├── sync.py               # incremental sync, retries, revalidation
+├── storage.py            # the local SQLite store
+├── metrics.py            # TRIMP from heart rate, CTL / ATL / TSB
+├── exporters.py          # Markdown / JSON
+├── fitness.py · hoy.py   # what the Fitness and Today screens show
+├── nutricion/            # food log, kcal budget, balance, weight, recipes, common foods, imports
+├── ia/                   # Claude (understanding food entries, conversations) and local Whisper
+├── conversaciones/       # assistant conversations, their context, medical documents, spending
+├── privados.py           # `comprobar-privados`
+├── mcp_server.py         # `tridata-mcp`
+└── web/                  # Starlette app and the phone UI (plain HTML, CSS and JS)
 ```
 
-## Backups
-
-`daily_update.sh` starts every run with `tridata backup`: a consistent,
-integrity-checked copy of the SQLite store (plus any `--extra` files, e.g.
-a food diary that can't be re-downloaded from Garmin) in
-`~/.tridata/backups/<timestamp>/`, keeping the last 14. They're on the
-same disk, so they protect against a bad sync or a mistake, not against
-losing the machine.
+Training load is Banister TRIMP from heart rate (measured HR max and rest), not power-based TSS.
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-./scripts/check.sh   # ruff (incl. security rules), mypy, pytest, pip-audit — same as CI
+scripts/check.sh        # ruff + mypy, the full test suite, gitleaks and pip-audit
 ```
 
-## Querying from Claude (MCP)
-
-Attaching the full exports to every conversation costs ~250K+ tokens.
-The MCP server lets Claude fetch only the slice it needs instead (a date
-range, one activity, a weekly summary — typically a few hundred to ~2K
-tokens per call), which stretches a Claude subscription's usage limits a
-lot further.
-
-```bash
-pip install -e ".[mcp]"
-claude mcp add --scope user tridata -- "$(which tridata-mcp)"
-```
-
-Tools (all read-only): `list_activities`, `get_activity`,
-`get_daily_metrics`, `get_training_load`, `get_weekly_summary`,
-`get_records`. The server reads the same SQLite store the daily sync
-writes, so it's always as fresh as the last `daily_update.sh` run.
+Tests are written before the code, run against a temporary `HOME`, never call paid APIs (Claude is a test double)
+and never use real health data. The same checks run on GitHub Actions for every pull request. The phone screens have
+their own end-to-end suite (`pip install -e ".[dev,e2e]" && python -m playwright install chromium`, then
+`pytest tests/e2e`).
 
 ## Roadmap
 
-- [x] v1: CLI sync + export to Markdown/JSON
-- [ ] v2: ready-made analysis prompt templates (training load, VO2max trend...)
-- [ ] v3: lightweight dashboard / historical comparisons
+- [x] Garmin sync and exports for AI chats
+- [x] The phone app: food log with dictation, kcal budget, recipes, balance and weight
+- [x] Today and Fitness screens: training load, last activity, recovery
+- [x] The assistant: conversations over the whole context, medical documents, spending cap
+- [ ] **The team**: a coach that keeps a training plan you negotiate with it, sends sessions to the Garmin watch and to
+      Google Calendar, follows niggles and injuries, and prepares races on the real course profile
+- [ ] **A desktop web version**, to look at and analyse everything in more depth than a phone screen allows
+- [ ] Which model for which job (and which provider), so the monthly cost stays sane as the team grows
+- [ ] A photo of a plate → an estimate of its kcal
 
 ## License
 

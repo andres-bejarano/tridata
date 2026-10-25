@@ -381,6 +381,7 @@ async function cargar() {
   vista = datos;
   hoyISO = datos.fecha;
   pintar();
+  cargarEquipo(); // unit 041: after the settings, so «Conexión» says what /api/ajustes said
 }
 
 // -- unit 041: Ajustes › El equipo, the model of each role (R7, G-56) ------------------------------------------------
@@ -459,4 +460,3 @@ async function cargarEquipo() {
 
 $("anadir-carrera").addEventListener("click", () => { carreraAbierta = "nueva"; abierto = null; mensaje(""); pintar(); });
 cargar();
-cargarEquipo();

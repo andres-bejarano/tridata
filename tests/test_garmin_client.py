@@ -218,3 +218,62 @@ class TestGetHRV:
         c, api = client
         api.get_hrv_data.return_value = None
         assert c.get_hrv(date(2026, 8, 4)) is None
+
+
+# ---------------------------------------------------------------------------
+# unit 042 (R2, R3, R4 · C-200..C-202): the workouts to the watch
+# ---------------------------------------------------------------------------
+
+class TestEntrenos:
+    ENTRENO = {"workoutName": "Series de prueba", "sportType": {"sportTypeId": 1, "sportTypeKey": "running"}}
+
+    def test_subir_programar_quitar_borrar_y_bajar(self, client):  # R2, R4
+        c, api = client
+        api.upload_workout.return_value = {"workoutId": 123, "workoutName": "Series de prueba"}
+        api.schedule_workout.return_value = {"workoutScheduleId": 456, "calendarDate": "2026-10-28"}
+        api.download_workout.return_value = b".FIT de prueba"
+        assert c.subir_entreno(self.ENTRENO) == 123
+        api.upload_workout.assert_called_once_with(self.ENTRENO)
+        assert c.programar(123, date(2026, 10, 28)) == 456
+        api.schedule_workout.assert_called_once_with(123, "2026-10-28")
+        c.quitar_programado(456)
+        api.unschedule_workout.assert_called_once_with(456)
+        c.borrar_entreno(123)
+        api.delete_workout.assert_called_once_with(123)
+        assert c.bajar_fit(123) == b".FIT de prueba"
+        api.download_workout.assert_called_once_with(123)
+
+    def test_un_429_es_el_error_de_siempre(self, client):  # R3
+        from garminconnect import GarminConnectTooManyRequestsError
+
+        from tridata.garmin_client import GarminRateLimitError
+        c, api = client
+        api.upload_workout.side_effect = GarminConnectTooManyRequestsError("429 Too Many Requests")
+        with pytest.raises(GarminRateLimitError):
+            c.subir_entreno(self.ENTRENO)
+
+    def test_un_rechazo_o_sin_conexion_es_un_error_de_entreno(self, client):  # R3
+        from garminconnect import GarminConnectConnectionError
+
+        from tridata.garmin_client import GarminWorkoutError
+        c, api = client
+        api.upload_workout.side_effect = GarminConnectConnectionError("400 Bad Request")
+        with pytest.raises(GarminWorkoutError):
+            c.subir_entreno(self.ENTRENO)
+        api.schedule_workout.side_effect = None
+        api.schedule_workout.return_value = {}  # no id: it was not scheduled
+        with pytest.raises(GarminWorkoutError):
+            c.programar(123, date(2026, 10, 28))
+
+    def test_quitar_lo_que_ya_no_esta_no_falla(self, client):  # R4: removed by hand in Garmin Connect
+        from garminconnect import GarminConnectConnectionError
+
+        from tridata.garmin_client import GarminWorkoutError
+        c, api = client
+        api.unschedule_workout.side_effect = GarminConnectConnectionError("404 Not Found")
+        api.delete_workout.side_effect = GarminConnectConnectionError("404 Not Found")
+        c.quitar_programado(456)
+        c.borrar_entreno(123)
+        api.delete_workout.side_effect = GarminConnectConnectionError("500 Server Error")
+        with pytest.raises(GarminWorkoutError):
+            c.borrar_entreno(123)

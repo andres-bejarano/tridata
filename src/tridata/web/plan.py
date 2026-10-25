@@ -12,6 +12,14 @@
     POST /api/plan/confirmar          {token, elecciones: {"4": "plan" | "garmin"}}: saves that proposal (once; 404
                                       if it is not there any more) and answers like GET /api/plan with it
     GET  /api/plan/N.md               the plan as a document (`plan.markdown.escribir`), to download
+    POST /api/plan/sesion/ID/garmin   unit 042: {tarjeta} «Voy a mandar a tu Garmin» for that session (it is confirmed
+                                      or discarded with /api/asistente/*, like every card: nothing goes to Garmin
+                                      here, G-55); 422 with why if it cannot be sent (a block it cannot read, a day
+                                      that is over), 404 without that session
+    GET  /api/plan/sesion/ID.fit      unit 042: the session as a FIT workout file, made here (R-159); 422, 404 as above
+
+Unit 042: each day of GET /api/plan/semana/N also brings `reloj`, one per session of `sesiones` and in its order:
+{id, estado: "al_dia" | "cambiada" | None, enviada}, whether it is in the watch as it is now.
 
 The proposals live only in memory until confirmed (the last few). The spending of every call to the AI goes to the
 month's cap as «importar plan» (`Conversaciones.apuntar_gasto`). Nothing here logs a text of the plan (R9).
@@ -37,8 +45,10 @@ from ..fitness import detalle_actividad
 from ..ia.plan import ErrorPlan
 from ..nutricion.ajustes import Ajustes
 from ..plan import Planes, semanas
+from ..plan.acciones import tarjeta_garmin
 from ..plan.importar import confirmar, proponer
 from ..plan.markdown import escribir
+from ..plan.reloj import NoTraducible, fit_local
 from ..storage import DataStore
 
 log = logging.getLogger(__name__)
@@ -90,13 +100,42 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
             return _error(NO_ESTA, 404)
         return JSONResponse(await run_in_threadpool(_vista, plan))
 
+    def _semana(plan: dict, n: int) -> dict[str, Any] | None:
+        vista = semanas.semana(plan, n, store, hoy())
+        if vista is None:
+            return None
+        reloj = planes.sesiones_reloj(plan["id"])  # the same order as plan["sesiones"]
+        for dia in vista["dias"]:
+            dia["reloj"] = [{k: s[k] for k in ("id", "estado", "enviada")} for s in reloj if s["fecha"] == dia["fecha"]]
+        return vista
+
     async def ver_semana(request: Request) -> Response:
         plan, _ = await run_in_threadpool(_plan_pedido, request)
-        vista = (await run_in_threadpool(semanas.semana, plan, request.path_params["n"], store, hoy())
-                 if plan is not None else None)
+        vista = await run_in_threadpool(_semana, plan, request.path_params["n"]) if plan is not None else None
         if vista is None:
             return _error("Esa semana no está en el plan.", 404)
         return JSONResponse(vista)
+
+    async def tarjeta_reloj(request: Request) -> Response:
+        ident = request.path_params["id"]
+        if await run_in_threadpool(planes.sesion, ident) is None:
+            return _error("Esa sesión ya no está en el plan.", 404)
+        resultado = await run_in_threadpool(tarjeta_garmin, planes, ident, hoy())
+        if resultado["tipo"] != "propuesta":
+            return _error(f"{resultado['texto']}.", 422)
+        return JSONResponse({"tarjeta": resultado})
+
+    async def bajar_fit(request: Request) -> Response:
+        sesion = await run_in_threadpool(planes.sesion, request.path_params["id"])
+        if sesion is None:
+            return _error("Esa sesión ya no está en el plan.", 404)
+        try:
+            fichero = await run_in_threadpool(fit_local, sesion)
+        except NoTraducible as exc:
+            return _error(f"{exc}.", 422)
+        nombre = re.sub(r"[^a-z0-9]+", "-", f"{sesion['fecha']} {sesion['titulo']}".lower()).strip("-")
+        return Response(fichero, media_type="application/octet-stream",
+                        headers={"Content-Disposition": f'attachment; filename="{nombre or "sesion"}.fit"'})
 
     def _detalle(ident: str) -> dict | None:
         if store is None:
@@ -173,4 +212,6 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         Route("/api/plan/importar", importar, methods=["POST"]),
         Route("/api/plan/confirmar", confirmar_importacion, methods=["POST"]),
         Route("/api/plan/{id:int}.md", bajar),
+        Route("/api/plan/sesion/{id:int}/garmin", tarjeta_reloj, methods=["POST"]),
+        Route("/api/plan/sesion/{id:int}.fit", bajar_fit),
     ]

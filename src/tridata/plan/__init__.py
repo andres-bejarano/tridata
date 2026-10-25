@@ -16,6 +16,11 @@ sections (`plan/markdown.py`):
 
 The plan of the current objective is the one of the next main race; with all of them over, the one of the last.
 Nothing here logs a text of the plan (R9).
+
+Unit 042 (REC-26): a session sent to the watch keeps its `garmin_workout_id` and `garmin_schedule_id` (to replace it,
+R-160), when it was sent (`garmin_enviada`) and what was sent (`garmin_texto`, «título: bloque · bloque»), so the plan
+says «en tu Garmin» or that it changed since. A session is addressed by its `rowid` (`sesion`, `sesiones_reloj`).
+`garmin()` is the logged-in Garmin client (`plan.reloj.cliente_garmin`, looked up when it is called).
 """
 from __future__ import annotations
 
@@ -99,6 +104,14 @@ _FILAS: dict[str, tuple[str, tuple[str, ...]]] = {
     "notas": ("plan_nota", ("apartado", "tipo", "texto")),
 }
 _BOOLEANOS = {("plan_carrera", "principal"), ("plan_sesion", "clave")}
+# unit 042: the columns of a session sent to the watch, added to an older base without them
+_RELOJ = (("garmin_workout_id", "INTEGER"), ("garmin_schedule_id", "INTEGER"), ("garmin_enviada", "TEXT"),
+          ("garmin_texto", "TEXT"))
+
+
+def texto_sesion(titulo: str, bloques: list[str]) -> str:
+    """«título: bloque · bloque», how a session is said (and what was sent to the watch)."""
+    return f"{titulo}: {' · '.join(bloques)}" if bloques else titulo
 
 
 def _a_la_base(tabla: str, columna: str, valor: Any) -> Any:
@@ -124,6 +137,10 @@ class Planes:
         self._db_path = Path(db_path)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            tiene = {f["name"] for f in conn.execute("PRAGMA table_info(plan_sesion)")}
+            for columna, tipo in _RELOJ:
+                if columna not in tiene:
+                    conn.execute(f"ALTER TABLE plan_sesion ADD COLUMN {columna} {tipo}")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -183,5 +200,48 @@ class Planes:
             return int(min(proximos, key=lambda p: p["principal"])["id"])
         return int(max(planes, key=lambda p: (p["principal"] or "", p["id"]))["id"])
 
+    # -- unit 042: the sessions sent to the watch ----------------------------------------------------------------
 
-__all__ = ["Planes"]
+    def sesion(self, ident: int) -> dict[str, Any] | None:
+        """One session by its id, with its plan and what was sent to the watch; None if it is not there."""
+        with self._connect() as conn:
+            f = conn.execute("SELECT rowid AS id, * FROM plan_sesion WHERE rowid = ?", (ident,)).fetchone()
+        if f is None:
+            return None
+        return {"id": f["id"], "plan_id": f["plan_id"], "fecha": f["fecha"], "titulo": f["titulo"],
+                "bloques": json.loads(f["bloques"]), "clave": bool(f["clave"]),
+                **{columna: f[columna] for columna, _ in _RELOJ}}
+
+    def sesiones_reloj(self, plan_id: int) -> list[dict[str, Any]]:
+        """`[{id, fecha, titulo, estado, enviada}]` of the sessions of a plan, in the order of `leer`: `estado` is
+        "al_dia" (in the watch as it is now), "cambiada" (changed since it was sent) or None (never sent)."""
+        with self._connect() as conn:
+            filas = conn.execute("SELECT rowid AS id, * FROM plan_sesion WHERE plan_id = ? ORDER BY orden",
+                                 (plan_id,)).fetchall()
+        salida = []
+        for f in filas:
+            estado = None
+            if f["garmin_workout_id"] is not None:
+                ahora = texto_sesion(f["titulo"], json.loads(f["bloques"]))
+                estado = "al_dia" if f["garmin_texto"] == ahora else "cambiada"
+            salida.append({"id": f["id"], "fecha": f["fecha"], "titulo": f["titulo"], "estado": estado,
+                           "enviada": f["garmin_enviada"] if estado else None})
+        return salida
+
+    def marcar_garmin(self, ident: int, workout_id: int | None, schedule_id: int | None,
+                      enviada: datetime | None = None, texto: str | None = None) -> None:
+        """What is in Garmin of that session now (all None: nothing)."""
+        with self._connect() as conn:
+            conn.execute("UPDATE plan_sesion SET garmin_workout_id = ?, garmin_schedule_id = ?, garmin_enviada = ?, "
+                         "garmin_texto = ? WHERE rowid = ?",
+                         (workout_id, schedule_id, enviada.isoformat(timespec="seconds") if enviada else None,
+                          texto, ident))
+
+    def garmin(self) -> Any:
+        """The Garmin client to send a session with (logged in only now, never when the app starts)."""
+        from . import reloj
+
+        return reloj.cliente_garmin()
+
+
+__all__ = ["Planes", "texto_sesion"]

@@ -189,3 +189,181 @@ def test_el_entrenador_propone_y_el_plan_cambia_solo_al_confirmar(tmp_path):  # 
     assert r.status_code == 200, r.text
     assert miercoles() == [{"titulo": "Series 3×1000", "bloques": ["20' a 5:30", "3×1000 a 4:05 (2' rec)", "15' suave"],
                             "clave": True}]
+
+
+# -- unit 042 · R1-R6 (R-157..R-161, C-199..C-203): the card «Voy a mandar a tu Garmin» ---------------------------
+
+LINEAS_SERIES = ["Calentamiento: 20' a 5:25-5:35 /km", "3 × 2000 m a 4:10-4:20 /km, con 3' de recuperación",
+                 "Vuelta a la calma: 15' sin ritmo"]
+
+
+@pytest.fixture
+def garmin(monkeypatch):
+    """Garmin doubled where the app connects to it (`plan.reloj.cliente_garmin`): never the real one."""
+    from test_plan_reloj import GarminDoble
+
+    from tridata.plan import reloj
+
+    doble = GarminDoble()
+    monkeypatch.setattr(reloj, "cliente_garmin", lambda entorno=None: doble)
+    return doble
+
+
+def _id_del(planes: Planes, plan_id: int, dia: str) -> int:
+    (sesion,) = [s for s in planes.sesiones_reloj(plan_id) if s["fecha"] == dia]
+    return int(sesion["id"])
+
+
+def _estado_reloj(planes: Planes, plan_id: int, dia: str) -> str | None:
+    return next(s["estado"] for s in planes.sesiones_reloj(plan_id) if s["fecha"] == dia)
+
+
+def test_la_tarjeta_de_garmin_esta_en_el_catalogo():  # R1
+    assert "mandar_a_garmin" in catalogo()
+    assert "- mandar_a_garmin:" in texto_acciones()
+
+
+def test_la_tarjeta_dice_bloques_margen_y_dia_y_no_manda_nada(b, garmin):  # R1, R5 · C-199, C-203
+    t = b.uno(accion="mandar_a_garmin", dia=MIERCOLES)
+    assert t["tipo"] == "propuesta", t
+    assert t["texto"] == "Voy a mandar a tu Garmin: Series de prueba 3×2000 (mié 28/10)"
+    assert t["lineas"] == LINEAS_SERIES
+    assert t["dia"] == "2026-10-28"
+    assert "Garmin Connect" in t["donde"]
+    assert _estado_reloj(b.planes, b.plan_id, "2026-10-28") is None
+    descartar(t, b.ctx)
+    assert garmin.llamadas == []  # C-203: not confirmed, nothing goes to Garmin
+    assert _estado_reloj(b.planes, b.plan_id, "2026-10-28") is None
+
+
+def test_al_confirmar_queda_en_su_dia_y_el_plan_lo_marca(b, garmin):  # R2 · C-200
+    t = b.uno(accion="mandar_a_garmin", dia=MIERCOLES)
+    hecho = confirmar(t, b.ctx)
+    assert "28/10" in hecho["hecho"] and "Garmin" in hecho["hecho"]
+    assert [e["workoutName"] for e in garmin.del_dia(MIERCOLES)] == ["Series de prueba 3×2000"]
+    (sesion,) = [s for s in b.planes.sesiones_reloj(b.plan_id) if s["fecha"] == "2026-10-28"]
+    assert sesion["estado"] == "al_dia" and sesion["enviada"]
+    guardada = b.planes.sesion(sesion["id"])
+    assert guardada["garmin_workout_id"] in garmin.entrenos
+    assert garmin.programados[guardada["garmin_schedule_id"]] == (guardada["garmin_workout_id"], MIERCOLES)
+
+
+def test_cambiada_y_mandada_otra_vez_queda_una_sola(b, garmin):  # R4 · C-202
+    confirmar(b.uno(accion="mandar_a_garmin", dia=MIERCOLES), b.ctx)
+    confirmar(b.uno(accion="plan_cambiar_sesion", dia=MIERCOLES,
+                    texto="Series 3×10' | 20' a 5:30 | 3×10' a 4:00 (2' rec) | 15' suave"), b.ctx)
+    assert _estado_reloj(b.planes, b.plan_id, "2026-10-28") == "cambiada"  # the plan says it changed since
+    t = b.uno(accion="mandar_a_garmin", dia=MIERCOLES)
+    assert any("sustitu" in a for a in t["avisos"])  # the card says it replaces the one sent
+    confirmar(t, b.ctx)
+    assert [e["workoutName"] for e in garmin.del_dia(MIERCOLES)] == ["Series 3×10'"]
+    assert len(garmin.entrenos) == 1
+    assert _estado_reloj(b.planes, b.plan_id, "2026-10-28") == "al_dia"
+
+
+def test_si_garmin_falla_lo_dice_y_ofrece_el_fichero(b, garmin):  # R3 · C-201
+    from tridata.garmin_client import GarminRateLimitError
+    from tridata.nutricion.asistente import NoValida
+
+    garmin.falla_en, garmin.error = "subir_entreno", GarminRateLimitError("429")
+    t = b.uno(accion="mandar_a_garmin", dia=MIERCOLES)
+    with pytest.raises(NoValida) as exc:
+        confirmar(t, b.ctx)
+    assert "No ha llegado a tu Garmin" in str(exc.value) and "Bajar fichero" in str(exc.value)
+    assert _estado_reloj(b.planes, b.plan_id, "2026-10-28") is None  # not marked
+    assert [x["estado"] for x in b.ctx.tarjetas.todas()] == []  # nor written down as applied
+
+
+@pytest.mark.parametrize(("dia", "bloques", "dice"), [
+    (date(2026, 10, 14), None, "ya pasó"),
+    (date(2026, 10, 29), None, "no hay ninguna sesión"),
+    (MIERCOLES, ["20' a 5:30", "texto raro", "15' suave"], "«texto raro»"),
+], ids=["pasada", "sin-sesion", "bloque-raro"])
+def test_lo_que_no_se_manda_lo_dice(b, garmin, dia, bloques, dice):  # R6
+    if bloques is not None:
+        import json
+        import sqlite3
+
+        with sqlite3.connect(b.db) as conn:
+            conn.execute("UPDATE plan_sesion SET bloques = ? WHERE fecha = '2026-10-28'", (json.dumps(bloques),))
+    t = b.uno(accion="mandar_a_garmin", dia=dia)
+    assert t["tipo"] == "no" and dice in t["texto"], t
+    assert garmin.llamadas == []
+
+
+# -- the same from Fitness › Plan and from a conversation, through the web -------------------------------------------
+
+def _web_con_series(tmp_path):
+    from test_conversaciones_web import Web
+
+    web = Web(tmp_path)
+    planes = Planes(web.db)
+    plan_id = planes.crear(plan_de_prueba(sesiones=[*plan_de_prueba()["sesiones"], SERIES]), AHORA)
+    return web, planes, plan_id
+
+
+def _miercoles(web) -> dict:
+    r = web.cliente.get("/api/plan/semana/10")
+    assert r.status_code == 200, r.text
+    return next(d for d in r.json()["dias"] if d["fecha"] == "2026-10-28")
+
+
+def test_desde_fitness_plan_la_tarjeta_y_en_tu_garmin(tmp_path, garmin):  # R1, R2, R5 · C-199, C-200, C-203
+    web, planes, plan_id = _web_con_series(tmp_path)
+    (reloj_dia,) = _miercoles(web)["reloj"]  # one per session of the day, in its order
+    assert reloj_dia["estado"] is None and reloj_dia["id"] == _id_del(planes, plan_id, "2026-10-28")
+    r = web.cliente.post(f"/api/plan/sesion/{reloj_dia['id']}/garmin")
+    assert r.status_code == 200, r.text
+    tarjeta = r.json()["tarjeta"]
+    assert tarjeta["texto"] == "Voy a mandar a tu Garmin: Series de prueba 3×2000 (mié 28/10)"
+    assert tarjeta["lineas"] == LINEAS_SERIES
+    assert garmin.llamadas == []  # the card is not the sending (G-55)
+    r = web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta})
+    assert r.status_code == 200, r.text
+    assert [e["workoutName"] for e in garmin.del_dia(MIERCOLES)] == ["Series de prueba 3×2000"]
+    assert _miercoles(web)["reloj"][0]["estado"] == "al_dia"
+    assert web.cliente.post("/api/plan/sesion/999999/garmin").status_code == 404
+
+
+def test_desde_la_web_si_garmin_falla_se_baja_el_fichero(tmp_path, garmin):  # R3 · C-201
+    web, planes, plan_id = _web_con_series(tmp_path)
+    ident = _id_del(planes, plan_id, "2026-10-28")
+    garmin.falla_en = "subir_entreno"
+    tarjeta = web.cliente.post(f"/api/plan/sesion/{ident}/garmin").json()["tarjeta"]
+    r = web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta})
+    assert r.status_code == 422 and "Bajar fichero" in r.json()["error"]
+    assert _miercoles(web)["reloj"][0]["estado"] is None
+    r = web.cliente.get(f"/api/plan/sesion/{ident}.fit")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert ".fit" in r.headers["content-disposition"]
+    assert r.content[8:12] == b".FIT"
+    from tridata.plan.reloj import fit_local
+    assert r.content == fit_local(planes.sesion(ident))  # the same session
+    assert web.cliente.get("/api/plan/sesion/999999.fit").status_code == 404
+
+
+def test_desde_fitness_plan_un_bloque_raro_no_da_tarjeta(tmp_path, garmin):  # R6
+    import json
+    import sqlite3
+
+    web, planes, plan_id = _web_con_series(tmp_path)
+    ident = _id_del(planes, plan_id, "2026-10-28")
+    with sqlite3.connect(web.db) as conn:
+        conn.execute("UPDATE plan_sesion SET bloques = ? WHERE rowid = ?", (json.dumps(["texto raro"]), ident))
+    r = web.cliente.post(f"/api/plan/sesion/{ident}/garmin")
+    assert r.status_code == 422 and "«texto raro»" in r.json()["error"]
+    assert web.cliente.get(f"/api/plan/sesion/{ident}.fit").status_code == 422
+    assert garmin.llamadas == []
+
+
+def test_el_entrenador_la_propone_y_solo_sale_al_confirmar(tmp_path, garmin):  # R1, R5 · C-199, C-203
+    web, _, _ = _web_con_series(tmp_path)
+    web.claude.responder("Te la dejo lista.", ("proponer_cambio", {"accion": "mandar_a_garmin", "dia": "2026-10-28"}))
+    web.claude.responder(" Confírmala y la tienes en el reloj.")
+    fin = web.nueva("mándame las series del miércoles al reloj", papel="entrenador")
+    (tarjeta,) = fin["mensaje"]["tarjetas"]
+    assert tarjeta["texto"] == "Voy a mandar a tu Garmin: Series de prueba 3×2000 (mié 28/10)"
+    assert garmin.llamadas == []  # C-203
+    assert web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta}).status_code == 200
+    assert [e["workoutName"] for e in garmin.del_dia(MIERCOLES)] == ["Series de prueba 3×2000"]

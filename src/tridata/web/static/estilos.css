@@ -762,3 +762,11 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .diferencia { display: grid; gap: 6px; padding: 12px 14px; }
 .diferencia p { margin: 0; overflow-wrap: anywhere; }
 .aviso-bien { color: var(--bien); background: var(--ico-fijo); padding: 10px 12px; border-radius: 12px; margin: 8px 0; font-size: .95rem; }
+
+/* Unit 042: the session to the watch in Fitness › Plan (a week): «Mandar a mi Garmin», its card and «en tu Garmin» */
+.reloj-sesion { display: grid; gap: 8px; }
+.fila-reloj { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.en-garmin { font-size: .92rem; font-weight: 600; color: var(--acento); }
+.garmin-cambiada { font-size: .92rem; color: var(--alerta); }
+.tarjeta-reloj { margin: 0; display: grid; gap: 8px; }
+.tarjeta-reloj .bajar-fit { display: flex; align-items: center; justify-content: center; min-height: 48px; border: 1px solid var(--acento); border-radius: 10px; color: var(--acento); font-weight: 600; text-decoration: none; }

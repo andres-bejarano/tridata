@@ -151,6 +151,8 @@ def rutas(conversaciones: Conversaciones, conversador: Any, medicos: Medicos, mo
                 raise ErrorConversacion("la respuesta no ha llegado entera")
         except ErrorConversacion as exc:
             log.warning("conversation %d: no answer (%s)", ident, type(exc.__cause__ or exc).__name__)
+            for uso in exc.usos:  # bug 038: what was charged is counted, answer or not
+                conversaciones.apuntar_gasto(ahora(), exc.modelo or "", uso, "mensaje")
             yield _linea_json({"tipo": "error", "error": f"Sin respuesta: {exc}. Puedes reintentarlo.",
                                "conversacion": conversaciones.conversacion(ident),
                                "mensaje": conversaciones.mensaje(pregunta["id"])})
@@ -161,7 +163,8 @@ def rutas(conversaciones: Conversaciones, conversador: Any, medicos: Medicos, mo
                                "conversacion": conversaciones.conversacion(ident),
                                "mensaje": conversaciones.mensaje(pregunta["id"])})
             return
-        conversaciones.apuntar_gasto(ahora(), respuesta.modelo, respuesta.uso, "mensaje")
+        for uso in respuesta.usos or (respuesta.uso,):  # one row per call: the price tier goes per call (bug 038)
+            conversaciones.apuntar_gasto(ahora(), respuesta.modelo, uso, "mensaje")
         pregunta = conversaciones.respondido(pregunta["id"])
         cuerpo = respuesta.texto or (SIN_TEXTO if tarjetas else "…")
         if respuesta.cortada:

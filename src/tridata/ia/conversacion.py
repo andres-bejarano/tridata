@@ -59,7 +59,15 @@ HERRAMIENTAS: list[dict[str, Any]] = [
 
 
 class ErrorConversacion(Exception):
-    """Claude did not answer (no key, no network, a limit, a refusal…): the message stays «sin respuesta»."""
+    """Claude did not answer (no key, no network, a limit, a refusal…): the message stays «sin respuesta».
+
+    `modelo` and `usos` (one per call already charged, the cut one included if its use was seen) say what was paid
+    anyway, so the spending cap counts it (bug 038). No call answered: `usos` is empty."""
+
+    def __init__(self, mensaje: str, modelo: str | None = None, usos: tuple[dict[str, int], ...] = ()) -> None:
+        super().__init__(mensaje)
+        self.modelo = modelo
+        self.usos = usos
 
 
 @dataclass(frozen=True)
@@ -70,6 +78,7 @@ class Respuesta:
     modelo: str
     uso: dict[str, int]
     cortada: bool = False
+    usos: tuple[dict[str, int], ...] = ()  # the use of each call: the price goes per call (bug 038)
 
 
 def construir_peticion(bloques: Sequence[str], historial: list[dict[str, Any]], mensaje: str, modelo: str, *,
@@ -99,6 +108,15 @@ def _sumar(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
     return {k: a.get(k, 0) + b.get(k, 0) for k in ("entrada", "salida", "cache_escritura", "cache_lectura")}
 
 
+def _pagado(usos: list[dict[str, int]], flujo: Any) -> tuple[dict[str, int], ...]:
+    """The calls already charged plus, if a round broke on the way, the use the SDK had seen of it (bug 038)."""
+    try:
+        parcial = _uso(flujo.current_message_snapshot.usage) if flujo is not None else None
+    except Exception:  # noqa: BLE001 - no snapshot yet (it broke before `message_start`): nothing seen, nothing added
+        parcial = None
+    return tuple(usos) + ((parcial,) if parcial and any(parcial.values()) else ())
+
+
 class ConversadorClaude:
     def __init__(self, cliente: Any = None, modelo: str | None = None, modelo_pensar: str = MODELO_PENSAR) -> None:
         self._cliente = cliente
@@ -117,6 +135,8 @@ class ConversadorClaude:
         modelo = self.modelo_para(pensar)
         peticion = construir_peticion(bloques, historial, mensaje, modelo, pensar=pensar)
         uso = {"entrada": 0, "salida": 0, "cache_escritura": 0, "cache_lectura": 0}
+        usos: list[dict[str, int]] = []
+        flujo: Any = None  # the round on the way: if it breaks, what the SDK saw of its use is paid too
         dicho = ""  # what Andrés has seen arrive, every round; the answer is this
         cortada = True  # too many rounds: what was said is kept
         try:
@@ -134,9 +154,11 @@ class ConversadorClaude:
                         dicho += trozo
                         yield trozo
                     final = flujo.get_final_message()
-                uso = _sumar(uso, _uso(final.usage))
+                flujo = None
+                usos.append(_uso(final.usage))
+                uso = _sumar(uso, usos[-1])
                 if final.stop_reason == "refusal":
-                    raise ErrorConversacion("el asistente no ha querido responder a eso")
+                    raise ErrorConversacion("el asistente no ha querido responder a eso", modelo, tuple(usos))
                 llamadas = [b for b in final.content if getattr(b, "type", None) == "tool_use"]
                 if final.stop_reason != "tool_use" or not llamadas:
                     cortada = final.stop_reason == "max_tokens"
@@ -152,20 +174,22 @@ class ConversadorClaude:
         except ErrorConversacion:
             raise
         except anthropic.AuthenticationError as exc:
-            raise ErrorConversacion("la clave de la API no es válida") from exc
+            raise ErrorConversacion("la clave de la API no es válida", modelo, _pagado(usos, flujo)) from exc
         except anthropic.RateLimitError as exc:
-            raise ErrorConversacion("se ha alcanzado el límite de uso de la API") from exc
+            raise ErrorConversacion("se ha alcanzado el límite de uso de la API", modelo, _pagado(usos, flujo)) from exc
         except anthropic.APIStatusError as exc:
-            raise ErrorConversacion(f"la API ha respondido con un error {exc.status_code}") from exc
+            raise ErrorConversacion(f"la API ha respondido con un error {exc.status_code}", modelo,
+                                    _pagado(usos, flujo)) from exc
         except anthropic.APIConnectionError as exc:
-            raise ErrorConversacion("no hay conexión con la API") from exc
+            raise ErrorConversacion("no hay conexión con la API", modelo, _pagado(usos, flujo)) from exc
         except anthropic.AnthropicError as exc:
-            raise ErrorConversacion("error del cliente de la API") from exc
+            raise ErrorConversacion("error del cliente de la API", modelo, _pagado(usos, flujo)) from exc
         except (TypeError, ValueError) as exc:
             # The SDK raises TypeError when no API key is configured. Logged without any text of the conversation.
             log.warning("conversation turn failed: %s", type(exc).__name__)
-            raise ErrorConversacion("falta la clave de la API o la respuesta no es válida") from exc
-        yield Respuesta(texto=dicho.strip(), modelo=modelo, uso=uso, cortada=cortada)
+            raise ErrorConversacion("falta la clave de la API o la respuesta no es válida", modelo,
+                                    _pagado(usos, flujo)) from exc
+        yield Respuesta(texto=dicho.strip(), modelo=modelo, uso=uso, cortada=cortada, usos=tuple(usos))
 
 
 __all__ = ["HERRAMIENTAS", "MODELO_PENSAR", "MODELO_POR_DEFECTO", "ConversadorClaude", "ErrorConversacion",

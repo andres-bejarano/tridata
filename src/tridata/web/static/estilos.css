@@ -770,3 +770,14 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .garmin-cambiada { font-size: .92rem; color: var(--alerta); }
 .tarjeta-reloj { margin: 0; display: grid; gap: 8px; }
 .tarjeta-reloj .bajar-fit { display: flex; align-items: center; justify-content: center; min-height: 48px; border: 1px solid var(--acento); border-radius: 10px; color: var(--acento); font-weight: 600; text-decoration: none; }
+
+/* Unit 044: Fitness › Plan › Incidencias (the open ones first) and the notes of a day in a week */
+.incidencias > li.incid { display: grid; gap: 4px; padding: 12px 14px; overflow-wrap: anywhere; }
+.incid .estado { font-size: .78rem; font-weight: 700; letter-spacing: .02em; }
+.incid .estado.abierta { color: var(--alerta); }
+.incid .estado.cerrada { color: var(--bien); }
+.incid small { color: var(--suave); font-size: .92rem; }
+.incid > button { margin-top: 6px; min-height: 48px; }
+.cerrar-incid { display: grid; gap: 8px; margin-top: 6px; }
+.cerrar-incid .aviso { margin: 0; }
+.nota-dia { margin: 0; font-size: .92rem; color: var(--suave); }

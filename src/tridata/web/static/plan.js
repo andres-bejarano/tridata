@@ -14,6 +14,10 @@
 // or discarded with /api/asistente/* like every card (nothing goes to Garmin before «Confirmar», G-55); confirmed,
 // the session says «en tu Garmin». If Garmin fails, the card says so and offers «Bajar fichero»
 // (GET /api/plan/sesion/ID.fit, the same session as a FIT file).
+// Unit 044 (REC-24): «⚠️ Incidencias (N)» opens Fitness › Plan › Incidencias (GET /api/plan/incidencias): the open
+// ones first, with since when, what happened, the visits to the physio or the doctor and the lesson; an open one is
+// closed by hand with «Cerrar con lección…» (POST /api/plan/incidencia/ID/cerrar). Opening one or adding a visit is a
+// card of a conversation. Each day of a week shows its notes («📝 FC alta para el ritmo»).
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -68,7 +72,8 @@ function aviso(texto, reintentar = null) {
 }
 
 function ver(cual) {
-  for (const v of ["vista", "semana", "importar"]) $(`plan-${v}`).hidden = v !== cual;
+  cajaIncidencias();
+  for (const v of ["vista", "semana", "importar", "incidencias"]) $(`plan-${v}`).hidden = v !== cual;
   window.scrollTo(0, 0);
 }
 
@@ -120,7 +125,9 @@ function pintarPlan(datos) {
       : el("p", { className: "tarjeta suave", textContent: "Este plan no tiene semanas." }),
     el("p", { className: "suave nota-plan", textContent: "Lo hecho sale de Garmin: tiempo en movimiento y km de carrera a pie. Bici, natación y gimnasio, dentro de cada semana." }),
     el("div", { className: "acciones-plan" }, botonImportar(),
-      el("a", { id: "plan-bajar", className: "boton", href: `/api/plan/${plan.id}.md`, download: "", textContent: "📄 Bajar .md" })));
+      el("a", { id: "plan-bajar", className: "boton", href: `/api/plan/${plan.id}.md`, download: "", textContent: "📄 Bajar .md" }),
+      el("button", { type: "button", id: "plan-incidencias-boton", textContent: `⚠️ Incidencias${plan.abiertas ? ` (${plan.abiertas})` : ""}`,
+        onclick: () => abrirIncidencias(plan.id) })));
 }
 
 function filaCarrera(c) {
@@ -229,6 +236,7 @@ function filaDia(d) {
   if (bloques.length) nodo.append(el("ul", { className: "bloques" }, ...bloques.map((b) => el("li", { textContent: b }))));
   (d.reloj ?? []).forEach((r, i) => nodo.append(filaReloj(d, d.sesiones[i], r)));
   for (const a of d.actividades) nodo.append(...lineaHecha(a));
+  for (const n of d.notas ?? []) nodo.append(el("p", { className: "nota-dia", textContent: `📝 ${n}` }));
   if (!d.actividades.length) {
     const texto = { no_hecho: "no hecho", hoy: "hoy: aún nada en Garmin", pendiente: "—" }[d.estado];
     nodo.append(el("span", { className: `estado-dia ${d.estado}`, textContent: texto }));
@@ -336,6 +344,70 @@ function pintarDetalle(caja, d) {
     resumen ? el("p", { className: "suave", textContent: resumen }) : null,
     d.vueltas.length ? el("ol", { className: "vueltas" }, ...d.vueltas.map(filaVuelta))
       : el("p", { className: "suave", textContent: "Esta actividad no tiene vueltas." }));
+}
+
+// -- unit 044: Fitness › Plan › Incidencias --------------------------------------------------------------------------
+
+function cajaIncidencias() {
+  // its place lives next to the other views of the plan (index.html has the first three)
+  if ($("plan-incidencias")) return;
+  $("plan-importar").after(el("div", { id: "plan-incidencias", hidden: true }));
+}
+
+async function abrirIncidencias(id) {
+  const mia = ++peticion;
+  const { ok, datos } = await api(`/api/plan/incidencias${id ? `?id=${id}` : ""}`);
+  if (mia !== peticion) return;
+  if (!ok) { aviso(datos.error ?? "No he podido cargar tus incidencias."); return; }
+  aviso("");
+  pintarIncidencias(datos);
+  ver("incidencias");
+}
+
+const mayusculaInicial = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+
+function cuandoIncidencia(i) {
+  if (i.estado === "abierta") return `ABIERTA · desde ${diaMes(i.desde)}`;
+  if (i.desde && i.cerrada && i.cerrada !== i.desde) return `CERRADA · ${rango(i.desde, i.cerrada)}`;
+  return `CERRADA${i.desde ? ` · ${diaMes(i.desde)}` : ""}`;
+}
+
+function filaIncidencia(i) {
+  const nodo = el("li", { className: "incid" },
+    el("span", { className: `estado ${i.estado}`, textContent: cuandoIncidencia(i) }),
+    el("strong", { textContent: mayusculaInicial(i.titulo) }),
+    !i.importada && i.que_paso ? el("small", { textContent: mayusculaInicial(i.que_paso) }) : null,
+    ...i.visitas.map((v) => el("small", { className: "visita", textContent: `${diaMes(v.fecha)} · ${mayusculaInicial(v.quien)}: ${v.que_dijo}` })));
+  if (i.estado !== "abierta") {
+    nodo.append(el("small", { className: "leccion", textContent: `Lección: ${i.leccion || "—"}` }));
+    return nodo;
+  }
+  nodo.append(el("small", { textContent: "Mientras siga abierta, todo el equipo la tiene en cuenta." }));
+  const abrir = el("button", { type: "button", textContent: "Cerrar con lección…" });
+  const texto = el("textarea", { rows: 2, placeholder: "La lección que te llevas", ariaLabel: "Lección" });
+  const cerrar = el("button", { type: "button", className: "principal", textContent: "Cerrar incidencia" });
+  const error = el("p", { className: "aviso", role: "alert", hidden: true });
+  const caja = el("div", { className: "cerrar-incid", hidden: true }, texto, error, cerrar);
+  abrir.addEventListener("click", () => { abrir.hidden = true; caja.hidden = false; texto.focus(); });
+  cerrar.addEventListener("click", async () => {
+    cerrar.disabled = true;
+    const { ok, datos } = await api(`/api/plan/incidencia/${i.id}/cerrar`, { leccion: texto.value });
+    cerrar.disabled = false;
+    if (!ok) { error.hidden = false; error.textContent = datos.error ?? "No he podido cerrarla."; return; }
+    pintarIncidencias(datos);
+  });
+  nodo.append(abrir, caja);
+  return nodo;
+}
+
+function pintarIncidencias(datos) {
+  const lista = datos.incidencias;
+  $("plan-incidencias").replaceChildren(
+    cabecera("Incidencias", () => { volverAlPlan(); cargarPlan(); }),
+    lista.length
+      ? el("ul", { className: "tarjeta lista-plan incidencias" }, ...lista.map(filaIncidencia))
+      : el("p", { className: "tarjeta suave", textContent: "No hay incidencias en tu plan. Si notas algo después de entrenar, cuéntaselo al Fisio en el Asistente y te propondrá abrir una." }),
+    el("p", { className: "suave nota-plan", textContent: "Una incidencia se abre, y sus visitas se añaden, confirmando su tarjeta en una conversación." }));
 }
 
 // -- the import ----------------------------------------------------------------------------------------------------

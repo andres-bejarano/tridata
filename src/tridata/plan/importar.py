@@ -1,7 +1,8 @@
 """Import the plan's .md (unit 040, R5, R6, G-54): cut it, order it with the AI, cross it with Garmin, propose.
 
-1. `trocear`: the code cuts the .md by its sections (its «## » headings; without any, its «# » ones). The pieces put
-   together are the whole .md, character by character: nothing is lost on the way.
+1. `trocear`: the code cuts the .md by its sections (its «## » headings; without any, its «# » ones; without any «#»,
+   the numbered lines «1. Objetivos», «2. …» of a plan pasted from a document, bug 046). The pieces put together are
+   the whole .md, character by character: nothing is lost on the way.
 2. `proponer`: each section with text goes to the AI (`ia.plan.OrdenadorPlan`, one call each, several at a time),
    which says its part and its rows of text; the code reads the rows. A section that is no part, or whose rows the
    code cannot read, is kept as a note of the plan with its text as it was (R6); a single row it cannot read, as a
@@ -41,6 +42,9 @@ class Trozo:
 
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
+# a section of a plan pasted from a document: «3. Previsto (se construye semana a semana)», short, capital after the dot
+_NUMERADO = re.compile(r"^(\d{1,2})\.[ \t]+([A-ZÁÉÍÓÚÑ¿¡].{0,78})$")
+_ITEM = re.compile(r"^\d+[.)][ \t]")  # a numbered line of any kind: next to another one, it is a list, not a section
 
 
 def _titulos(lineas: list[str], marca: str) -> list[int]:
@@ -53,30 +57,65 @@ def _titulos(lineas: list[str], marca: str) -> list[int]:
     return indices
 
 
+def _numerados(lineas: list[str]) -> dict[int, str]:
+    """The numbered sections «1. …», «2. …» in order (1, 2, 3… with no jump, and never with another numbered line
+    just above or below: that is a list), so a list or a «1 día» inside a section never cuts it; as {line index:
+    title}; only when the .md has no «#» heading at all."""
+    llenas = [i for i, x in enumerate(lineas) if x.strip()]
+    vecinas = {i: [lineas[j].strip() for j in llenas[k - 1:k] + llenas[k + 1:k + 2]] for k, i in enumerate(llenas)}
+    dentro, siguiente, cortes = False, 1, {}
+    for i, linea in enumerate(lineas):
+        if _FENCE.match(linea):
+            dentro = not dentro
+            continue
+        m = None if dentro else _NUMERADO.match(linea.strip())
+        en_lista = m is not None and any(_ITEM.match(v) for v in vecinas[i])
+        if m and not en_lista and int(m.group(1)) == siguiente:
+            cortes[i] = m.group(2).strip()
+            siguiente += 1
+    return cortes
+
+
+def _primera_linea(lineas: list[str]) -> int | None:
+    return next((i for i, x in enumerate(lineas) if x.strip()), None)
+
+
 def trocear(texto: str) -> list[Trozo]:
     """The sections of the .md, in order; `"".join(t.texto for t in trozos) == texto`."""
     lineas = texto.splitlines(keepends=True)
-    marca = "## " if _titulos(lineas, "## ") else "# "
-    cortes = _titulos(lineas, marca)
-    limites = sorted({0, *cortes, len(lineas)})
+    if _titulos(lineas, "## ") or _titulos(lineas, "# "):
+        marca = "## " if _titulos(lineas, "## ") else "# "
+        titulos = {i: lineas[i][len(marca):].strip() for i in _titulos(lineas, marca)}
+    else:
+        marca, titulos = "", _numerados(lineas)
+    limites = sorted({0, *titulos, len(lineas)})
     trozos = []
     for inicio, fin in zip(limites, limites[1:], strict=False):
         pedazo = lineas[inicio:fin]
-        if inicio in cortes:
-            titulo, resto = pedazo[0][len(marca):].strip(), pedazo[1:]
+        if inicio in titulos:
+            titulo, resto = titulos[inicio], pedazo[1:]
         else:
             titulo = ""
             resto = [x for x in pedazo if not (marca == "## " and x.startswith("# "))]
+            if not marca and titulos and (primera := _primera_linea(resto)) is not None:
+                resto = resto[:primera] + resto[primera + 1:]  # the plan's title, as «# » is in the «## » shape
         trozos.append(Trozo(titulo=titulo, texto="".join(pedazo), cuerpo="".join(resto).strip()))
     return trozos
 
 
 def nombre_del_plan(texto: str) -> str | None:
-    """The «# » title of the .md when its sections are «## », else None."""
+    """The «# » title of the .md when its sections are «## »; the first line before «1. …» when they are numbered;
+    else None."""
     lineas = texto.splitlines()
-    if not _titulos(lineas, "## "):
+    if _titulos(lineas, "## "):
+        return next((x[2:].strip() for x in lineas if x.startswith("# ") and x[2:].strip()), None)
+    if _titulos(lineas, "# "):
         return None
-    return next((x[2:].strip() for x in lineas if x.startswith("# ") and x[2:].strip()), None)
+    cortes = _numerados(lineas)
+    if not cortes:
+        return None
+    primera = _primera_linea(lineas[:min(cortes)])
+    return lineas[primera].strip() if primera is not None else None
 
 
 # -- reading the rows the AI gives ------------------------------------------------------------------------------------

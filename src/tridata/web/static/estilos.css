@@ -693,3 +693,50 @@ button.icono-boton { width: 44px; height: 44px; min-height: 44px; padding: 0; bo
 .burbuja.andres button.reintentar { min-height: 40px; padding: 0 14px; border-radius: 999px; background: var(--acento-texto); color: var(--acento); border-color: var(--acento-texto); font-weight: 650; }
 button.pensar { flex: none; width: 60px; min-height: 44px; padding: 4px 6px; border-radius: 14px; font-size: .78rem; line-height: 1.1; font-weight: 650; color: var(--suave); }
 button.pensar[aria-pressed="true"] { background: var(--acento-suave); color: var(--acento); border-color: var(--acento); }
+
+/* -- unit 040: Fitness › Plan (plan.js); the selector Forma · Plan is the `.segmentado.partes` of Nutrición ------- */
+#fitness-partes { margin: 0 0 12px; }
+.plan-cab, .plan-cabecera { display: flex; align-items: center; gap: 10px; margin: 4px 4px 10px; }
+.plan-cab h2, .plan-cabecera h2 { flex: 1; min-width: 0; margin: 0; font-size: 1.25rem; overflow-wrap: anywhere; }
+.plan-cab select { width: auto; max-width: 48%; min-height: 44px; flex: none; font-weight: 600; background: var(--tarjeta); }
+.lista-plan { list-style: none; display: block; padding: 0; overflow: hidden; }
+.lista-plan > li { border-top: 1px solid var(--borde); }
+.lista-plan > li:first-child { border-top: 0; }
+.carrera-plan { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+.carrera-plan > div { flex: 1; min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.carrera-plan small { margin: 0; font-size: .85rem; }
+.estado-carrera { flex: none; max-width: 40%; text-align: right; font-weight: 700; overflow-wrap: anywhere; }
+.estado-carrera.bien { color: var(--bien); }
+.titulo-semanas { text-transform: uppercase; letter-spacing: .06em; font-size: .85rem; color: var(--suave); }
+button.semana { width: 100%; display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 0; border-radius: 0;
+  background: transparent; text-align: left; font-weight: 400; min-height: 56px; }
+button.semana.hoy { background: var(--acento-suave); }
+.n-semana { flex: none; width: 2.4em; font-weight: 700; }
+.cuerpo-semana { flex: 1; min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.cuerpo-semana small { margin: 0; font-size: .85rem; }
+.marca-semana { color: var(--alerta); }
+.hecho-semana { flex: none; display: grid; justify-items: end; gap: 2px; font-variant-numeric: tabular-nums; }
+.hecho-semana small { font-size: .8rem; }
+.barra-semana { display: block; height: 5px; border-radius: 999px; background: var(--pista); margin-top: 4px; overflow: hidden; }
+.barra-semana > span { display: block; height: 100%; background: var(--acento); }
+.nota-plan { margin: 6px 4px 12px; }
+.acciones-plan { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.acciones-plan > * { flex: 1 1 9rem; }
+a.boton { display: grid; place-items: center; min-height: 48px; padding: 0 16px; border-radius: 12px; font-weight: 600;
+  border: 1px solid var(--borde); background: var(--tarjeta); color: var(--texto); text-decoration: none; }
+.plan-vacio { display: block; }
+.resumen-semana, .resumen-importar { display: block; margin-bottom: 12px; font-size: .92rem; overflow-wrap: anywhere; }
+.dia-plan { display: grid; gap: 4px; padding: 12px 14px; overflow-wrap: anywhere; }
+.dia-plan .bloques { margin: 0; padding-left: 1.2em; font-size: .92rem; }
+button.hecha { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 6px 10px; text-align: left;
+  font-weight: 500; font-size: .92rem; color: var(--bien); }
+button.hecha > span:first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+button.hecha .chev { color: var(--suave); transition: transform .15s; }
+button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.estado-dia { font-size: .92rem; color: var(--suave); }
+.estado-dia.no_hecho { color: var(--alerta); font-weight: 600; }
+.detalle-sesion { display: block; padding: 8px 0 0; }
+.detalle-sesion h3 { font-size: 1rem; margin: 4px 0; }
+.diferencia { display: grid; gap: 6px; padding: 12px 14px; }
+.diferencia p { margin: 0; overflow-wrap: anywhere; }
+.aviso-bien { color: var(--bien); background: var(--ico-fijo); padding: 10px 12px; border-radius: 12px; margin: 8px 0; font-size: .95rem; }

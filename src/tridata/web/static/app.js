@@ -40,6 +40,8 @@
 // «Confirmar y guardar» saves the pieces and never touches the cards, and is not shown when only changes came. The
 // review closes when no list and no card is left to decide (a dictated list of the queue is removed then).
 // Unit 031: the Fitness tab is painted by fitness.js (GET /api/fitness) every time it is entered.
+// Unit 040: Fitness has two parts, like Nutrición: Forma (`#fitness`, unit 031 unchanged) and Plan (`#fitness/plan`,
+// plan.js); each is painted when it shows.
 // Unit 032: the Asistente tab is conversaciones.js: `#asistente` its list, `#asistente/N` one conversation. Inside a
 // conversation the box and the microphone are the chat's (S-37): what is written goes to the conversation (never to
 // /api/interpretar), what is dictated is transcribed into the box, and «Pensar más» shows next to them.
@@ -57,6 +59,7 @@ import { pintarRecetas } from "./recetas.js";
 import { cargarHoy, iniciarHoy } from "./hoy.js";
 import { pintarCambios } from "./asistente.js";
 import { cargarFitness, iniciarFitness } from "./fitness.js";
+import { cargarPlan, iniciarPlan } from "./plan.js";
 import { dictarAlChat, enConversacion, enviarAlChat, iniciarConversaciones, mostrarAsistente } from "./conversaciones.js";
 
 const $ = (id) => document.getElementById(id);
@@ -96,6 +99,7 @@ let esperada = null; // id of the recording just made: its list opens by itself 
 let textoDeLista = null; // a list whose interpretation failed (502), its text put in the box, and its day
 const porCien = new WeakMap(); // unit 013: the kcal/100 g typed on a review card, by food (never saved)
 let pestanaVista = null; // the place on screen, to reload the day when coming back to Día (unit 013)
+let parteFitness = null; // unit 040: "forma" or "plan", the part of Fitness on screen
 let diaPedido = null; // unit 017: a day tapped in Balance, opened when Día shows up
 // unit 035: the five sections in the order of the day; "" is «Sin sección», always last
 const SECCIONES = [["desayuno", "Desayuno"], ["media_manana", "Media mañana"], ["comida", "Comida"],
@@ -1505,6 +1509,7 @@ enlazarControles();
 enlazarHoja();
 iniciarHoy({ api, alActualizarDia: (dia) => { if (diaVisto === dia.fecha) pintarDia(dia); } });
 iniciarFitness({ api }); // unit 031: the Fitness tab
+iniciarPlan({ api }); // unit 040: Fitness › Plan
 iniciarConversaciones({ api, alHecho: (datos) => { if (datos.dia && diaVisto === datos.dia.fecha) pintarDia(datos.dia); } });
 enlazarPestanas();
 vigilarAltoEntrada();
@@ -1583,7 +1588,7 @@ function mostrarPestana() {
   $("grabar").setAttribute("aria-label", chat ? "Dictar tu pregunta" : "Grabar lo que has comido");
   colocarDictado(actual);
   if (actual === "hoy" && pestanaVista !== "hoy") cargarHoy();
-  if (actual === "fitness" && pestanaVista !== "fitness") cargarFitness(); // unit 031: painted on entering
+  if (actual === "fitness") mostrarFitness(); // unit 031 and unit 040: the part of Fitness, painted on entering it
   if (actual === "asistente") mostrarAsistente(); // unit 032: the list or a conversation, every time
   if ($("hoja").open) $("hoja").close();
   if (actual === "dia") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
@@ -1599,6 +1604,19 @@ function mostrarPestana() {
   if (actual === "balance") pintarBalance($("balance-contenido"), irADia);
   if (actual === "recetas") pintarRecetas($("recetas"));
   window.scrollTo(0, 0);
+}
+
+// Unit 040: Forma or Plan, by the address (`#fitness/plan` is Plan); a part is painted when it starts to show.
+function mostrarFitness() {
+  const parte = location.hash.startsWith("#fitness/plan") ? "plan" : "forma";
+  $("fitness-forma").hidden = parte !== "forma";
+  $("fitness-plan").hidden = parte !== "plan";
+  for (const a of document.querySelectorAll("#fitness-partes a")) {
+    if (a.dataset.parte === parte) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  }
+  if (pestanaVista !== "fitness" || parteFitness !== parte) (parte === "plan" ? cargarPlan : cargarFitness)();
+  parteFitness = parte;
 }
 
 function enlazarPestanas() {

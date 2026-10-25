@@ -40,7 +40,7 @@ class Web:
             cliente.write_text("{}", encoding="utf-8")
         if conectado:
             self.token.write_text(TOKEN, encoding="utf-8")
-        self.google = GoogleDoble([{"id": "cal-tridata", "summary": NOMBRE}])
+        self.google = GoogleDoble()
         self.construidos = 0
         self.flujos = 0
         self.calendario = Calendario(self.db, self.token, str(cliente) if configurado else None, flujo=self._flujo,
@@ -57,6 +57,11 @@ class Web:
     def _servicio(self, token):
         self.construidos += 1
         return self.google
+
+    def eventos(self) -> list[dict]:
+        """The events of «TriData» in the doubled Google (none while it does not exist)."""
+        cal = next((c["id"] for c in self.google.calendarios if c["summary"] == NOMBRE), None)
+        return self.google.de(cal) if cal else []
 
     def estado(self) -> dict:
         r = self.cliente.get("/api/calendario")
@@ -89,7 +94,7 @@ def test_conectar_crea_o_reutiliza_tridata_y_manda_las_sesiones(web):  # R1, R2 
     assert estado["error"] is None and estado["ultima"] == AHORA.isoformat(timespec="minutes")
     assert web.flujos == 1
     assert [c["summary"] for c in web.google.calendarios] == [NOMBRE]
-    assert [e["summary"] for e in web.google.de("cal-tridata")] == ["🏃 Series 4×12' a 4:00"]
+    assert [e["summary"] for e in web.eventos()] == ["🏃 Series 4×12' a 4:00"]
     assert web.estado() == estado
 
 
@@ -107,10 +112,10 @@ def test_al_arrancar_la_app_sincroniza_si_esta_conectado(tmp_path):  # R2: at st
     web.planes.crear(plan_inventado([SERIES]), AHORA)
     with TestClient(web.app):
         for _ in range(200):
-            if web.google.de("cal-tridata"):
+            if web.eventos():
                 break
             time.sleep(0.02)
-    assert [e["summary"] for e in web.google.de("cal-tridata")] == ["🏃 Series 4×12' a 4:00"]
+    assert [e["summary"] for e in web.eventos()] == ["🏃 Series 4×12' a 4:00"]
 
 
 @pytest.mark.parametrize("fallo, dice", [
@@ -135,7 +140,7 @@ def test_si_google_falla_ajustes_lo_dice_el_plan_sigue_y_se_reintenta(tmp_path, 
     web.cliente.post("/api/calendario/sincronizar")
     estado = web.estado()
     assert estado["error"] is None and estado["ultima"] == AHORA.isoformat(timespec="minutes")
-    assert len(web.google.de("cal-tridata")) == 1
+    assert len(web.eventos()) == 1
 
 
 def test_el_token_no_sale_en_registros_ni_en_respuestas(tmp_path, caplog):  # R5

@@ -90,7 +90,14 @@ class GoogleDoble:
         return _Recurso(self, "events")
 
     def _calendarList_list(self, **_: Any) -> dict:
-        return {"items": [dict(c) for c in self.calendarios]}
+        # what Google answers: calendarList.list does not accept the scope `calendar.app.created`
+        raise HttpError(httplib2.Response({"status": 403}), b"{}")
+
+    def _calendars_get(self, calendarId: str) -> dict:  # noqa: N803
+        calendario = next((c for c in self.calendarios if c["id"] == calendarId), None)
+        if calendario is None:
+            raise HttpError(httplib2.Response({"status": 404}), b"{}")
+        return dict(calendario)
 
     def _calendars_insert(self, body: dict) -> dict:
         nuevo = {"id": self._nuevo_id("cal"), **body}
@@ -138,7 +145,7 @@ class Base:
         self.cliente = tmp_path / "cliente-inventado.json"
         self.cliente.write_text("{}", encoding="utf-8")
         self.planes = Planes(self.db)
-        self.google = doble or GoogleDoble([{"id": "cal-tridata", "summary": NOMBRE}])
+        self.google = doble or GoogleDoble([{"id": "cal-otro", "summary": "Trabajo inventado"}])
         self.flujos: list[str] = []
         self.calendario = Calendario(self.db, self.token, str(self.cliente), flujo=self._flujo,
                                      servicio=lambda token: self.google)
@@ -171,8 +178,20 @@ def test_conectar_guarda_el_token_solo_en_el_pc_con_permisos_600_y_reutiliza_tri
     assert b.calendario.conectado
     assert json.loads(b.token.read_text(encoding="utf-8"))["token"] == MARCADOR
     assert stat.S_IMODE(b.token.stat().st_mode) == 0o600
-    assert [c["summary"] for c in b.google.calendarios] == [NOMBRE]  # reused, not a second one
-    assert not [ll for ll in b.google.llamadas if ll[:2] == ("calendars", "insert")]
+    creado = b.cal()
+    b.conectar()  # connecting again reuses the «TriData» it made
+    assert [c["summary"] for c in b.google.calendarios].count(NOMBRE) == 1 and b.cal() == creado
+    assert len([ll for ll in b.google.llamadas if ll[:2] == ("calendars", "insert")]) == 1
+    assert not [ll for ll in b.google.llamadas if ll[0] == "calendarList"]  # not allowed by the scope
+
+
+def test_si_andres_borro_tridata_se_crea_otro(b):  # R1
+    b.conectar()
+    b.google.calendarios = [c for c in b.google.calendarios if c["summary"] != NOMBRE]
+    b.planes.crear(plan_inventado([SERIES]), AHORA)
+    sincronizar(b.planes, b.calendario, HOY)
+    assert [c["summary"] for c in b.google.calendarios].count(NOMBRE) == 1
+    assert [e["summary"] for e in b.google.de(b.cal())] == ["🏃 Series 4×12' a 4:00"]
 
 
 def test_conectar_crea_tridata_si_no_esta_y_otra_vez_no_crea_otro(tmp_path):  # R1 · C-206

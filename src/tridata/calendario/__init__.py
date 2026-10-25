@@ -195,25 +195,24 @@ class Calendario:
         return self.asegurar()
 
     def asegurar(self) -> str:
-        """The id of «TriData»: the one kept here if it is still there, else the one called so, else a new one."""
+        """The id of «TriData»: the one kept here if it is still in Google, else a new one (R1).
+
+        `calendar.app.created` does not allow `calendarList.list` (only the calendars the app made, by their id), so
+        «TriData» is found by the id this PC kept when it created it, never by its name.
+        """
+        guardado = self._valor("calendario_id")
         with self._google():
             servicio = self._svc()
-            calendarios: list[dict] = []
-            pagina: str | None = None
-            while True:
-                respuesta = servicio.calendarList().list(pageToken=pagina).execute()
-                calendarios += respuesta.get("items", [])
-                pagina = respuesta.get("nextPageToken")
-                if not pagina:
-                    break
-            guardado = self._valor("calendario_id")
-            ident = guardado if guardado in {c.get("id") for c in calendarios} else next(
-                (c["id"] for c in calendarios if c.get("summary") == NOMBRE), None)
-            if ident is None:
-                ident = servicio.calendars().insert(body={"summary": NOMBRE}).execute()["id"]
-        if ident != guardado:
-            self._poner("calendario_id", ident)
-        return str(ident)
+            if guardado is not None:
+                try:
+                    servicio.calendars().get(calendarId=guardado).execute()
+                    return guardado
+                except Exception as exc:
+                    if _estado_http(exc) not in (404, 410):  # Andrés deleted it: a new one is made
+                        raise
+            ident = str(servicio.calendars().insert(body={"summary": NOMBRE}).execute()["id"])
+        self._poner("calendario_id", ident)
+        return ident
 
     def _calendario_id(self) -> str:
         return self._valor("calendario_id") or self.asegurar()

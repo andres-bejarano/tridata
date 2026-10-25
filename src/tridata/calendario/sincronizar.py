@@ -106,6 +106,7 @@ def sincronizar(planes: Planes, calendario: Calendario, hoy: date) -> dict[str, 
     if not calendario.conectado:
         raise ErrorCalendario(SIN_CONECTAR)
     deseadas = _previstas(planes, hoy)
+    calendario.asegurar()  # «TriData» is still there (Andrés may have deleted it: then a new one)
     por_sesion: dict[str, list[dict]] = {}
     for evento in calendario.eventos():
         sesion = ((evento.get("extendedProperties") or {}).get("private") or {}).get(CLAVE)

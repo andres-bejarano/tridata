@@ -227,7 +227,8 @@ def test_sw_en_la_raiz_sin_cache_y_solo_el_cascaron(entorno):  # R7
                           "/static/hoy.js",  # unit 030: the cards of Hoy
                           "/static/asistente.js",  # unit 021: the assistant's cards in the review
                           "/static/fitness.js",  # unit 031: the Fitness tab
-                          "/static/conversaciones.js"}  # unit 032: the Asistente's conversations
+                          "/static/conversaciones.js",  # unit 032: the Asistente's conversations
+                          "/static/plan.js"}  # unit 040: Fitness › Plan
     assert '"/api/"' in r.text  # the fetch handler leaves /api/* to the network
     for ruta in rutas:
         assert entorno.cliente.get(ruta).status_code == 200

@@ -108,6 +108,15 @@ class TestGetActivities:
         assert act.avg_hr is None
         assert act.calories is None
 
+    def test_moving_time_from_movingduration(self, client):  # unit 040 (R2): the time in movement, as Strava
+        c, api = client
+        raw = {"activityId": 1, "startTimeLocal": "2026-10-14 07:00:00", "activityType": {"typeKey": "running"},
+               "activityName": "Series de prueba", "duration": 3900.0, "movingDuration": 3720.0, "distance": 12000.0}
+        api.get_activities_by_date.return_value = [raw, {**raw, "activityId": 2, "movingDuration": None}]
+        con, sin = c.get_activities(date(2026, 10, 14), date(2026, 10, 14))
+        assert con.moving_duration_seconds == 3720.0 and con.to_dict()["moving_duration_seconds"] == 3720.0
+        assert sin.moving_duration_seconds is None  # optional: the old activities still count
+
 
 # ---------------------------------------------------------------------------
 # get_daily_stats

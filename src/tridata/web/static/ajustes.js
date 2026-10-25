@@ -498,10 +498,8 @@ function pintarCalendario(nuevo) {
   if (!calendario) return;
   const c = calendario;
   const fila = el("div", { id: "calendario-estado", className: "ajuste estado" },
-    el("span", { className: "que estado-pc" },
-      c.conectado ? el("span", { className: c.error ? "punto apagado" : "punto" }) : null,
-      c.texto.charAt(0).toUpperCase() + c.texto.slice(1)),
-    el("span", { className: "valor suave", textContent: c.conectado ? actualizado(c.ultima) : "" }));
+    el("span", { className: "que" }, c.texto.charAt(0).toUpperCase() + c.texto.slice(1),
+      c.conectado ? el("span", { textContent: actualizado(c.ultima) }) : null));
   const filas = [fila];
   if (c.error) filas.push(el("p", { id: "calendario-error", className: "aviso", role: "alert", textContent: c.error }));
   if (!c.conectado && !c.configurado) {

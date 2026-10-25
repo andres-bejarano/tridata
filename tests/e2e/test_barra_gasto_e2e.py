@@ -1,6 +1,6 @@
 """Unit 039 in a real Chromium at 390 × 844, light and dark: the Asistente shows what the month has cost so far.
 
-«Gasto del mes: X $ de 5 $» and a bar (`<meter>`) over the list of conversations, from `/api/conversaciones`
+«Gasto del mes: X $ de 15 $» (5 $ until unit 041) and a bar (`<meter>`) over the list of conversations, from `/api/conversaciones`
 (`tope.gastado`, `tope.dolares`, R9 of unit 032). Empty at 0 $, «< 0,01 $» for crumbs, the warning colour from 80 %
 (the meter's `high` region), full at the cap with the notice of always; up to date when coming back to the list.
 
@@ -41,8 +41,8 @@ def _gastar(servidor, dolares: float) -> None:
     (0, "0,00 $", False),
     (0.005, "< 0,01 $", False),
     (0.04, "0,04 $", False),
-    (4.2, "4,20 $", False),
-    (5, "5,00 $", True),
+    (12.6, "12,60 $", False),
+    (15, "15,00 $", True),
 ], ids=["cero", "migajas", "poco", "aviso", "tope"])
 def test_la_barra_dice_lo_gastado_del_mes(servidor, abrir, dolares, cifra, aviso):  # R1 · R2
     if dolares:
@@ -50,33 +50,33 @@ def test_la_barra_dice_lo_gastado_del_mes(servidor, abrir, dolares, cifra, aviso
     p = abrir(servidor, "/#asistente", esperar=False)
     gasto = p.locator("#conv-gasto")
     expect(gasto).to_be_visible()
-    expect(gasto).to_have_text(f"Gasto del mes: {cifra} de 5 $")
+    expect(gasto).to_have_text(f"Gasto del mes: {cifra} de 15 $")
     barra = p.locator("#conv-gasto-barra")
     expect(barra).to_be_visible()
-    assert float(barra.get_attribute("max")) == 5
-    assert float(barra.get_attribute("value")) == pytest.approx(min(dolares, 5), abs=0.001)
-    assert float(barra.get_attribute("high")) == pytest.approx(4)  # from 80 % of the cap: the warning colour
+    assert float(barra.get_attribute("max")) == 15
+    assert float(barra.get_attribute("value")) == pytest.approx(min(dolares, 15), abs=0.001)
+    assert float(barra.get_attribute("high")) == pytest.approx(12)  # from 80 % of the cap: the warning colour
     expect(p.locator("#conv-tope")).to_be_visible() if aviso else expect(p.locator("#conv-tope")).to_be_hidden()
 
 
 def test_por_encima_del_tope_la_barra_no_pasa_de_llena(servidor, abrir):  # R2
-    _gastar(servidor, 6.3)
+    _gastar(servidor, 18.9)
     p = abrir(servidor, "/#asistente", esperar=False)
-    expect(p.locator("#conv-gasto")).to_have_text("Gasto del mes: 6,30 $ de 5 $")
-    assert float(p.locator("#conv-gasto-barra").get_attribute("value")) == 5
+    expect(p.locator("#conv-gasto")).to_have_text("Gasto del mes: 18,90 $ de 15 $")
+    assert float(p.locator("#conv-gasto-barra").get_attribute("value")) == 15
 
 
 @TEMAS
 def test_se_pone_al_dia_al_volver_a_la_lista(servidor, abrir, capturar, oscuro):  # R1
     p = abrir(servidor, "/#asistente", oscuro=oscuro, esperar=False)
-    expect(p.locator("#conv-gasto")).to_have_text("Gasto del mes: 0,00 $ de 5 $")
+    expect(p.locator("#conv-gasto")).to_have_text("Gasto del mes: 0,00 $ de 15 $")
     capturar(p, f"039-barra-cero-{'oscuro' if oscuro else 'claro'}")
     p.locator("#conv-nueva").click()
     p.locator("#texto").fill(PRIMERO)
     p.locator("#enviar").click()
     expect(p.locator("#conv-chat")).to_contain_text("Vas bien encaminado")
     p.evaluate("location.hash = 'asistente'")
-    expect(p.locator("#conv-gasto")).to_have_text("Gasto del mes: < 0,01 $ de 5 $")
+    expect(p.locator("#conv-gasto")).to_have_text("Gasto del mes: < 0,01 $ de 15 $")
     ancho = p.evaluate("document.documentElement.scrollWidth")
     assert ancho <= 390, f"horizontal scroll: {ancho} px"
     capturar(p, f"039-barra-tras-pregunta-{'oscuro' if oscuro else 'claro'}")

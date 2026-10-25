@@ -5,6 +5,8 @@
 // before. A «Conexión» row says whether the PC answered. The tabs at the bottom go back to /#….
 // Unit 031: «Pulso y zonas» is ONE row (HR max / rest and where they come from); its card saves the HR max, the HR
 // rest, the five zones and their origin together, from a date (the server checks they hang together, R7).
+// Unit 043: «Google Calendar» says whether it is connected (and to «TriData»), when it was last updated and why it
+// failed; «Conectar Google Calendar» opens Google's permission in the browser of the PC, «Sincronizar ahora» a pass.
 
 const $ = (id) => document.getElementById(id);
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2, useGrouping: "always" });
@@ -382,6 +384,7 @@ async function cargar() {
   hoyISO = datos.fecha;
   pintar();
   cargarEquipo(); // unit 041: after the settings, so «Conexión» says what /api/ajustes said
+  cargarCalendario(); // unit 043
 }
 
 // -- unit 041: Ajustes › El equipo, the model of each role (R7, G-56) ------------------------------------------------
@@ -456,6 +459,66 @@ async function cargarEquipo() {
   if (!ok) return;
   equipo = datos;
   pintarEquipo();
+}
+
+// -- unit 043: Ajustes › Google Calendar (R1, R4, R6) ---------------------------------------------------------------
+
+const hora = new Intl.DateTimeFormat("es-ES", { hour: "2-digit", minute: "2-digit" });
+let calendarioOcupado = ""; // the text of the button while a request is on its way
+
+function actualizado(iso) {
+  if (!iso) return "aún sin actualizar";
+  const cuando = new Date(iso);
+  const dia = iso.slice(0, 10) === hoyISO ? "hoy" : `el ${diaMesCorto.format(cuando)}`;
+  return `actualizado ${dia} a las ${hora.format(cuando)}`;
+}
+
+function botonCalendario(texto, ruta, espera) {
+  const boton = el("button", { type: "button", className: "ajuste accion" },
+    el("span", { className: "que", textContent: calendarioOcupado === texto ? espera : texto }));
+  boton.dataset.calendario = ruta;
+  boton.disabled = Boolean(calendarioOcupado);
+  boton.addEventListener("click", async () => {
+    calendarioOcupado = texto;
+    mensaje("");
+    pintarCalendario(null);
+    const { ok, datos } = await api(`/api/calendario/${ruta}`, {});
+    calendarioOcupado = "";
+    if (!ok) mensaje(datos.error ?? "No se ha podido hablar con Google Calendar.", "error");
+    else if (!datos.error) mensaje(ruta === "conectar" ? "Conectado: tus sesiones van al calendario TriData." : "Calendario al día.", "bien");
+    cargarCalendario();
+  });
+  return boton;
+}
+
+let calendario = null; // last /api/calendario answer
+
+function pintarCalendario(nuevo) {
+  if (nuevo) calendario = nuevo;
+  if (!calendario) return;
+  const c = calendario;
+  const fila = el("div", { id: "calendario-estado", className: "ajuste estado" },
+    el("span", { className: "que estado-pc" },
+      c.conectado ? el("span", { className: c.error ? "punto apagado" : "punto" }) : null,
+      c.texto.charAt(0).toUpperCase() + c.texto.slice(1)),
+    el("span", { className: "valor suave", textContent: c.conectado ? actualizado(c.ultima) : "" }));
+  const filas = [fila];
+  if (c.error) filas.push(el("p", { id: "calendario-error", className: "aviso", role: "alert", textContent: c.error }));
+  if (!c.conectado && !c.configurado) {
+    filas.push(el("p", { className: "suave nota-grupo",
+      textContent: "Para conectarlo, pon en .env TRIDATA_GOOGLE_CLIENTE con la ruta del JSON del cliente de Google." }));
+  }
+  if (!c.conectado || (c.error && c.error.includes("vuelve a conectar"))) {
+    filas.push(botonCalendario(c.conectado ? "Volver a conectar" : "Conectar Google Calendar", "conectar",
+      "Entra con tu cuenta en el navegador del PC…"));
+  }
+  if (c.conectado) filas.push(botonCalendario("Sincronizar ahora", "sincronizar", "Sincronizando…"));
+  $("calendario").replaceChildren(...filas);
+}
+
+async function cargarCalendario() {
+  const { ok, datos } = await api("/api/calendario");
+  if (ok) pintarCalendario(datos);
 }
 
 $("anadir-carrera").addEventListener("click", () => { carreraAbierta = "nueva"; abierto = null; mensaje(""); pintar(); });

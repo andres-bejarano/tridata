@@ -59,6 +59,9 @@
                                   weather; 404 if it does not exist
     GET  /api/plan*               unit 040 (REC-22): Fitness › Plan, the routes of `web/plan.py` (the plan of the
                                   current objective, its weeks, importing the .md and downloading it)
+    GET  /api/calendario*         unit 043 (REC-27): Ajustes › Google Calendar, the routes of `web/calendario.py`
+                                  (connect once; every planned session of the plan in course, an all-day event of
+                                  «TriData»); the pass also runs at start and every 10 minutes, in its own thread
     GET  /ajustes                 the settings page
     GET  /api/ajustes             settings in force (?fecha=, default today), changes to come, races
     POST /api/ajustes             {"datos": {...}, "desde": "AAAA-MM-DD"} save one or more settings
@@ -149,6 +152,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -193,6 +197,8 @@ from .recetas import rutas as rutas_recetas
 from .plan import rutas as rutas_plan
 from ..ia.plan import OrdenadorPlan
 from ..plan import Planes
+from ..calendario import Calendario
+from .calendario import Sincronizacion, rutas as rutas_calendario
 
 log = logging.getLogger(__name__)
 
@@ -334,7 +340,7 @@ def crear_app(
     store: DataStore | None = None, actualizar_garmin: Callable[[date], None] | None = None,
     transcriptor: Any = None, recetario: Recetario | None = None, cierres: Cierres | None = None,
     ahora: Callable[[], datetime] = datetime.now, conversador: Any = None, medicos_dir: Path | None = None,
-    transcriptor_medico: Any = None, ordenador_plan: Any = None,
+    transcriptor_medico: Any = None, ordenador_plan: Any = None, calendario: Calendario | None = None,
 ) -> Starlette:
     """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double).
 
@@ -354,6 +360,8 @@ def crear_app(
     without them and says so) and `transcriptor_medico` reads each one once (by default the Claude one).
     Unit 040: `ordenador_plan` orders each section of an imported plan (by default the Claude one, created lazily);
     the plans live in the same SQLite (`plan.Planes`) and their routes are `web/plan.py`.
+    Unit 043: `calendario` is Google Calendar (by default the token next to the database, `google-token.json`, and the
+    client's JSON where TRIDATA_GOOGLE_CLIENTE says); without a token nothing talks to Google.
     """
     recetario = recetario or Recetario(registro.db_path)
     pesos = pesos or RegistroPeso(registro.db_path)
@@ -372,6 +380,12 @@ def crear_app(
     # unit 021: what the assistant's actions read and change, the same repositories as the screens by hand; unit 041:
     # the training plans too (the cards that change the plan, and the plan in the context of the team)
     planes = Planes(registro.db_path)
+    # unit 043: the sessions of the plan in Google Calendar, a pass at start and every 10 minutes (`ciclo`)
+    if calendario is None:
+        cliente = os.environ.get("TRIDATA_GOOGLE_CLIENTE", "").strip()
+        calendario = Calendario(registro.db_path, carpeta_datos / "google-token.json",
+                                str(Path(cliente).expanduser()) if cliente else None)
+    sincronizacion = Sincronizacion(calendario, planes, hoy, ahora)
     asistente = ContextoAsistente(registro=registro, objetivos=objetivos, ajustes=ajustes, pesos=pesos,
                                   recetario=recetario, hoy=hoy, store=store, cierres=cierres, recientes=_recientes,
                                   planes=planes)
@@ -1045,7 +1059,11 @@ def crear_app(
         if transcriptor is not None and callable(getattr(transcriptor, "cargar", None)):
             # once, in the background: the server answers (and writing works) while the model loads
             threading.Thread(target=_cargar_transcriptor, name="carga-whisper", daemon=True).start()
+        parar_calendario = threading.Event()  # unit 043: Google never makes the app wait (R4)
+        threading.Thread(target=sincronizacion.en_segundo_plano, args=(parar_calendario,), name="google-calendar",
+                         daemon=True).start()
         yield
+        parar_calendario.set()
 
     return Starlette(exception_handlers={FaltanAjustes: faltan_ajustes}, lifespan=ciclo, routes=[
         Route("/", pagina),
@@ -1086,5 +1104,6 @@ def crear_app(
                               _contexto_conversacion, asistente, hoy, ahora, transcriptor, planes),
         *rutas_plan(planes, store, ajustes,
                     ordenador_plan if ordenador_plan is not None else OrdenadorPlan(), conversaciones, hoy, ahora),
+        *rutas_calendario(sincronizacion),
         Mount("/static", StaticFiles(directory=ESTATICOS), name="static"),
     ])

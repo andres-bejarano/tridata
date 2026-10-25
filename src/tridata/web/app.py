@@ -110,6 +110,9 @@ Unit 032 (REC-20): the Asistente's conversations are the routes of `web/conversa
 every conversation sees all the context of this PC (`conversaciones.contexto`), its answer arrives as it is written and
 a change it proposes is a card of the 021. `conversador` (`ia.conversacion.ConversadorClaude`, or a test double),
 `medicos_dir` (the folder of `TRIDATA_MEDICOS_DIR`) and `transcriptor_medico` are given by `tridata web`.
+Unit 041 (REC-23): the team (Entrenador, Fisio, Nutricionista, Asistente) answers in those conversations, sees the
+plan in course and its incidents, and proposes cards that change the plan (`plan/acciones.py`); `/api/equipo` is the
+model of each role, chosen in Ajustes › El equipo.
 
 Unit 018 (R-91): today's day also brings `garmin_sync` = `{ok_en, fallo_en, fallo_motivo, aviso, texto}`
 (`sync.aviso_sync` with the clock `ahora`); any other day brings it as null.
@@ -366,9 +369,12 @@ def crear_app(
         dia_hoy = hoy()  # today's own activities already count as done: they are not offered
         return store.activities_between(dia_hoy - timedelta(days=DIAS_RECIENTES), dia_hoy - timedelta(days=1))
 
-    # unit 021: what the assistant's actions read and change, the same repositories as the screens by hand
+    # unit 021: what the assistant's actions read and change, the same repositories as the screens by hand; unit 041:
+    # the training plans too (the cards that change the plan, and the plan in the context of the team)
+    planes = Planes(registro.db_path)
     asistente = ContextoAsistente(registro=registro, objetivos=objetivos, ajustes=ajustes, pesos=pesos,
-                                  recetario=recetario, hoy=hoy, store=store, cierres=cierres, recientes=_recientes)
+                                  recetario=recetario, hoy=hoy, store=store, cierres=cierres, recientes=_recientes,
+                                  planes=planes)
 
     # unit 032: the conversations, what they cost and the medical documents, in the same SQLite
     conversaciones = Conversaciones(registro.db_path)
@@ -378,7 +384,8 @@ def crear_app(
     def _contexto_conversacion() -> ContextoConversacion:
         estado = medicos.al_dia()
         return montar_contexto(registro=registro, pesos=pesos, ajustes=ajustes, store=store,
-                               transcripciones=medicos.transcripciones(), aviso_medico=estado["aviso"], hoy=hoy())
+                               transcripciones=medicos.transcripciones(), aviso_medico=estado["aviso"], hoy=hoy(),
+                               planes=planes)
 
     def _dia(fecha: date) -> dict:
         """The day as the screen shows it: `nutricion.dia.resumen_completo` (unit 015), the same nutricion.md uses."""
@@ -1076,8 +1083,8 @@ def crear_app(
         *rutas_recetas(recetario, hoy, registro),
         *rutas_asistente(asistente, _dia),
         *rutas_conversaciones(conversaciones, conversador if conversador is not None else ConversadorClaude(), medicos,
-                              _contexto_conversacion, asistente, hoy, ahora, transcriptor),
-        *rutas_plan(Planes(registro.db_path), store, ajustes,
+                              _contexto_conversacion, asistente, hoy, ahora, transcriptor, planes),
+        *rutas_plan(planes, store, ajustes,
                     ordenador_plan if ordenador_plan is not None else OrdenadorPlan(), conversaciones, hoy, ahora),
         Mount("/static", StaticFiles(directory=ESTATICOS), name="static"),
     ])

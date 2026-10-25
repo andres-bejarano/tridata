@@ -108,6 +108,7 @@
       <div id="conv-chat" hidden>
         <div class="conv-cabecera">
           <button id="conv-volver" type="button" class="flecha" aria-label="Volver a tus conversaciones">◀</button>
+          <span id="conv-icono" class="conv-icono" aria-hidden="true"></span>
           <h2 id="conv-titulo"></h2>
           <button id="conv-renombrar" type="button" class="icono-boton" aria-label="Cambiar el título">✎</button>
           <button id="conv-borrar" type="button" class="icono-boton" aria-label="Borrar la conversación">🗑</button>
@@ -127,7 +128,13 @@
           </div>
         </div>
         <p id="conv-linea" class="tarjeta conv-linea"></p>
+        <!-- unit 041: who Andrés talks to, in a conversation that starts; «Pedir opinión a…» under what was said -->
+        <div id="conv-papeles-caja" hidden>
+          <h2 class="titulo-equipo" id="conv-papeles-titulo">¿Con quién quieres hablar?</h2>
+          <div id="conv-papeles" class="conv-papeles" role="group" aria-labelledby="conv-papeles-titulo"></div>
+        </div>
         <div id="conv-mensajes" class="conv-mensajes" aria-live="polite"></div>
+        <div id="conv-opinion" class="conv-opinion" hidden></div>
       </div>
     </section>
 

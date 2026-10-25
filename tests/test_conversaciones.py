@@ -3,7 +3,7 @@
 - the request to the API (`ia/conversacion.py`): the fixed part first, with its cache mark and no hour; then what was
   said in THAT conversation and the new message; the model Andrés chose (Haiku, Sonnet with «pensar más») (R2, R10);
 - the answer as it arrives (streaming), its token use, the tools (a card of change, the title) and the errors (R6, R8);
-- the spending cap of 5 $ a month (R9);
+- the spending cap of 15 $ a month (R9; 5 $ until unit 041, R10);
 - the medical transcription (`conversaciones/medicos.py`): each PDF once, again only when it changes, nothing in the
   logs (R4, R12).
 
@@ -68,7 +68,7 @@ class ClaudeFalso:
     round with tools ends with `stop_reason="tool_use"`. With nothing queued it answers «Respuesta de prueba.».
     `fallo` (an exception) is raised instead of answering. `rechazar()` queues a round that ends in `refusal`;
     `cortar(entrada, salida)` one whose connection breaks after the first piece, with that partial use seen. Like the real cache, a request whose `tools` + `system`
-    + model are byte-identical to an earlier one (and carry a `cache_control`) is read from the cache.
+    up to its last `cache_control` + model are byte-identical to an earlier one is read from the cache.
     """
 
     def __init__(self) -> None:
@@ -101,9 +101,12 @@ class ClaudeFalso:
             return _Flujo([texto], final, corte=fallo_de_red())
         if especial == "__refusal__":
             herramientas = []
-        con_marca = any(isinstance(b, dict) and b.get("cache_control") for b in peticion.get("system", []))
-        prefijo = json.dumps([peticion.get("tools"), peticion.get("system"), peticion["model"]], sort_keys=True,
-                             ensure_ascii=False)
+        system = peticion.get("system", [])
+        marcas = [i for i, b in enumerate(system) if isinstance(b, dict) and b.get("cache_control")]
+        con_marca = bool(marcas)
+        # like the real cache: the prefix up to the LAST mark (unit 041: the role goes after it and is not cached)
+        prefijo = json.dumps([peticion.get("tools"), system[:marcas[-1] + 1] if marcas else system, peticion["model"]],
+                             sort_keys=True, ensure_ascii=False)
         leido = con_marca and prefijo in self._prefijos
         if con_marca:
             self._prefijos.add(prefijo)
@@ -193,7 +196,7 @@ def test_la_parte_fija_va_primero_con_su_marca_de_cache_y_sin_hora():  # R10 · 
     assert p["system"][-1]["cache_control"] == {"type": "ephemeral"}
     assert all("cache_control" not in b for b in p["system"][:-1])  # one mark, at the end of the fixed part
     assert p["messages"] == historial + [{"role": "user", "content": "¿cómo voy?"}]
-    assert {h["name"] for h in p["tools"]} == {"proponer_cambio", "poner_titulo"}
+    assert {h["name"] for h in p["tools"]} == {"proponer_cambio", "poner_titulo", "abrir_actividad"}  # 041: + R4
     # the same fixed part and tools whatever is said: the cache is by exact prefix
     otra = construir_peticion(BLOQUES, [], "otra cosa", MODELO_POR_DEFECTO)
     assert (otra["system"], otra["tools"]) == (p["system"], p["tools"])
@@ -338,16 +341,16 @@ def test_sin_ninguna_llamada_respondida_no_hay_uso():  # bug 038 R1
     assert exc.value.usos == ()
 
 
-def test_el_tope_del_mes_corta_y_vuelve_el_mes_siguiente(tmp_path):  # R9
-    assert TOPE_DOLARES_MES == 5.0
+def test_el_tope_del_mes_corta_y_vuelve_el_mes_siguiente(tmp_path):  # R9 · unit 041 R10: 15 $
+    assert TOPE_DOLARES_MES == 15.0
     c = Conversaciones(tmp_path / "data.sqlite3")
-    casi = {"entrada": 0, "salida": 9_000_000, "cache_escritura": 0, "cache_lectura": 0}  # 4,50 $ with Haiku
+    casi = {"entrada": 0, "salida": 27_000_000, "cache_escritura": 0, "cache_lectura": 0}  # 13,50 $ with Haiku
     c.apuntar_gasto(datetime(2026, 9, 30, 23, 0), "claude-haiku-5-5", casi, "mensaje")  # last month: not counted
     assert not c.tope_alcanzado(AHORA)
     c.apuntar_gasto(AHORA, "claude-haiku-5-5", casi, "mensaje")
-    assert c.gasto_del_mes(AHORA) == pytest.approx(4.5)
+    assert c.gasto_del_mes(AHORA) == pytest.approx(13.5)
     assert not c.tope_alcanzado(AHORA)
-    c.apuntar_gasto(AHORA, "claude-sonnet-5-5", {"entrada": 0, "salida": 50_000, "cache_escritura": 0,
+    c.apuntar_gasto(AHORA, "claude-sonnet-5-5", {"entrada": 0, "salida": 150_000, "cache_escritura": 0,
                                                  "cache_lectura": 0}, "mensaje")  # «pensar más» counts too
     assert c.tope_alcanzado(AHORA)
     assert not c.tope_alcanzado(datetime(2026, 11, 1, 0, 1))
@@ -435,3 +438,90 @@ def test_un_pdf_que_no_se_puede_leer_lo_dice_y_sigue(tmp_path, carpeta, caplog):
     assert estado["documentos"] == [] and "2" in estado["aviso"]
     pdf.fallo = None
     assert len(medicos.al_dia()["documentos"]) == 2  # not saved as read: tried again next time
+
+
+# -- unit 041 (REC-23): the role and the model of each answer, `abrir_actividad` and the old conversations ----------
+
+def test_el_conversador_responde_con_el_modelo_y_el_papel_que_se_le_piden():  # R3, R7 · C-180, C-184
+    claude = ClaudeFalso()
+    conversador = ConversadorClaude(cliente=claude)
+    _, r = _todo(conversador.responder(BLOQUES, [], "hola", modelo="claude-sonnet-5-5", papel="Eres el fisio."))
+    assert r.modelo == claude.peticiones[-1]["model"] == "claude-sonnet-5-5"
+    assert claude.peticiones[-1]["system"][-1] == {"type": "text", "text": "Eres el fisio."}
+    assert claude.peticiones[-1]["system"][-2]["cache_control"] == {"type": "ephemeral"}
+    _, r = _todo(conversador.responder(BLOQUES, [], "hola", modelo="claude-haiku-5-5", pensar=True))
+    assert r.modelo == "claude-sonnet-5-5"  # «pensar más» is still Sonnet
+    _, r = _todo(conversador.responder(BLOQUES, [], "hola"))
+    assert r.modelo == MODELO_POR_DEFECTO and len(claude.peticiones[-1]["system"]) == len(BLOQUES)
+
+
+def test_abrir_actividad_es_una_herramienta_fija_y_plana():  # R4 · C-181, S-54 · bug 036 (flat schemas)
+    p = construir_peticion(BLOQUES, [], "hola", MODELO_POR_DEFECTO)
+    herramientas = {h["name"]: h for h in p["tools"]}
+    assert set(herramientas) == {"proponer_cambio", "poner_titulo", "abrir_actividad"}
+    esquema = herramientas["abrir_actividad"]["input_schema"]
+    assert set(esquema["properties"]) == {"fecha", "id"}
+    assert all(v == {"type": "string", "description": v["description"]} for v in esquema["properties"].values())
+    assert esquema["required"] == ["fecha", "id"] and esquema["additionalProperties"] is False
+    assert "vueltas" in herramientas["abrir_actividad"]["description"]
+
+
+def _base_de_antes(db) -> None:
+    """The tables of unit 032 as they were, with one conversation and its answer (invented)."""
+    import sqlite3
+
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE conversacion (id INTEGER PRIMARY KEY AUTOINCREMENT, titulo TEXT NOT NULL,
+            titulo_auto INTEGER NOT NULL DEFAULT 1, creada TEXT NOT NULL, usada TEXT NOT NULL);
+        CREATE TABLE mensaje (id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversacion_id INTEGER NOT NULL REFERENCES conversacion(id) ON DELETE CASCADE,
+            quien TEXT NOT NULL CHECK (quien IN ('andres', 'asistente')), texto TEXT NOT NULL, hora TEXT NOT NULL,
+            contexto_hasta TEXT, sin_respuesta INTEGER NOT NULL DEFAULT 0, modelo TEXT, tokens_entrada INTEGER,
+            tokens_salida INTEGER, tokens_cache_escritura INTEGER, tokens_cache_lectura INTEGER,
+            tarjetas TEXT NOT NULL DEFAULT '[]', propuesto TEXT NOT NULL DEFAULT '[]');
+        INSERT INTO conversacion (titulo, creada, usada) VALUES ('Peso de prueba', '2026-10-20T09:00:00',
+            '2026-10-20T09:00:00');
+        INSERT INTO mensaje (conversacion_id, quien, texto, hora) VALUES (1, 'andres', '¿y mi peso?',
+            '2026-10-20T09:00:00');
+        INSERT INTO mensaje (conversacion_id, quien, texto, hora, modelo) VALUES (1, 'asistente', 'Va bien.',
+            '2026-10-20T09:00:05', 'claude-haiku-5-5');
+    """)
+    conn.commit()
+    conn.close()
+
+
+def test_las_conversaciones_de_antes_son_del_asistente(tmp_path):  # R1 · C-178 (aditive migration)
+    db = tmp_path / "data.sqlite3"
+    _base_de_antes(db)
+    c = Conversaciones(db)
+    assert c.conversacion(1)["papel"] == "asistente"
+    assert [c_["papel"] for c_ in c.lista()] == ["asistente"]
+    andres, respuesta = c.mensajes(1)
+    assert (andres["papel"], respuesta["papel"], respuesta["modelo"]) == (None, "asistente", "claude-haiku-5-5")
+    Conversaciones(db)  # opened again: the migration does not fail twice
+
+
+def test_cada_conversacion_nace_con_su_papel_y_cada_respuesta_guarda_papel_y_modelo(tmp_path):  # R1, R3
+    c = Conversaciones(tmp_path / "data.sqlite3")
+    nueva = c.crear("Tirada de prueba", AHORA, papel="entrenador")
+    assert nueva["papel"] == "entrenador" and c.crear("Otra", AHORA)["papel"] == "asistente"
+    m = c.anadir_mensaje(nueva["id"], "asistente", "Opino como fisio.", AHORA, papel="fisio",
+                         modelo="claude-sonnet-5-5")
+    assert (m["papel"], m["modelo"]) == ("fisio", "claude-sonnet-5-5")
+    with pytest.raises(ValueError):
+        c.crear("Mal", AHORA, papel="masajista")
+
+
+def test_el_modelo_de_cada_papel_se_elige_entre_los_del_catalogo(tmp_path):  # R7 · C-184, G-56
+    c = Conversaciones(tmp_path / "data.sqlite3")
+    assert c.modelos_de_papeles() == {"entrenador": "claude-sonnet-5-5", "fisio": "claude-sonnet-5-5",
+                                      "nutricionista": "claude-sonnet-5-5", "asistente": "claude-haiku-5-5"}
+    c.elegir_modelo("entrenador", "claude-haiku-5-5")
+    assert c.modelo_de("entrenador") == "claude-haiku-5-5"
+    assert Conversaciones(tmp_path / "data.sqlite3").modelo_de("entrenador") == "claude-haiku-5-5"  # kept on the PC
+    with pytest.raises(ValueError):
+        c.elegir_modelo("entrenador", "modelo-fuera-del-catalogo")
+    with pytest.raises(ValueError):
+        c.elegir_modelo("masajista", "claude-haiku-5-5")
+    assert c.modelo_de("entrenador") == "claude-haiku-5-5"

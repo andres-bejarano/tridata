@@ -9,6 +9,12 @@ The fixed part of each request (`Contexto.bloques`, the `system` of `ia/conversa
    trainings and the load), the earlier weeks summed up by week (never the names of the foods), the settings in
    force today, the races and the HR of Ajustes with its origin (031, G-49).
 
+Unit 041 (REC-23, R2 · G-46): the data also carry the plan of the current objective (`plan.Planes.en_curso`: its
+races, its weeks with what was planned and what was done — `plan/semanas.py` —, its sessions with their blocks and
+the race nutrition) and its incidents. The fixed part is the same for the four roles of the team; what each role is
+goes after the cache mark (`conversaciones/papeles.py`). The trainings carry their id, so a role can open their laps
+(`abrir_actividad`): the laps never go here (S-54).
+
 None of it carries the hour: with the same data it is the same text byte to byte, so every conversation shares the
 cache (R10). It changes only when a datum changes (a food, a weight, a sync) or the day does. The line «Ve tus …,
 hasta hoy 9:42» (R-115) goes apart (`linea`). Read only: nothing here writes.
@@ -30,6 +36,9 @@ from ..nutricion.ajustes import DESDE_SIEMPRE, Ajustes
 from ..nutricion.asistente import texto_acciones
 from ..nutricion.peso import RegistroPeso
 from ..nutricion.registro import RegistroComidas
+from ..ia.modelos import nombre_de
+from ..plan import Planes
+from ..plan import semanas as semanas_del_plan
 from ..storage import DataStore
 from ..sync import ALL_SPORT_TYPES, CYCLING_TYPES, RUNNING_TYPES, SWIMMING_TYPES
 
@@ -38,15 +47,17 @@ VE_SIEMPRE = ("comidas", "peso", "entrenos", "sueño", "pulso", "HRV")
 _DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
 INSTRUCCIONES = """\
-Eres el asistente de Andrés, un triatleta aficionado que apunta lo que come y su peso en la app TriData y entrena con \
-un reloj Garmin. Hablas con él de nutrición, de entreno, de un objetivo (p. ej. una carrera) o de su peso, como un \
-entrenador y nutricionista cercano. Es un único asistente: el tema lo pone cada conversación.
+Formas parte del equipo de Andrés, un triatleta aficionado que apunta lo que come y su peso en la app TriData y entrena \
+con un reloj Garmin: el entrenador, el fisio, el nutricionista y el asistente de siempre. Quién eres en esta \
+conversación y cómo miras lo dice tu papel, al final. Andrés habla con uno y, si quiere, pide opinión a otro.
 
 Ves siempre todo su contexto, que va aquí debajo: sus datos médicos (analítica y prueba de esfuerzo, transcritos de \
 sus PDF) y sus datos en JSON: "hoy" es la fecha de hoy; "dias", las últimas 8 semanas día a día (comidas con sus \
-kcal, peso, pasos, pulso en reposo, sueño, HRV, entrenos y carga); "semanas", lo anterior resumido por semanas; \
-"ajustes", sus objetivos de hoy; "carreras", sus carreras; "pulso", su frecuencia cardiaca máxima, de reposo y sus \
-zonas, y de dónde salen.
+kcal, peso, pasos, pulso en reposo, sueño, HRV, entrenos con su id y carga); "semanas", lo anterior resumido por \
+semanas; "ajustes", sus objetivos de hoy; "carreras", sus carreras; "pulso", su frecuencia cardiaca máxima, de reposo \
+y sus zonas, y de dónde salen; "plan", su plan de entrenamiento en curso (sus carreras con su objetivo, sus semanas \
+con lo previsto en segundos y lo hecho según Garmin, sus sesiones por día con sus bloques y la nutrición en carrera); \
+"incidencias", sus molestias y lesiones apuntadas en el plan.
 
 Cómo responder:
 - En español, de tú, breve y concreto, con sus números reales. En texto plano: sin Markdown (nada de asteriscos, \
@@ -71,6 +82,8 @@ class Contexto:
     bloques: tuple[str, ...]
     ve: tuple[str, ...]
     aviso: str | None = None
+    plan: str | None = None  # unit 041: the name of the plan in course, for the line
+    incidencias: int = 0
 
 
 def _y(partes: list[str] | tuple[str, ...], ultima: str = "y") -> str:
@@ -78,13 +91,19 @@ def _y(partes: list[str] | tuple[str, ...], ultima: str = "y") -> str:
     return partes[0] if len(partes) == 1 else f"{', '.join(partes[:-1])} {ultima} {partes[-1]}"
 
 
-def linea(ctx: Contexto, ahora: datetime) -> str:
-    """«Ve tus comidas, peso, entrenos, sueño, pulso, HRV, analítica y prueba de esfuerzo, hasta hoy 9:42» (R-115)."""
-    texto = f"Ve tus {_y(ctx.ve)}, hasta hoy {ahora.hour}:{ahora.minute:02d}"
+def linea(ctx: Contexto, ahora: datetime, modelo: str | None = None) -> str:
+    """«Ve tus comidas, peso, entrenos, sueño, pulso, HRV, analítica y prueba de esfuerzo, hasta hoy 9:42» (R-115);
+    unit 041: with «tu plan …, incidencias (1)» after the HRV when there is a plan, and « · Sonnet», the model of the
+    role, at the end."""
+    ve = list(ctx.ve)
+    if ctx.plan:
+        extra = [f"tu plan {ctx.plan}"] + ([f"incidencias ({ctx.incidencias})"] if ctx.incidencias else [])
+        ve[len(VE_SIEMPRE):len(VE_SIEMPRE)] = extra
+    texto = f"Ve tus {_y(ve)}, hasta hoy {ahora.hour}:{ahora.minute:02d}"
     faltan = [m for m in ("analítica", "prueba de esfuerzo") if m not in ctx.ve]
     if faltan:
         texto += f" (sin {_y(faltan, 'ni')}" + (f": {ctx.aviso[0].lower()}{ctx.aviso[1:]}" if ctx.aviso else "") + ")"
-    return texto
+    return texto + (f" · {nombre_de(modelo)}" if modelo else "")
 
 
 def _limpio(d: dict[str, Any]) -> dict[str, Any]:
@@ -130,7 +149,7 @@ def _entreno(store: DataStore, a: dict[str, Any]) -> dict[str, Any]:
             s = round(segundos / distancia * 100)
             ritmo = f"{s // 60}:{s % 60:02d}/100m"
     clima = store.get_weather(a["activity_id"]) or {}
-    return _limpio({"nombre": a.get("name") or _deporte(tipo), "deporte": _deporte(tipo),
+    return _limpio({"id": a["activity_id"], "nombre": a.get("name") or _deporte(tipo), "deporte": _deporte(tipo),
                     "minutos": _r(segundos / 60, 0), "km": _r(distancia / 1000, 2) if distancia else None,
                     "fc_media": _r(a.get("avg_hr"), 0), "fc_max": _r(a.get("max_hr"), 0),
                     "kcal": _r(a.get("calories"), 0), "ritmo_km": ritmo if tipo in RUNNING_TYPES else None,
@@ -142,9 +161,29 @@ def _media(valores: list[float]) -> float | None:
     return mean(valores) if valores else None
 
 
+def plan_en_curso(planes: Planes | None, store: DataStore | None, hoy: date) -> tuple[dict | None, list[dict]]:
+    """The plan of the current objective as the team sees it (unit 041, R2) and its incidents; (None, []) without one."""
+    ident = planes.en_curso(hoy) if planes is not None else None
+    plan = planes.leer(ident) if planes is not None and ident is not None else None
+    if plan is None:
+        return None, []
+    vista = semanas_del_plan.vista(plan, store, hoy)
+    datos = {
+        "nombre": plan["nombre"], "carreras": vista["carreras"], "semanas": vista["semanas"],
+        "sesiones": [{"fecha": x["fecha"], "titulo": x["titulo"], "bloques": x["bloques"], "clave": x["clave"]}
+                     for x in sorted(plan["sesiones"], key=lambda x: x["fecha"])],
+        "nutricion": [{"producto": n["producto"], "pauta": n["pauta"]} for n in plan["nutricion"]],
+        "notas": [n["texto"] for n in plan["notas"] if n["tipo"] == "nota"],
+    }
+    incidencias = [{"fecha": i["fecha"], "texto": i["texto"]} for i in plan["incidencias"]]
+    return _limpio(datos), incidencias
+
+
 def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, store: DataStore | None,
-           transcripciones: list[dict[str, Any]], aviso_medico: str | None, hoy: date) -> Contexto:
-    """The fixed part of every request of every conversation, with the data up to `hoy` (R3)."""
+           transcripciones: list[dict[str, Any]], aviso_medico: str | None, hoy: date,
+           planes: Planes | None = None) -> Contexto:
+    """The fixed part of every request of every conversation, with the data up to `hoy` (R3); unit 041: with the
+    plan in course and its incidents (`planes`)."""
     desde = hoy - timedelta(days=DIAS_DIA_A_DIA - 1)
     comidas = _comidas(registro)
     peso_de = {p["dia"]: p for p in pesos.entre(DESDE_SIEMPRE, hoy)}
@@ -231,6 +270,11 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
         "semanas": resumen_semanas,
         "planeado_despues_de_hoy": planeado,
     }
+    plan, incidencias = plan_en_curso(planes, store, hoy)
+    if plan is not None:
+        datos_json["plan"] = plan
+    if incidencias:
+        datos_json["incidencias"] = incidencias
 
     ve = list(VE_SIEMPRE)
     if any(t["tipo"] == "analitica" for t in transcripciones):
@@ -247,7 +291,8 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     instrucciones = INSTRUCCIONES + "\n" + texto_acciones()
     return Contexto(
         bloques=(instrucciones, medico, json.dumps(datos_json, ensure_ascii=False, sort_keys=True, separators=(",", ":"))),
-        ve=tuple(ve), aviso=None if len(ve) == len(VE_SIEMPRE) + 2 else aviso_medico)
+        ve=tuple(ve), aviso=None if len(ve) == len(VE_SIEMPRE) + 2 else aviso_medico,
+        plan=plan["nombre"] if plan else None, incidencias=len(incidencias))
 
 
-__all__ = ["DIAS_DIA_A_DIA", "INSTRUCCIONES", "Contexto", "linea", "montar"]
+__all__ = ["DIAS_DIA_A_DIA", "INSTRUCCIONES", "Contexto", "linea", "montar", "plan_en_curso"]

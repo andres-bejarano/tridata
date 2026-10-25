@@ -694,6 +694,28 @@ button.icono-boton { width: 44px; height: 44px; min-height: 44px; padding: 0; bo
 button.pensar { flex: none; width: 60px; min-height: 44px; padding: 4px 6px; border-radius: 14px; font-size: .78rem; line-height: 1.1; font-weight: 650; color: var(--suave); }
 button.pensar[aria-pressed="true"] { background: var(--acento-suave); color: var(--acento); border-color: var(--acento); }
 
+/* -- unit 041: the team in the Asistente (conversaciones.js) and Ajustes › El equipo (ajustes.js) ------------------ */
+.conv-icono { flex: none; font-size: 1.3rem; line-height: 1; }
+.conv-icono:empty { display: none; }
+.titulo-equipo { text-transform: uppercase; letter-spacing: .06em; font-size: .85rem; color: var(--suave); margin: 4px 4px 8px; }
+.conv-papeles { display: grid; gap: 8px; margin-bottom: 12px; }
+button.papel { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 10px 14px; text-align: left;
+  border: 1px solid var(--borde); border-radius: 16px; background: var(--tarjeta); color: var(--texto); font: inherit; font-weight: 400; }
+button.papel[aria-pressed="true"] { border-color: var(--acento); background: var(--acento-suave); box-shadow: 0 0 0 1px var(--acento) inset; }
+.papel-icono { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--acento-suave); font-size: 1.15rem; }
+.papel-texto { flex: 1; min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.papel-texto .suave { font-size: .9rem; }
+button.conversacion.con-papel { grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; align-items: center; }
+button.conversacion.con-papel .papel-icono { grid-row: span 2; }
+.papel-nombre { margin: 0 0 4px; font-size: .82rem; font-weight: 700; color: var(--acento); }
+.papel-nombre.papel-fisio { color: var(--alerta); }
+.papel-nombre.papel-nutricionista { color: var(--bien); }
+.conv-opinion { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 4px; }
+.conv-opinion > .suave { font-size: .9rem; }
+button.opinion { min-height: 40px; padding: 0 14px; border-radius: 999px; font-size: .92rem; font-weight: 650; background: var(--tarjeta); }
+.equipo-modelos { display: grid; gap: 6px; margin: 4px 0 10px; }
+.equipo-modelos label { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+
 /* -- unit 040: Fitness › Plan (plan.js); the selector Forma · Plan is the `.segmentado.partes` of Nutrición ------- */
 #fitness-partes { margin: 0 0 12px; }
 .plan-cab, .plan-cabecera { display: flex; align-items: center; gap: 10px; margin: 4px 4px 10px; }

@@ -102,7 +102,7 @@ def test_si_la_ia_falla_no_hay_plan_y_se_puede_reintentar(web):  # R5
 
 
 def test_al_tope_del_mes_no_se_importa(web):  # the cap of unit 032 (R9) and bug 038
-    Conversaciones(web.db).apuntar_gasto(AHORA, "claude-sonnet-5-5", {"entrada": 3_000_000, "salida": 0}, "mensaje")
+    Conversaciones(web.db).apuntar_gasto(AHORA, "claude-sonnet-5-5", {"entrada": 7_500_000, "salida": 0}, "mensaje")  # 15 $ (unit 041)
     r = web.cliente.post("/api/plan/importar", json={"texto": FIXTURE.read_text(encoding="utf-8")})
     assert r.status_code == 429 and r.json()["tope"] is True
     assert web.ordenador.llamadas == []

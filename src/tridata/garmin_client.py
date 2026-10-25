@@ -45,6 +45,10 @@ class GarminRateLimitError(RuntimeError):
     """Raised when Garmin Connect answers 429 (too many requests) to the login (unit 018, G-45)."""
 
 
+class GarminWorkoutError(RuntimeError):
+    """Garmin Connect refused a workout, or did not answer (unit 042, R-159): the card offers the file instead."""
+
+
 def _es_429(exc: BaseException | None) -> bool:
     """Whether `exc`, or what caused it, is Garmin limiting the requests (a 429)."""
     vistos = 0
@@ -419,6 +423,52 @@ class GarminClient:
             "condition": (raw.get("weatherTypeDTO") or {}).get("desc"),
             "station_name": (raw.get("weatherStationDTO") or {}).get("name"),
         }
+
+    # -- Workouts to the watch (unit 042, REC-26) ----------------------------
+
+    def _workout_call(self, what: str, call: Any, *args: Any, missing_ok: bool = False) -> Any:
+        """One call of the workout service: a 429 is `GarminRateLimitError`, anything else `GarminWorkoutError`;
+        with `missing_ok`, a 404 (removed by hand in Garmin Connect) is nothing."""
+        api = self.api  # GarminAuthError without login
+        try:
+            return call(api, *args)
+        except Exception as exc:  # garminconnect raises several exception types
+            if _es_429(exc):
+                raise GarminRateLimitError("Garmin Connect is limiting the requests (429)") from exc
+            if missing_ok and "404" in str(exc):
+                logger.info("Garmin Connect: %s, it was not there any more", what)
+                return None
+            raise GarminWorkoutError(f"Garmin Connect could not {what} ({type(exc).__name__})") from exc
+
+    def subir_entreno(self, entreno: dict[str, Any]) -> int:
+        """Upload a workout (the JSON of `plan.reloj.a_garmin`) to the library; its `workoutId`."""
+        raw = self._workout_call("upload the workout", lambda api, e: api.upload_workout(e), entreno)
+        ident = raw.get("workoutId") if isinstance(raw, dict) else None
+        if not ident:
+            raise GarminWorkoutError("Garmin Connect did not give the workout an id")
+        return int(ident)
+
+    def programar(self, workout_id: int, dia: date) -> int:
+        """Schedule that workout on `dia` in the calendar of Garmin Connect; its `workoutScheduleId`."""
+        raw = self._workout_call("schedule the workout", lambda api, w, d: api.schedule_workout(w, d),
+                                 workout_id, dia.isoformat())
+        ident = raw.get("workoutScheduleId") if isinstance(raw, dict) else None
+        if not ident:
+            raise GarminWorkoutError("Garmin Connect did not schedule the workout")
+        return int(ident)
+
+    def quitar_programado(self, schedule_id: int) -> None:
+        """Remove a scheduled workout from the calendar (the template stays in the library)."""
+        self._workout_call("unschedule the workout", lambda api, s: api.unschedule_workout(s), schedule_id,
+                           missing_ok=True)
+
+    def borrar_entreno(self, workout_id: int) -> None:
+        """Delete a workout template from the library."""
+        self._workout_call("delete the workout", lambda api, w: api.delete_workout(w), workout_id, missing_ok=True)
+
+    def bajar_fit(self, workout_id: int) -> bytes:
+        """The FIT file of a workout of the library, as Garmin Connect gives it."""
+        return bytes(self._workout_call("download the workout", lambda api, w: api.download_workout(w), workout_id))
 
     def iter_days(self, start: date, end: date):
         """Yield each date from start to end inclusive."""

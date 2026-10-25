@@ -9,6 +9,11 @@
 // - the import (POST /api/plan/importar with the text of the chosen .md): the parts read and each difference with
 //   Garmin, proposing the plan's (it comes from Strava); nothing is saved until «Confirmar importación»
 //   (POST /api/plan/confirmar). If the AI fails, nothing is saved and «Reintentar» sends the same text again.
+// Unit 042 (REC-26): each session of today or a day to come has «Mandar a mi Garmin» (POST
+// /api/plan/sesion/ID/garmin): the card «Voy a mandar a tu Garmin» with its blocks and their margin of pace, confirmed
+// or discarded with /api/asistente/* like every card (nothing goes to Garmin before «Confirmar», G-55); confirmed,
+// the session says «en tu Garmin». If Garmin fails, the card says so and offers «Bajar fichero»
+// (GET /api/plan/sesion/ID.fit, the same session as a FIT file).
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -21,6 +26,7 @@ let peticion = 0; // drops a late answer
 let planVisto = null; // id of the plan on screen (null: the one of the current objective)
 let ultimo = null; // the last answer of GET /api/plan
 let importacion = null; // { texto, fichero, propuesta, elecciones } while importing
+let semanaVista = null; // n of the week on screen (unit 042: repainted after sending a session)
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -179,6 +185,7 @@ async function abrirSemana(n) {
   if (mia !== peticion) return;
   if (!ok) { aviso(datos.error ?? "No he podido cargar esa semana."); return; }
   aviso("");
+  semanaVista = n;
   pintarSemana(datos);
   ver("semana");
 }
@@ -220,12 +227,67 @@ function filaDia(d) {
     el("strong", { textContent: `${nombre} ${diaMes(d.fecha)} · ${titulos || "sin sesión prevista"}` }));
   const bloques = d.sesiones.flatMap((s) => s.bloques);
   if (bloques.length) nodo.append(el("ul", { className: "bloques" }, ...bloques.map((b) => el("li", { textContent: b }))));
+  (d.reloj ?? []).forEach((r, i) => nodo.append(filaReloj(d, d.sesiones[i], r)));
   for (const a of d.actividades) nodo.append(...lineaHecha(a));
   if (!d.actividades.length) {
     const texto = { no_hecho: "no hecho", hoy: "hoy: aún nada en Garmin", pendiente: "—" }[d.estado];
     nodo.append(el("span", { className: `estado-dia ${d.estado}`, textContent: texto }));
   }
   return nodo;
+}
+
+// -- unit 042: the session to the watch -------------------------------------------------------------------------
+
+function filaReloj(d, sesion, r) {
+  const caja = el("div", { className: "reloj-sesion" });
+  const varias = d.sesiones.length > 1 ? ` (${sesion.titulo})` : "";
+  const fila = el("div", { className: "fila-reloj" });
+  if (r.estado === "al_dia") fila.append(el("span", { className: "en-garmin", textContent: `⌚ en tu Garmin${varias}` }));
+  if (r.estado === "cambiada") fila.append(el("span", { className: "garmin-cambiada", textContent: `Cambiada desde que la mandaste a tu Garmin${varias}` }));
+  if (r.estado !== "al_dia" && (d.estado === "hoy" || d.estado === "pendiente")) {
+    const boton = el("button", { type: "button", className: "enlace-boton", textContent: "Mandar a mi Garmin" });
+    boton.addEventListener("click", () => pedirTarjeta(r.id, caja, boton));
+    fila.append(boton);
+  }
+  if (fila.childElementCount) caja.append(fila);
+  return caja;
+}
+
+async function pedirTarjeta(id, caja, boton) {
+  boton.disabled = true;
+  const { ok, datos } = await api(`/api/plan/sesion/${id}/garmin`, {});
+  boton.disabled = false;
+  caja.querySelector(".tarjeta-reloj, .aviso")?.remove();
+  if (!ok) { caja.append(el("p", { className: "aviso", textContent: datos.error ?? "No he podido preparar la tarjeta." })); return; }
+  caja.append(tarjetaReloj(id, datos.tarjeta, caja));
+}
+
+function tarjetaReloj(id, t, caja, nota = null, fallo = null) {
+  const confirmar = el("button", { type: "button", className: "principal", textContent: "Confirmar" });
+  const descartar = el("button", { type: "button", textContent: "Descartar" });
+  const poner = (...args) => tarjeta.replaceWith(tarjetaReloj(id, ...args));
+  confirmar.addEventListener("click", async () => {
+    confirmar.disabled = descartar.disabled = true;
+    const { ok, estado, datos } = await api("/api/asistente/confirmar", { tarjeta: t });
+    if (ok) { if (semanaVista !== null) abrirSemana(semanaVista); return; }
+    if (estado === 409 && datos.tarjeta) { poner(datos.tarjeta, caja, datos.error); return; }
+    poner(t, caja, null, datos.error ?? "No ha llegado a tu Garmin.");
+  });
+  descartar.addEventListener("click", async () => {
+    confirmar.disabled = descartar.disabled = true;
+    await api("/api/asistente/descartar", { tarjeta: t });
+    tarjeta.remove();
+  });
+  const tarjeta = el("article", { className: `tarjeta tarjeta-cambio tarjeta-reloj${fallo ? " con-error" : ""}` },
+    nota ? el("p", { className: "aviso", role: "status", textContent: nota }) : null,
+    el("p", { className: "voy", textContent: t.texto }),
+    t.donde ? el("p", { className: "suave", textContent: t.donde }) : null,
+    el("ul", { className: "lineas" }, ...t.lineas.map((l) => el("li", { textContent: l }))),
+    ...t.avisos.map((a) => el("p", { className: "suave aviso-cambio", textContent: a.charAt(0).toUpperCase() + a.slice(1) })),
+    fallo ? el("p", { className: "aviso", role: "alert", textContent: fallo }) : null,
+    fallo ? el("a", { className: "bajar-fit", href: `/api/plan/sesion/${id}.fit`, download: "", textContent: "Bajar fichero" }) : null,
+    el("div", { className: "acciones" }, confirmar, descartar));
+  return tarjeta;
 }
 
 function pintarSemana(s) {

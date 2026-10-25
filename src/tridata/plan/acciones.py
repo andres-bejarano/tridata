@@ -9,15 +9,23 @@ if the session was changed by hand in between, the card is redone and nothing is
 
 The blocks travel flat in `texto` (bug 036): «título | bloque | bloque…». A day that is over is not changed (it is
 history: what was done comes from Garmin). Nothing here logs a text of the plan.
+
+Unit 042 (REC-26, R-157..R-161): `mandar_a_garmin`, «Voy a mandar a tu Garmin: Series 4×12' (mié 28/10)» with its
+blocks as the watch will follow them (`plan.reloj.lineas`, with the margin of pace) and its day, from a conversation
+or from the session in Fitness › Plan (`tarjeta_garmin`). Proposing never talks to Garmin (G-55); confirming uploads
+it and schedules it on its day, replacing the one sent before (R-160), and the plan marks it «en tu Garmin». If
+Garmin fails, nothing is marked and the card says so and where to download the file (R-159).
 """
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
-from ..nutricion.asistente import Accion, Contexto, Peticion, TarjetaMal, fecha_de, no, tarjeta
+from ..nutricion.asistente import Accion, Contexto, NoValida, Peticion, TarjetaMal, fecha_de, no, tarjeta
 from ..nutricion.recetas import normalizar
+from . import texto_sesion
+from .reloj import GarminNoLlega, NoTraducible, lineas, mandar
 
 SIN_PLAN = "No tienes ningún plan de entrenamiento: impórtalo en Fitness › Plan"
 YA_PASO = "Ese día ya pasó: lo hecho lo trae Garmin"
@@ -47,8 +55,7 @@ def _partes(texto: Any) -> tuple[str, list[str]] | None:
     return (titulo, bloques) if titulo else None
 
 
-def _sesion_texto(titulo: str, bloques: list[str]) -> str:
-    return f"{titulo}: {' · '.join(bloques)}" if bloques else titulo
+_sesion_texto = texto_sesion
 
 
 def _sesiones_del_dia(plan: dict, dia: date, objeto: Any) -> list[dict]:
@@ -239,6 +246,80 @@ def _aplicar_nota(parametros: dict, ctx: Contexto) -> str:
     return "la nota está en tu plan"
 
 
+# -- mandar_a_garmin (unit 042) --------------------------------------------------------------------------------
+
+def _proponer_garmin(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
+    plan = _plan(ctx, peticion)
+    if plan is None:
+        return no(SIN_PLAN)
+    if cambio.dia is None:
+        return no("No sé qué día del plan es")
+    if cambio.dia < peticion.fecha:
+        return no(YA_PASO)
+    sesion = _la_sesion(cambio, plan, cambio.dia)
+    if isinstance(sesion, str):
+        return no(sesion)
+    del_dia = [s for s in ctx.planes.sesiones_reloj(plan["id"])
+               if s["fecha"] == cambio.dia.isoformat() and s["titulo"] == sesion["titulo"]]
+    if not del_dia:
+        return no(NO_ESTA)
+    return _rehacer_garmin({"sesion": del_dia[0]["id"]}, {}, ctx, peticion)
+
+
+def _rehacer_garmin(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
+    sesion = ctx.planes.sesion(int(parametros["sesion"])) if ctx.planes is not None else None
+    if sesion is None:
+        return no(NO_ESTA)
+    dia = fecha_de(sesion["fecha"])
+    if dia < peticion.fecha:
+        return no(YA_PASO)
+    try:
+        bloques = lineas(sesion)
+    except NoTraducible as exc:
+        return no(f"No puedo mandarla a tu Garmin: {exc}")
+    avisos = []
+    if sesion["garmin_workout_id"] is not None:
+        avisos.append("ya la mandaste a tu Garmin: esta la sustituye, allí queda una sola")
+    return tarjeta(accion="mandar_a_garmin", parametros={"sesion": sesion["id"]}, peticion=peticion,
+                   texto=f"Voy a mandar a tu Garmin: {sesion['titulo']} ({dia_corto(dia)})",
+                   despues=texto_sesion(sesion["titulo"], sesion["bloques"]), dia=dia,
+                   donde=f"a tu Garmin Connect, programada el {dia_corto(dia)}: el reloj la coge al sincronizar",
+                   avisos=avisos, lineas=bloques)
+
+
+def _aplicar_garmin(parametros: dict, ctx: Contexto) -> str:
+    if ctx.planes is None:
+        raise TarjetaMal("no hay planes")
+    planes = ctx.planes
+    sesion = planes.sesion(int(parametros["sesion"]))
+    if sesion is None:
+        raise TarjetaMal(NO_ESTA.lower())
+    dia = dia_corto(fecha_de(sesion["fecha"]))
+    try:
+        workout_id, schedule_id = mandar(sesion, planes.garmin,
+                                         al_quitar=lambda: planes.marcar_garmin(sesion["id"], None, None))
+    except (GarminNoLlega, NoTraducible) as exc:
+        raise NoValida(f"No ha llegado a tu Garmin: {exc}. Puedes bajarla como fichero e importarla a mano: "
+                       f"Fitness › Plan, la sesión del {dia}, «Bajar fichero».") from None
+    planes.marcar_garmin(sesion["id"], workout_id, schedule_id, datetime.now(),
+                         texto_sesion(sesion["titulo"], sesion["bloques"]))
+    return f"la sesión del {dia} está en tu Garmin: el reloj la coge al sincronizar"
+
+
+def tarjeta_garmin(planes: Any, ident: int, hoy: date) -> dict:
+    """The card of `mandar_a_garmin` for one session of Fitness › Plan (or a `no` saying why there is none)."""
+    contexto = _SoloPlanes(planes)
+    return _rehacer_garmin({"sesion": ident}, {}, contexto,  # type: ignore[arg-type]
+                           Peticion(texto="Mandar a mi Garmin, desde Fitness › Plan", fecha=hoy))
+
+
+class _SoloPlanes:
+    """What `_rehacer_garmin` reads of a `Contexto`: only the plans."""
+
+    def __init__(self, planes: Any) -> None:
+        self.planes = planes
+
+
 # no figure in a line for Claude (G-38): the example goes in words
 _SESION = ("texto: «título | bloque | bloque…», cada bloque en números redondos con su tiempo o distancia, su ritmo o "
            "esfuerzo y su recuperación (p. ej. «Series | calentamiento suave | series a ritmo de diez mil con "
@@ -258,6 +339,10 @@ ACCIONES = [
            _proponer_objetivo, _rehacer_objetivo, _aplicar_objetivo),
     Accion("plan_nota", "añadir una nota al plan en curso. texto: la nota.", _proponer_nota, _rehacer_nota,
            _aplicar_nota),
+    Accion("mandar_a_garmin", "mandar a su reloj Garmin una sesión de carrera a pie del plan en curso, de hoy o de un "
+           "día que aún no ha llegado, para que el reloj le guíe bloque a bloque (si la cambias, primero la cambias "
+           "en el plan). dia: el día de la sesión; objeto: su título si ese día hay varias, o null.",
+           _proponer_garmin, _rehacer_garmin, _aplicar_garmin),
 ]
 
-__all__ = ["ACCIONES", "dia_corto"]
+__all__ = ["ACCIONES", "dia_corto", "tarjeta_garmin"]

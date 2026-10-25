@@ -11,6 +11,10 @@
 // Nutricionista or the Asistente of always, the default); under what was said, «Pedir opinión a…» makes another role
 // answer in the same conversation (POST …/opinion). Each answer carries the name of its role (not in a conversation
 // where only the Asistente spoke, as before) and the line says the model.
+// Unit 045 (REC-25): «Adjuntar ruta» offers the routes saved in Garmin, the runs already done and uploading a GPX
+// (GET /api/rutas, POST …/ruta; a conversation that starts is created by its route). The profile is drawn on top
+// of the conversation (SVG: the altitude every 100 m and the climbs shaded); with Garmin not answering, or a route
+// without altitude, it says so and the GPX stays offered. Only the profile goes to the coach, never the coordinates.
 
 import { pintarCambios } from "./asistente.js";
 
@@ -68,6 +72,7 @@ export function iniciarConversaciones(opciones) {
   $("conv-borrar").addEventListener("click", () => { $("conv-renombrar-caja").hidden = true; $("conv-borrar-caja").hidden = false; });
   $("conv-borrar-no").addEventListener("click", () => { $("conv-borrar-caja").hidden = true; });
   $("conv-borrar-si").addEventListener("click", borrar);
+  prepararRutas();
   $("pensar").addEventListener("click", () => {
     const boton = $("pensar");
     boton.setAttribute("aria-pressed", String(boton.getAttribute("aria-pressed") !== "true"));
@@ -256,7 +261,7 @@ const claveDe = (id) => String(id ?? "nueva");
 
 async function abrirNueva() {
   papelNuevo = "asistente";
-  vista = { id: null, conversacion: { titulo: "Nueva conversación", papel: "asistente" }, mensajes: [] };
+  vista = { id: null, conversacion: { titulo: "Nueva conversación", papel: "asistente" }, mensajes: [], ruta: null };
   pintarChat();
   $("texto").focus();
   const mia = ++peticion;
@@ -279,7 +284,7 @@ async function abrir(id) {
     $("conv-mensajes").replaceChildren();
     return;
   }
-  vista = { id, conversacion: datos.conversacion, mensajes: datos.mensajes, linea: datos.linea };
+  vista = { id, conversacion: datos.conversacion, mensajes: datos.mensajes, linea: datos.linea, ruta: datos.ruta ?? null };
   pintarChat();
   abajo();
 }
@@ -297,6 +302,7 @@ function pintarChat() {
   $("conv-mensajes").replaceChildren(...vista.mensajes.map(burbuja), ...locales.map(burbuja));
   pintarPapeles();
   pintarOpinion();
+  pintarRuta();
 }
 
 function burbuja(m) {
@@ -490,4 +496,126 @@ async function borrar() {
   guardarPendientes(todos);
   vista = null;
   location.hash = "asistente";
+}
+
+// -- unit 045: «Adjuntar ruta» and its profile ------------------------------------------------------------------------
+
+const SVG = "http://www.w3.org/2000/svg";
+const FUENTES = { garmin: "ruta guardada en Garmin", actividad: "de una actividad hecha", gpx: "GPX subido" };
+const km = (x) => `${Number.isInteger(x) ? x : x.toFixed(1).replace(".", ",")} km`;
+
+function svg(etiqueta, atributos = {}) {
+  const nodo = document.createElementNS(SVG, etiqueta);
+  for (const [k, v] of Object.entries(atributos)) nodo.setAttribute(k, String(v));
+  return nodo;
+}
+
+function prepararRutas() {
+  if ($("conv-ruta-zona")) return;
+  const zona = el("div", { id: "conv-ruta-zona", className: "conv-ruta-zona" },
+    el("section", { id: "conv-ruta", className: "tarjeta conv-ruta", hidden: true }),
+    el("button", { type: "button", id: "conv-adjuntar-ruta", className: "enlace-boton conv-adjuntar", textContent: "📍 Adjuntar ruta" }),
+    el("div", { id: "conv-rutas", className: "tarjeta conv-rutas", hidden: true }));
+  $("conv-mensajes").before(zona);
+  $("conv-adjuntar-ruta").addEventListener("click", alternarRutas);
+}
+
+async function alternarRutas() {
+  const caja = $("conv-rutas");
+  if (!caja.hidden) { caja.hidden = true; return; }
+  caja.hidden = false;
+  caja.replaceChildren(el("p", { className: "suave", textContent: "Mirando tus rutas…" }));
+  const { ok, datos } = await api("/api/rutas");
+  pintarRutas(ok ? datos : { garmin: [], actividades: [], aviso: datos.error ?? "No he podido traer tus rutas." });
+}
+
+function opcionRuta(titulo, detalle, alElegir) {
+  const boton = el("button", { type: "button", className: "opcion-ruta" },
+    el("strong", { textContent: titulo }), el("span", { className: "suave", textContent: detalle }));
+  boton.addEventListener("click", alElegir);
+  return el("li", {}, boton);
+}
+
+function pintarRutas(datos, error = "") {
+  const caja = $("conv-rutas");
+  const fichero = el("input", { type: "file", accept: ".gpx,application/gpx+xml", id: "conv-ruta-gpx" });
+  fichero.addEventListener("change", async () => {
+    const f = fichero.files?.[0];
+    if (f) adjuntar({ gpx: await f.text(), nombre: f.name }, datos);
+  });
+  const desnivel = (m) => (m ? ` · +${m} m` : "");
+  caja.replaceChildren(
+    error ? el("p", { className: "aviso", role: "alert", textContent: error }) : null,
+    datos.aviso ? el("p", { className: "aviso", textContent: datos.aviso }) : null,
+    datos.garmin.length ? el("h3", { className: "titulo-bloque", textContent: "En tu Garmin" }) : null,
+    datos.garmin.length ? el("ul", { className: "lista-rutas" }, ...datos.garmin.map((r) =>
+      opcionRuta(r.nombre, `${r.distancia_km !== null ? km(r.distancia_km) : ""}${desnivel(r.sube_m)}`,
+        () => adjuntar({ garmin: r.id, nombre: r.nombre }, datos)))) : null,
+    datos.actividades.length ? el("h3", { className: "titulo-bloque", textContent: "Carreras que ya hiciste" }) : null,
+    datos.actividades.length ? el("ul", { className: "lista-rutas" }, ...datos.actividades.map((a) =>
+      opcionRuta(a.nombre, `${diaMes.format(new Date(`${a.fecha}T12:00`)).replace(".", "")} · ${km(a.distancia_km)}${desnivel(a.sube_m)}`,
+        () => adjuntar({ actividad: a.id }, datos)))) : null,
+    el("label", { className: "subir-gpx" }, el("span", { className: "fuerte", textContent: "Subir un GPX" }),
+      el("span", { className: "suave", textContent: "El fichero de la ruta (Garmin Connect o Strava, «Exportar GPX»)." }), fichero));
+}
+
+async function adjuntar(cuerpo, datos) {
+  if (!vista) return;
+  const propia = vista;
+  const caja = $("conv-rutas");
+  caja.querySelectorAll("button, input").forEach((x) => { x.disabled = true; });
+  const nueva = propia.id === null;
+  const ruta = nueva ? "/api/conversaciones/ruta" : `/api/conversaciones/${propia.id}/ruta`;
+  const r = await api(ruta, nueva ? { ...cuerpo, papel: papelNuevo } : cuerpo);
+  if (vista !== propia) return;
+  if (!r.ok) { pintarRutas(datos, r.datos.error ?? "No he podido adjuntar la ruta."); return; }
+  if (nueva) {
+    propia.id = r.datos.conversacion.id;
+    history.replaceState(null, "", `#asistente/${propia.id}`);
+  }
+  Object.assign(propia, { conversacion: r.datos.conversacion, mensajes: r.datos.mensajes, linea: r.datos.linea, ruta: r.datos.ruta });
+  caja.hidden = true;
+  pintarChat();
+}
+
+function pintarRuta() {
+  const caja = $("conv-ruta");
+  if (!caja) return;
+  const p = vista?.ruta;
+  caja.hidden = !p;
+  if (!p) { caja.replaceChildren(); return; }
+  caja.replaceChildren(
+    el("p", { className: "ruta-titulo" }, el("strong", { textContent: "📍 Ruta adjunta: " }), p.nombre),
+    el("p", { className: "suave ruta-datos", textContent: `${FUENTES[p.fuente] ?? p.fuente} · ${km(p.distancia_km)} · +${p.sube_m} m / −${p.baja_m} m` }),
+    dibujo(p),
+    el("p", { className: "suave ruta-nota", textContent: "Al entrenador va el perfil por km y tramos, nunca las coordenadas." }));
+}
+
+// The profile: the altitude every 100 m as an area, the climbs shaded behind it, a mark every 5 km.
+function dibujo(p) {
+  const ancho = 340, alto = 120, abajo = 18, arriba = 6;
+  const alturas = p.altitudes;
+  const min = Math.min(...alturas), max = Math.max(...alturas);
+  const rango = Math.max(max - min, 20);
+  const x = (k) => (k / p.distancia_km) * ancho;
+  const y = (m) => alto - abajo - ((m - min) / rango) * (alto - abajo - arriba);
+  const paso = p.paso_m / 1000;
+  const puntos = alturas.map((m, i) => `${x(Math.min(i * paso, p.distancia_km)).toFixed(1)},${y(m).toFixed(1)}`);
+  const dibujo = svg("svg", { viewBox: `0 0 ${ancho} ${alto}`, class: "ruta-perfil", role: "img",
+    "aria-label": `Perfil de ${p.nombre}: ${p.tramos.filter((t) => t.terreno === "subida").length} subidas` });
+  for (const t of p.tramos.filter((t) => t.terreno === "subida")) {
+    dibujo.append(svg("rect", { class: "ruta-subida", x: x(t.desde_km).toFixed(1), y: arriba,
+      width: Math.max(1, x(t.hasta_km) - x(t.desde_km)).toFixed(1), height: alto - abajo - arriba }));
+  }
+  dibujo.append(svg("polygon", { class: "ruta-area", points: [`0,${alto - abajo}`, ...puntos, `${x(p.distancia_km).toFixed(1)},${alto - abajo}`].join(" ") }));
+  dibujo.append(svg("polyline", { class: "ruta-linea", points: puntos.join(" ") }));
+  dibujo.append(svg("line", { class: "ruta-eje", x1: 0, y1: alto - abajo, x2: ancho, y2: alto - abajo }));
+  const cada = p.distancia_km > 30 ? 10 : 5;
+  for (let k = 0; k <= p.distancia_km + 0.01; k += cada) {
+    const etiqueta = svg("text", { class: "ruta-km", x: Math.min(x(k), ancho - 2).toFixed(1), y: alto - 4,
+      "text-anchor": k === 0 ? "start" : x(k) > ancho - 20 ? "end" : "middle" });
+    etiqueta.textContent = `${k} km`;
+    dibujo.append(etiqueta);
+  }
+  return dibujo;
 }

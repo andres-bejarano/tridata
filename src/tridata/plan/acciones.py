@@ -22,6 +22,11 @@ incidencia: visita al fisio del 30/9 · alta para correr», `cerrar_incidencia` 
 a apuntar en lo hecho del mié 21/10: …». The visit and the closing go to an OPEN incident (of any plan): named by its
 zone, or the only one open. Confirming redoes it (G-41): an incident already open with that name, a visit added or an
 incident closed in between, a note added that day, and the card is redone.
+
+Unit 045 (REC-25, R-155, R-156): `guardar_estrategia`, «Voy a guardar en el plan: estrategia de Behobia (6 tramos, 2
+geles)», the strategy by stretches the coach answered with a route attached, one line per stretch (its km, terrain,
+pace or effort and time of passage) and one per gel, in that race of the plan in course; it replaces the one it had
+(the card says it). Confirming redoes it (G-41): another strategy saved in between, and the card is redone.
 """
 from __future__ import annotations
 
@@ -529,6 +534,62 @@ def _aplicar_nota_dia(parametros: dict, ctx: Contexto) -> str:
     return f"la nota está en lo hecho del {dia_corto(dia)}"
 
 
+# -- unit 045: guardar_estrategia ---------------------------------------------------------------------------------
+
+def _lineas(texto: Any) -> list[str]:
+    """«tramo | tramo | gel: …» -> its lines, tidied; [] if nothing."""
+    return [x for x in (_texto(t) for t in texto.split(SEPARADOR)) if x] if isinstance(texto, str) else []
+
+
+def _es_gel(linea: str) -> bool:
+    return normalizar(linea).startswith("gel")
+
+
+def _proponer_estrategia(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
+    plan = _plan(ctx, peticion)
+    if plan is None:
+        return no(SIN_PLAN)
+    nombre = _texto(cambio.objeto)
+    if not nombre:
+        return no("No sé de qué carrera del plan es la estrategia: dime cuál")
+    buscado = normalizar(nombre)
+    carreras = [c for c in plan["carreras"] if buscado in normalizar(c["nombre"])]
+    if len(carreras) != 1:
+        return no("Esa carrera no está en tu plan" if not carreras else "Hay varias carreras con ese nombre en tu plan")
+    lineas = _lineas(cambio.texto)
+    if not [x for x in lineas if not _es_gel(x)]:
+        return no("No sé qué estrategia quieres guardar: dime sus tramos")
+    return _rehacer_estrategia({"plan_id": plan["id"], "carrera": carreras[0]["nombre"], "lineas": lineas}, {}, ctx,
+                               peticion)
+
+
+def _rehacer_estrategia(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
+    plan = ctx.planes.leer(parametros["plan_id"]) if ctx.planes is not None else None
+    carrera = next((c for c in plan["carreras"] if c["nombre"] == parametros["carrera"]), None) if plan else None
+    if plan is None or carrera is None:
+        return no("Esa carrera ya no está en tu plan")
+    lineas = [str(x) for x in parametros["lineas"]]
+    ya = ctx.planes.estrategia(plan["id"], carrera["nombre"])
+    if ya == lineas:
+        return no(f"La estrategia de {carrera['nombre']} ya es esa")
+    geles = len([x for x in lineas if _es_gel(x)])
+    tramos = len(lineas) - geles
+    cuenta = f"{tramos} {'tramo' if tramos == 1 else 'tramos'}" + (
+        f", {geles} {'gel' if geles == 1 else 'geles'}" if geles else "")
+    return tarjeta(accion="guardar_estrategia", parametros=parametros, peticion=peticion,
+                   texto=f"Voy a guardar en el plan: estrategia de {carrera['nombre']} ({cuenta})",
+                   antes=" | ".join(ya) or None, despues=" | ".join(lineas), lineas=lineas,
+                   avisos=["sustituye a la estrategia que tenía"] if ya else [],
+                   donde=f"en tu plan {plan['nombre']}, en la carrera {carrera['nombre']}, en Fitness › Plan")
+
+
+def _aplicar_estrategia(parametros: dict, ctx: Contexto) -> str:
+    if ctx.planes is None:
+        raise TarjetaMal("no hay planes")
+    ctx.planes.guardar_estrategia(parametros["plan_id"], parametros["carrera"], [str(x) for x in parametros["lineas"]])
+    return f"la estrategia de {parametros['carrera']} está en tu plan"
+
+
 # no figure in a line for Claude (G-38): the example goes in words
 _SESION = ("texto: «título | bloque | bloque…», cada bloque en números redondos con su tiempo o distancia, su ritmo o "
            "esfuerzo y su recuperación (p. ej. «Series | calentamiento suave | series a ritmo de diez mil con "
@@ -566,6 +627,10 @@ ACCIONES = [
            "cargadas) como nota de ese día en lo hecho del plan en curso; si es una molestia, abrir_incidencia. dia: "
            "el día, o null si es hoy; texto: la nota, en sus palabras.",
            _proponer_nota_dia, _rehacer_nota_dia, _aplicar_nota_dia),
+    Accion("guardar_estrategia", "guardar en una carrera del plan en curso la estrategia por tramos que le has "
+           "propuesto con una ruta adjunta, cuando Andrés la quiere. objeto: el nombre de la carrera; texto: «tramo | "
+           "tramo | gel: …», cada tramo con sus km, su terreno, su ritmo o esfuerzo y su tiempo de paso, y una línea "
+           "por gel que empiece por gel, con su km.", _proponer_estrategia, _rehacer_estrategia, _aplicar_estrategia),
 ]
 
 __all__ = ["ACCIONES", "dia_corto", "tarjeta_garmin"]

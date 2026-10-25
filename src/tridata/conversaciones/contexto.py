@@ -19,6 +19,10 @@ Unit 044 (REC-24, R-149 · G-46): "incidencias" carries the open incidents of ev
 the plan in course, each one with its state, its visits to the physio or the doctor and its lesson (the ones of the
 .md, as before: date and text); and the plan carries the notes of each day (`notas_del_dia`).
 
+Unit 045 (REC-25, R-154): a route attached to a conversation is NOT here: its profile goes in the message
+(`web/conversaciones.py`, `plan.rutas.perfil_para_modelo`), so the fixed part, and its cache, stay the same; only the
+line says «ruta adjunta: …».
+
 None of it carries the hour: with the same data it is the same text byte to byte, so every conversation shares the
 cache (R10). It changes only when a datum changes (a food, a weight, a sync) or the day does. The line «Ve tus …,
 hasta hoy 9:42» (R-115) goes apart (`linea`). Read only: nothing here writes.
@@ -98,10 +102,10 @@ def _y(partes: list[str] | tuple[str, ...], ultima: str = "y") -> str:
     return partes[0] if len(partes) == 1 else f"{', '.join(partes[:-1])} {ultima} {partes[-1]}"
 
 
-def linea(ctx: Contexto, ahora: datetime, modelo: str | None = None) -> str:
+def linea(ctx: Contexto, ahora: datetime, modelo: str | None = None, ruta: str | None = None) -> str:
     """«Ve tus comidas, peso, entrenos, sueño, pulso, HRV, analítica y prueba de esfuerzo, hasta hoy 9:42» (R-115);
     unit 041: with «tu plan …, incidencias (1)» after the HRV when there is a plan, and « · Sonnet», the model of the
-    role, at the end."""
+    role, at the end; unit 045: « · ruta adjunta: Behobia» before the model when the conversation has a route."""
     ve = list(ctx.ve)
     if ctx.plan:
         extra = [f"tu plan {ctx.plan}"] + ([f"incidencias ({ctx.incidencias})"] if ctx.incidencias else [])
@@ -110,7 +114,7 @@ def linea(ctx: Contexto, ahora: datetime, modelo: str | None = None) -> str:
     faltan = [m for m in ("analítica", "prueba de esfuerzo") if m not in ctx.ve]
     if faltan:
         texto += f" (sin {_y(faltan, 'ni')}" + (f": {ctx.aviso[0].lower()}{ctx.aviso[1:]}" if ctx.aviso else "") + ")"
-    return texto + (f" · {nombre_de(modelo)}" if modelo else "")
+    return texto + (f" · ruta adjunta: {ruta}" if ruta else "") + (f" · {nombre_de(modelo)}" if modelo else "")
 
 
 def _limpio(d: dict[str, Any]) -> dict[str, Any]:

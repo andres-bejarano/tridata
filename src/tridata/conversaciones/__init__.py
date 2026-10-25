@@ -17,6 +17,10 @@ before are the Asistente's) and each answer keeps the role and the model that ga
 model of each role chosen in Ajustes › El equipo, among the ones of the catalogue (`ia/modelos.py`), from which the
 prices come too. The columns are added if they are missing (an additive migration, as the other tables do).
 
+Unit 045 (REC-25, R-152, R-154): a conversation can have a route attached (`conversacion_ruta`): only its profile
+(`plan.rutas.perfil`: km, altitude every 100 m and stretches, never a coordinate, G-57) and when it was attached. A
+route attached again replaces the one it had; it goes with the conversation when it is deleted.
+
 Nothing here talks to the API. The logs of this package carry ids, counts and token use, never a text (R12).
 """
 from __future__ import annotations
@@ -75,6 +79,11 @@ CREATE INDEX IF NOT EXISTS mensaje_de_conversacion ON mensaje (conversacion_id, 
 CREATE TABLE IF NOT EXISTS modelo_papel (
     papel TEXT PRIMARY KEY,
     modelo TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS conversacion_ruta (
+    conversacion_id INTEGER PRIMARY KEY REFERENCES conversacion(id) ON DELETE CASCADE,
+    perfil TEXT NOT NULL,
+    adjuntada TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS gasto_asistente (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -247,8 +256,28 @@ class Conversaciones:
         """The whole conversation and its messages; nothing else (R-118)."""
         with self._connect() as conn:
             conn.execute("DELETE FROM mensaje WHERE conversacion_id = ?", (ident,))
+            conn.execute("DELETE FROM conversacion_ruta WHERE conversacion_id = ?", (ident,))
             if conn.execute("DELETE FROM conversacion WHERE id = ?", (ident,)).rowcount == 0:
                 raise NoEsta(ident)
+
+    # -- the route attached (unit 045) --------------------------------------------------------------------------
+
+    def adjuntar_ruta(self, ident: int, perfil: dict[str, Any], ahora: datetime) -> dict[str, Any]:
+        """The profile of a route with that conversation, instead of the one it had; NoEsta without it."""
+        with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM conversacion WHERE id = ?", (ident,)).fetchone() is None:
+                raise NoEsta(ident)
+            conn.execute("INSERT INTO conversacion_ruta (conversacion_id, perfil, adjuntada) VALUES (?, ?, ?) "
+                         "ON CONFLICT (conversacion_id) DO UPDATE SET perfil = excluded.perfil, "
+                         "adjuntada = excluded.adjuntada", (ident, json.dumps(perfil, ensure_ascii=False), _hora(ahora)))
+            conn.execute("UPDATE conversacion SET usada = ? WHERE id = ?", (_hora(ahora), ident))
+        return perfil
+
+    def ruta(self, ident: int) -> dict[str, Any] | None:
+        """The profile of the route attached to that conversation, or None."""
+        with self._connect() as conn:
+            fila = conn.execute("SELECT perfil FROM conversacion_ruta WHERE conversacion_id = ?", (ident,)).fetchone()
+        return json.loads(fila["perfil"]) if fila is not None else None
 
     # -- messages ----------------------------------------------------------------------------------------------------
 

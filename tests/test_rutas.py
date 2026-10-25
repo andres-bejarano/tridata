@@ -49,7 +49,7 @@ def test_perfil_cada_100_m_con_dos_subidas_y_su_desnivel():  # R2 · C-194
     assert all(t["desnivel_m"] < 0 for t in bajadas)
     # the stretches cover the route, one after the other, never two of the same terrain together
     assert p["tramos"][0]["desde_km"] == 0 and p["tramos"][-1]["hasta_km"] == p["distancia_km"]
-    for a, b in zip(p["tramos"], p["tramos"][1:]):
+    for a, b in zip(p["tramos"], p["tramos"][1:], strict=False):
         assert a["hasta_km"] == b["desde_km"] and a["terreno"] != b["terreno"]
     assert p["sube_m"] == pytest.approx(115, abs=15) and p["baja_m"] == pytest.approx(115, abs=15)
 

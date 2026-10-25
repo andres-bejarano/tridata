@@ -557,9 +557,9 @@ def test_guardar_la_estrategia_solo_al_confirmar(b):  # R6 · C-198, G-55
     hecho = confirmar(t, b.ctx)
     assert "Maratón de ejemplo" in hecho["hecho"]
     assert b.planes.estrategia(b.plan_id, "Maratón de ejemplo") == LINEAS_ESTRATEGIA
+    # in that race of the plan, and only there (read with `Planes.estrategia`: `leer` gives the races as before)
+    assert b.planes.estrategia(b.plan_id, "10K de ejemplo") == []
     carrera = next(c for c in b.plan()["carreras"] if c["nombre"] == "Maratón de ejemplo")
-    assert carrera["estrategia"] == LINEAS_ESTRATEGIA  # in that race of the plan
-    assert next(c for c in b.plan()["carreras"] if c["nombre"] == "10K de ejemplo")["estrategia"] == []
     assert carrera["objetivo"] == "3:05"  # nothing else of the race changes
 
 

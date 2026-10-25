@@ -29,6 +29,10 @@ visits to the physio or the doctor go to `plan_visita` (date, who, what they sai
 the day (`leccion`, `cerrada`). The incidents of the .md have no state: they are history, and are shown as closed
 without a lesson (`importada`). The notes of a day («FC alta para el ritmo») go to `plan_nota_dia` and are shown in
 what was done that day (`plan/semanas.py`). `leer` gives the incidents as before (apartado, fecha, texto).
+
+Unit 045 (REC-25, R-156): a race keeps its strategy by stretches (`plan_carrera.estrategia`, its lines as JSON:
+«km 4-6,5 · subida · por esfuerzo · paso 28:40», «gel: km 6,5»), saved only from a confirmed card (`plan.acciones`,
+`guardar_estrategia`) and read with `estrategia` (`leer` gives the races as before, so a plan reads the same).
 """
 from __future__ import annotations
 
@@ -131,6 +135,8 @@ _RELOJ = (("garmin_workout_id", "INTEGER"), ("garmin_schedule_id", "INTEGER"), (
 # unit 044: the columns of a live incident, added to an older base without them
 _VIVA = (("zona", "TEXT"), ("lado", "TEXT"), ("que_paso", "TEXT"), ("estado", "TEXT"), ("leccion", "TEXT"),
          ("cerrada", "TEXT"), ("abierta", "TEXT"))
+# unit 045: the strategy of a race, added to an older base without it
+_ESTRATEGIA = (("estrategia", "TEXT"),)
 ABIERTA, CERRADA = "abierta", "cerrada"
 
 
@@ -162,7 +168,7 @@ class Planes:
         self._db_path = Path(db_path)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
-            for tabla, columnas in (("plan_sesion", _RELOJ), ("plan_incidencia", _VIVA)):
+            for tabla, columnas in (("plan_sesion", _RELOJ), ("plan_incidencia", _VIVA), ("plan_carrera", _ESTRATEGIA)):
                 tiene = {f["name"] for f in conn.execute(f"PRAGMA table_info({tabla})")}
                 for columna, tipo in columnas:
                     if columna not in tiene:
@@ -269,6 +275,21 @@ class Planes:
 
         return reloj.cliente_garmin()
 
+
+    # -- unit 045: the strategy of a race -------------------------------------------------------------------------
+
+    def estrategia(self, plan_id: int, carrera: str) -> list[str]:
+        """The lines of the strategy of that race of the plan ([] without one)."""
+        with self._connect() as conn:
+            fila = conn.execute("SELECT estrategia FROM plan_carrera WHERE plan_id = ? AND nombre = ? ORDER BY orden "
+                                "LIMIT 1", (plan_id, carrera)).fetchone()
+        return json.loads(fila["estrategia"]) if fila is not None and fila["estrategia"] else []
+
+    def guardar_estrategia(self, plan_id: int, carrera: str, lineas: list[str]) -> None:
+        """That strategy in that race of the plan, instead of the one it had (only from a confirmed card, R-156)."""
+        with self._connect() as conn:
+            conn.execute("UPDATE plan_carrera SET estrategia = ? WHERE plan_id = ? AND nombre = ?",
+                         (json.dumps(list(lineas), ensure_ascii=False), plan_id, carrera))
 
     # -- unit 044: the live incidents and the notes of a day ---------------------------------------------------------
 

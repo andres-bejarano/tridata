@@ -672,9 +672,12 @@ def test_al_modelo_va_el_perfil_en_el_mensaje_y_la_parte_fija_no_cambia(tmp_path
     assert mensaje["role"] == "user" and isinstance(mensaje["content"], str)
     assert "Ruta adjunta" in mensaje["content"] and "subida" in mensaje["content"] and "cada 100 m" in mensaje["content"]
     assert mensaje["content"].rstrip().endswith("prepárame la carrera para 1:25")  # and what Andrés said
+    lo_dicho = json.dumps(con_ruta["messages"], ensure_ascii=False)
+    for c in COORDENADAS:  # not one coordinate in what goes with the messages…
+        assert c not in lo_dicho, c
     todo = json.dumps(con_ruta, ensure_ascii=False)
-    for c in COORDENADAS:  # not one coordinate in the whole request
-        assert c not in todo, c
+    for c in ("10.500", "10,500", "-30.2", "-30,2"):  # …nor anywhere in the request (the data of the context carry
+        assert c not in todo, c                       # an invented tsb of -10.5: the loose «10.5» is not looked for)
     assert "Ruta adjunta" not in json.dumps(con_ruta["system"], ensure_ascii=False)
     # what stays of Andrés is what he said; the line says the route
     assert web.ver(ident)["mensajes"][-2]["texto"] == "prepárame la carrera para 1:25"

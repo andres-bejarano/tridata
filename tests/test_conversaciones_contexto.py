@@ -242,3 +242,55 @@ def test_los_cuatro_papeles_ven_lo_mismo_con_el_plan(web):  # R2 · C-179, G-46 
     assert peticiones[0]["system"][-2]["cache_control"] == {"type": "ephemeral"}
     assert len({p["system"][-1]["text"] for p in peticiones}) == 4  # each one its role, after the mark
     assert all("cache_control" not in p["system"][-1] for p in peticiones)
+
+
+# -- unit 044 · R5 (R-149, C-191): the open incidents always, and the closed ones of the plan in course -------------
+
+def test_el_contexto_lleva_las_abiertas_y_las_cerradas_con_sus_visitas(tmp_path):  # R5 · C-191
+    mundo = Mundo(tmp_path)
+    planes = mundo.plan()  # with one incident of its .md: «Presión de prueba en el gemelo»
+    plan_id = planes.en_curso(HOY)
+    abierta = planes.abrir_incidencia(plan_id, "tobillo", "derecho, lateral", date(2026, 10, 20),
+                                      "molestia inventada al acabar el rodaje", AHORA)
+    planes.anadir_visita(abierta, date(2026, 10, 22), "fisio", "sin lesión inventada, alta para correr", AHORA)
+    cerrada = planes.abrir_incidencia(plan_id, "rodilla", None, date(2026, 9, 24), "sobrecarga inventada", AHORA)
+    planes.anadir_visita(cerrada, date(2026, 9, 30), "médico", "reposo inventado", AHORA)
+    planes.cerrar_incidencia(cerrada, "bici nunca tras la tirada larga", date(2026, 10, 1))
+    # another plan, not in course: its open one goes too, its closed one does not
+    otro = planes.crear({"nombre": "Otro plan de prueba", "apartados": [{"titulo": "Objetivos", "parte": "objetivos"}],
+                         "carreras": [{"apartado": 0, "nombre": "Carrera de prueba 27", "fecha": "2027-07-04",
+                                       "objetivo": "acabar", "estado": "pendiente", "principal": True}],
+                         "semanas": [], "sesiones": [], "nutricion": [], "incidencias": [], "notas": []}, AHORA)
+    planes.abrir_incidencia(otro, "cadera", None, date(2026, 10, 10), "molestia inventada de otro plan", AHORA)
+    vieja = planes.abrir_incidencia(otro, "hombro", None, date(2026, 5, 1), "cerrada inventada de otro plan", AHORA)
+    planes.cerrar_incidencia(vieja, "lección de otro plan", date(2026, 5, 20))
+
+    ctx = mundo.contexto(planes=planes)
+    incidencias = _datos(ctx)["incidencias"]
+    texto = json.dumps(incidencias, ensure_ascii=False)
+    assert "cerrada inventada de otro plan" not in texto and "lección de otro plan" not in texto
+    por_texto = {i["texto"]: i for i in incidencias}
+    assert set(por_texto) == {"Presión de prueba en el gemelo", "tobillo derecho, lateral: molestia inventada al "
+                              "acabar el rodaje", "rodilla: sobrecarga inventada",
+                              "cadera: molestia inventada de otro plan"}
+    tobillo = por_texto["tobillo derecho, lateral: molestia inventada al acabar el rodaje"]
+    assert (tobillo["estado"], tobillo["fecha"]) == ("abierta", "2026-10-20")
+    assert tobillo["visitas"] == [{"fecha": "2026-10-22", "quien": "fisio",
+                                   "que_dijo": "sin lesión inventada, alta para correr"}]
+    rodilla = por_texto["rodilla: sobrecarga inventada"]
+    assert (rodilla["estado"], rodilla["leccion"], rodilla["cerrada"]) == (
+        "cerrada", "bici nunca tras la tirada larga", "2026-10-01")
+    assert rodilla["visitas"] == [{"fecha": "2026-09-30", "quien": "médico", "que_dijo": "reposo inventado"}]
+    assert por_texto["cadera: molestia inventada de otro plan"]["estado"] == "abierta"
+    assert [i["texto"] for i in incidencias][:2] == [  # the open ones first
+        "tobillo derecho, lateral: molestia inventada al acabar el rodaje", "cadera: molestia inventada de otro plan"]
+    instrucciones = ctx.bloques[0]
+    assert "abiertas" in instrucciones and "tenlas en cuenta" in instrucciones  # every role is told (R-149)
+
+
+def test_la_nota_del_dia_va_en_el_contexto(tmp_path):  # R6 · C-192
+    mundo = Mundo(tmp_path)
+    planes = mundo.plan()
+    planes.nota_del_dia(planes.en_curso(HOY), date(2026, 10, 21), "FC alta para el ritmo, piernas del domingo", AHORA)
+    plan = _datos(mundo.contexto(planes=planes))["plan"]
+    assert plan["notas_del_dia"] == [{"fecha": "2026-10-21", "texto": "FC alta para el ritmo, piernas del domingo"}]

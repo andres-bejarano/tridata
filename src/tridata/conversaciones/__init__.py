@@ -32,6 +32,12 @@ PRECIOS: dict[str, tuple[float, float, float, float]] = {
     "claude-haiku-5-5": (0.10, 0.50, 0.125, 0.01),
     "claude-sonnet-5-5": (2.0, 10.0, 2.5, 0.20),
 }
+# Haiku 5.5 above 100K tokens in one call (input + cache write + cache read): 0.50 / 2.50, write 1.25x and read 0.1x
+# the input (bug 038; SDK reference 2026-10-06). The tier goes per call, so each round is priced on its own.
+LARGO_DESDE = 100_000
+PRECIOS_LARGOS: dict[str, tuple[float, float, float, float]] = {
+    "claude-haiku-5-5": (0.50, 2.50, 0.625, 0.05),
+}
 _MAS_CARO = "claude-sonnet-5-5"  # an unknown model is counted at the dearest price: the cap never falls short
 USO_VACIO = {"entrada": 0, "salida": 0, "cache_escritura": 0, "cache_lectura": 0}
 
@@ -80,8 +86,10 @@ class NoEsta(LookupError):
 
 
 def dolares(modelo: str, uso: dict[str, int]) -> float:
-    """What a call cost, with the use the API gave back (R9)."""
+    """What ONE call cost, with the use the API gave back (R9); above `LARGO_DESDE` tokens in, its long tier."""
     entrada, salida, escritura, lectura = PRECIOS.get(modelo, PRECIOS[_MAS_CARO])
+    if uso.get("entrada", 0) + uso.get("cache_escritura", 0) + uso.get("cache_lectura", 0) > LARGO_DESDE:
+        entrada, salida, escritura, lectura = PRECIOS_LARGOS.get(modelo, (entrada, salida, escritura, lectura))
     return (uso.get("entrada", 0) * entrada + uso.get("salida", 0) * salida
             + uso.get("cache_escritura", 0) * escritura + uso.get("cache_lectura", 0) * lectura) / 1_000_000
 

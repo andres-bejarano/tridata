@@ -41,8 +41,9 @@ VALOR_INVENTADO = "321,7"
 class _Flujo:
     """What `messages.stream(...)` gives: a context manager with `text_stream` and `get_final_message()`."""
 
-    def __init__(self, trozos: list[str], final: SimpleNamespace) -> None:
-        self._trozos, self._final = trozos, final
+    def __init__(self, trozos: list[str], final: SimpleNamespace, corte: Exception | None = None) -> None:
+        self._trozos, self._final, self._corte = trozos, final, corte
+        self.current_message_snapshot = final  # what the SDK has seen so far (bug 038: the use of a cut round)
 
     def __enter__(self) -> _Flujo:
         return self
@@ -52,7 +53,9 @@ class _Flujo:
 
     @property
     def text_stream(self):
-        yield from self._trozos
+        yield from self._trozos[:1] if self._corte else self._trozos
+        if self._corte is not None:
+            raise self._corte
 
     def get_final_message(self) -> SimpleNamespace:
         return self._final
@@ -63,7 +66,8 @@ class ClaudeFalso:
 
     `responder(texto, *herramientas)` queues one round: its text and the tools it calls (`(nombre, entrada)`); a
     round with tools ends with `stop_reason="tool_use"`. With nothing queued it answers «Respuesta de prueba.».
-    `fallo` (an exception) is raised instead of answering. Like the real cache, a request whose `tools` + `system`
+    `fallo` (an exception) is raised instead of answering. `rechazar()` queues a round that ends in `refusal`;
+    `cortar(entrada, salida)` one whose connection breaks after the first piece, with that partial use seen. Like the real cache, a request whose `tools` + `system`
     + model are byte-identical to an earlier one (and carry a `cache_control`) is read from the cache.
     """
 
@@ -77,11 +81,26 @@ class ClaudeFalso:
     def responder(self, texto: str, *herramientas: tuple[str, dict]) -> None:
         self.rondas.append((texto, list(herramientas)))
 
+    def rechazar(self) -> None:
+        self.rondas.append(("No puedo con eso.", [("__refusal__", {})]))
+
+    def cortar(self, entrada: int, salida: int) -> None:
+        self.rondas.append(("Empiezo a responder y se corta.", [("__corte__", {"entrada": entrada, "salida": salida})]))
+
     def stream(self, **peticion):
         self.peticiones.append(copy.deepcopy(peticion))
         if self.fallo is not None:
             raise self.fallo
         texto, herramientas = self.rondas.pop(0) if self.rondas else ("Respuesta de prueba.", [])
+        especial = herramientas[0][0] if herramientas and herramientas[0][0].startswith("__") else None
+        if especial == "__corte__":
+            parcial = herramientas[0][1]
+            uso = SimpleNamespace(input_tokens=parcial["entrada"], output_tokens=parcial["salida"],
+                                  cache_creation_input_tokens=0, cache_read_input_tokens=0)
+            final = SimpleNamespace(content=[], stop_reason=None, usage=uso)
+            return _Flujo([texto], final, corte=fallo_de_red())
+        if especial == "__refusal__":
+            herramientas = []
         con_marca = any(isinstance(b, dict) and b.get("cache_control") for b in peticion.get("system", []))
         prefijo = json.dumps([peticion.get("tools"), peticion.get("system"), peticion["model"]], sort_keys=True,
                              ensure_ascii=False)
@@ -97,7 +116,8 @@ class ClaudeFalso:
             for i, (nombre, entrada) in enumerate(herramientas)]
         mitad = len(texto) // 2
         trozos = [t for t in (texto[:mitad], texto[mitad:]) if t]
-        final = SimpleNamespace(content=contenido, stop_reason="tool_use" if herramientas else "end_turn", usage=uso)
+        parada = "refusal" if especial == "__refusal__" else "tool_use" if herramientas else "end_turn"
+        final = SimpleNamespace(content=contenido, stop_reason=parada, usage=uso)
         return _Flujo(trozos, final)
 
 
@@ -263,11 +283,59 @@ def test_un_fallo_de_la_api_es_error_conversacion(fallo):  # R6
 
 # -- R9: the spending cap --------------------------------------------------------------------------------------------
 
-def test_precio_por_modelo_con_la_cache():  # R9
+def test_precio_por_modelo_con_la_cache():  # R9 · bug 038 R2: a call of 3M tokens in is in Haiku's long tier
     uso = {"entrada": 1_000_000, "salida": 1_000_000, "cache_escritura": 1_000_000, "cache_lectura": 1_000_000}
-    assert dolares("claude-haiku-5-5", uso) == pytest.approx(0.10 + 0.50 + 0.125 + 0.01)
+    assert dolares("claude-haiku-5-5", uso) == pytest.approx(0.50 + 2.50 + 0.625 + 0.05)
     assert dolares("claude-sonnet-5-5", uso) == pytest.approx(2 + 10 + 2.5 + 0.20)
     assert dolares("modelo-desconocido", uso) == dolares("claude-sonnet-5-5", uso)  # unknown: the dearest
+
+
+def test_haiku_hasta_100k_de_entrada_a_precio_normal_y_por_encima_al_largo():  # bug 038 R2
+    hasta = {"entrada": 60_000, "salida": 10_000, "cache_escritura": 20_000, "cache_lectura": 20_000}  # 100K in
+    assert dolares("claude-haiku-5-5", hasta) == pytest.approx(
+        (60_000 * 0.10 + 10_000 * 0.50 + 20_000 * 0.125 + 20_000 * 0.01) / 1_000_000)
+    pasa = {**hasta, "cache_lectura": 20_001}  # the cache counts as input: 100.001
+    assert dolares("claude-haiku-5-5", pasa) == pytest.approx(
+        (60_000 * 0.50 + 10_000 * 2.50 + 20_000 * 0.625 + 20_001 * 0.05) / 1_000_000)
+    assert dolares("claude-sonnet-5-5", pasa) == pytest.approx(
+        (60_000 * 2 + 10_000 * 10 + 20_000 * 2.5 + 20_001 * 0.20) / 1_000_000)  # Sonnet has one price
+
+
+def test_la_respuesta_trae_el_uso_de_cada_llamada():  # bug 038 R2: the price goes per call
+    claude = ClaudeFalso()
+    claude.responder("Primero.", ("poner_titulo", {"titulo": "Carrera"}))
+    claude.responder("Después.")
+    _, r = _todo(ConversadorClaude(cliente=claude).responder(BLOQUES, [], "hola", al_usar=lambda n, e: "hecho"))
+    assert len(r.usos) == 2
+    assert {k: sum(u[k] for u in r.usos) for k in r.uso} == r.uso
+
+
+def test_un_rechazo_lleva_el_uso_de_lo_ya_cobrado():  # bug 038 R1
+    claude = ClaudeFalso()
+    claude.responder("Primero.", ("poner_titulo", {"titulo": "Carrera"}))
+    claude.rechazar()
+    with pytest.raises(ErrorConversacion) as exc:
+        _todo(ConversadorClaude(cliente=claude).responder(BLOQUES, [], "hola", al_usar=lambda n, e: "hecho"))
+    assert exc.value.modelo == MODELO_POR_DEFECTO and len(exc.value.usos) == 2  # the round before and the refusal
+    assert all(u["entrada"] > 0 for u in exc.value.usos)
+
+
+def test_un_corte_a_mitad_lleva_las_rondas_hechas_y_el_uso_parcial():  # bug 038 R1
+    claude = ClaudeFalso()
+    claude.responder("Primero.", ("poner_titulo", {"titulo": "Carrera"}))
+    claude.cortar(entrada=5_000, salida=7)
+    with pytest.raises(ErrorConversacion) as exc:
+        _todo(ConversadorClaude(cliente=claude).responder(BLOQUES, [], "hola", al_usar=lambda n, e: "hecho"))
+    assert len(exc.value.usos) == 2
+    assert (exc.value.usos[-1]["entrada"], exc.value.usos[-1]["salida"]) == (5_000, 7)
+
+
+def test_sin_ninguna_llamada_respondida_no_hay_uso():  # bug 038 R1
+    claude = ClaudeFalso()
+    claude.fallo = fallo_de_red()
+    with pytest.raises(ErrorConversacion) as exc:
+        _todo(ConversadorClaude(cliente=claude).responder(BLOQUES, [], "hola"))
+    assert exc.value.usos == ()
 
 
 def test_el_tope_del_mes_corta_y_vuelve_el_mes_siguiente(tmp_path):  # R9

@@ -296,6 +296,46 @@ def test_el_gasto_de_cada_respuesta_se_apunta(tmp_path):  # R9
     assert tope["dolares"] == 5.0 and tope["alcanzado"] is False
 
 
+def _filas_de_gasto(web) -> list[tuple[str, int, int]]:
+    import sqlite3
+
+    with sqlite3.connect(web.db) as conn:
+        return conn.execute("SELECT que, tokens_entrada, tokens_salida FROM gasto_asistente ORDER BY id").fetchall()
+
+
+def test_el_gasto_se_apunta_por_llamada(tmp_path):  # bug 038 R2
+    web = _web(tmp_path)
+    web.claude.responder("Te lo dejo.", ("poner_titulo", {"titulo": "Carrera"}))
+    web.claude.responder(" Listo.")
+    web.nueva("hola")
+    assert [que for que, _, _ in _filas_de_gasto(web) if que == "mensaje"] == ["mensaje", "mensaje"]
+
+
+def test_un_turno_que_se_corta_tras_una_ronda_apunta_lo_cobrado(tmp_path):  # bug 038 R1
+    web = _web(tmp_path)
+    web.claude.responder("Te lo dejo.", ("poner_titulo", {"titulo": "Carrera"}))
+    web.claude.cortar(entrada=5_000, salida=7)
+    fin = web.nueva("hola")
+    assert fin["tipo"] == "error" and fin["mensaje"]["sin_respuesta"]
+    mensajes = [(e, s) for que, e, s in _filas_de_gasto(web) if que == "mensaje"]
+    assert len(mensajes) == 2 and mensajes[-1] == (5_000, 7)
+    assert Conversaciones(web.db).gasto_del_mes(AHORA) > 0
+
+
+def test_un_rechazo_apunta_lo_cobrado(tmp_path):  # bug 038 R1
+    web = _web(tmp_path)
+    web.claude.rechazar()
+    assert web.nueva("hola")["tipo"] == "error"
+    assert len([1 for que, _, _ in _filas_de_gasto(web) if que == "mensaje"]) == 1
+
+
+def test_sin_llamada_respondida_no_se_apunta_nada(tmp_path):  # bug 038 R1
+    web = _web(tmp_path)
+    web.claude.fallo = fallo_de_red()
+    assert web.nueva("hola")["tipo"] == "error"
+    assert [f for f in _filas_de_gasto(web) if f[0] == "mensaje"] == []
+
+
 # -- R4: what it knows of the medical documents ---------------------------------------------------------------------
 
 def test_ver_y_volver_a_leer_los_documentos_medicos(tmp_path):  # R4 · G-50

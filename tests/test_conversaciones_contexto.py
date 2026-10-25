@@ -15,11 +15,13 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from test_conversaciones import VALOR_INVENTADO, PdfFalso, pdf_sintetico
+from test_plan import plan_de_prueba
 from tridata.conversaciones.contexto import Contexto, linea, montar
 from tridata.conversaciones.medicos import Medicos, TranscriptorPDF
 from tridata.models import Activity, DailyStats, HRVRecord, SleepRecord
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, RegistroComidas, RegistroPeso
 from tridata.nutricion.asistente import texto_acciones
+from tridata.plan import Planes
 from tridata.storage import DataStore
 
 HOY = date(2026, 10, 24)  # a Saturday
@@ -67,10 +69,23 @@ class Mundo:
         self.registro.guardar([Alimento(nombre=nombre, dia=dia, cantidad=100, unidad="g", kcal=kcal)],
                               hoy=dia, texto=nombre, sin_cambios=True)
 
-    def contexto(self, hoy: date = HOY) -> Contexto:
+    def contexto(self, hoy: date = HOY, **extra) -> Contexto:
         estado = self.medicos.al_dia()
         return montar(registro=self.registro, pesos=self.pesos, ajustes=self.ajustes, store=self.store,
-                      transcripciones=self.medicos.transcripciones(), aviso_medico=estado["aviso"], hoy=hoy)
+                      transcripciones=self.medicos.transcripciones(), aviso_medico=estado["aviso"], hoy=hoy, **extra)
+
+    def plan(self) -> Planes:
+        """Unit 041: an invented plan (`test_plan.plan_de_prueba`: S8 to S10 around `HOY`) with one incident and the
+        race nutrition, saved in this SQLite."""
+        planes = Planes(self.db)
+        planes.crear(plan_de_prueba(
+            incidencias=[{"apartado": 1, "fecha": "2026-10-20", "texto": "Presión de prueba en el gemelo"}],
+            nutricion=[{"apartado": 1, "producto": "Gel de prueba", "pauta": "min 30, 60 y 90"}],
+            sesiones=[*plan_de_prueba()["sesiones"],
+                      {"apartado": 1, "fecha": "2026-10-28", "titulo": "Series de prueba 3×2000",
+                       "bloques": ["20' a 5:30", "3×2000 a 4:15 (3' rec)", "15' suave"], "clave": True}]),
+            AHORA)
+        return planes
 
 
 def _datos(ctx: Contexto) -> dict:
@@ -165,3 +180,65 @@ def test_todas_las_conversaciones_ven_todo_y_lo_mismo(web):  # R3 · R-114, G-46
     dicho = json.dumps(p_carrera["messages"], ensure_ascii=False)
     assert "peso de noviembre" not in dicho and "Tu peso va bien" not in dicho
     assert p_carrera["messages"] == [{"role": "user", "content": "quiero hacer 10 km el 3 de diciembre en 45 minutos"}]
+
+
+# -- unit 041 · R2 (C-179, G-46): the plan in course and its incidents, the same for the four roles ---------------
+
+def test_el_contexto_lleva_el_plan_en_curso_y_sus_incidencias(tmp_path):  # R2 · C-179
+    mundo = Mundo(tmp_path)
+    ctx = mundo.contexto(planes=mundo.plan())
+    d = _datos(ctx)
+    plan = d["plan"]
+    assert plan["nombre"] == "Road to Ejemplo 26"
+    assert [c["nombre"] for c in plan["carreras"]] == ["10K de ejemplo", "Maratón de ejemplo"]
+    assert plan["carreras"][1]["objetivo"] == "3:05"
+    semanas = {s["n"]: s for s in plan["semanas"]}
+    assert set(semanas) == {8, 9, 10}
+    assert semanas[9]["previsto_s"] == 16200 and semanas[9]["hoy"] is True  # planned...
+    assert semanas[9]["hecho"]["carrera"]["n"] == 1  # ...and done: the run of `Mundo` on the Wednesday
+    assert semanas[10]["hecho"] is None  # not started: nothing done, never a 0
+    sesiones = {s["fecha"]: s for s in plan["sesiones"]}
+    assert sesiones["2026-10-28"]["bloques"] == ["20' a 5:30", "3×2000 a 4:15 (3' rec)", "15' suave"]
+    assert sesiones["2026-10-28"]["clave"] is True
+    assert plan["nutricion"] == [{"producto": "Gel de prueba", "pauta": "min 30, 60 y 90"}]
+    assert d["incidencias"] == [{"fecha": "2026-10-20", "texto": "Presión de prueba en el gemelo"}]
+    assert "plan" in ctx.bloques[0] and "incidencias" in ctx.bloques[0]  # the instructions say what they are
+    uno, dos = mundo.contexto(planes=Planes(mundo.db)), mundo.contexto(planes=Planes(mundo.db))
+    assert uno.bloques == dos.bloques  # still byte to byte
+
+
+def test_sin_plan_el_contexto_lo_dice_y_no_inventa(tmp_path):  # R2
+    mundo = Mundo(tmp_path)
+    d = _datos(mundo.contexto(planes=Planes(mundo.db)))
+    assert d.get("plan") is None and d.get("incidencias") in (None, [])
+
+
+def test_la_linea_dice_tu_plan_las_incidencias_y_el_modelo(tmp_path):  # R2, R7 · C-179, C-184
+    mundo = Mundo(tmp_path)
+    ctx = mundo.contexto(planes=mundo.plan())
+    texto = linea(ctx, AHORA, "claude-sonnet-5-5")
+    assert texto.startswith("Ve tus comidas, peso, entrenos, sueño, pulso, HRV, tu plan Road to Ejemplo 26, "
+                            "incidencias (1)")
+    assert "analítica y prueba de esfuerzo, hasta hoy 9:42" in texto
+    assert texto.endswith(" · Sonnet")
+    assert linea(ctx, AHORA, "claude-haiku-5-5").endswith(" · Haiku")
+    assert linea(ctx, AHORA).endswith("hasta hoy 9:42")  # without a model, as before
+
+
+def test_los_cuatro_papeles_ven_lo_mismo_con_el_plan(web):  # R2 · C-179, G-46 · the criterio portante
+    web.plan()
+    peticiones = []
+    for papel in ("entrenador", "fisio", "nutricionista", "asistente"):
+        web.claude.responder(f"Respuesta de prueba del {papel}.")
+        fin = web.nueva("¿cómo voy?", papel=papel)
+        assert fin["tipo"] == "fin", fin
+        peticiones.append(web.claude.peticiones[-1])
+    comunes = {json.dumps(p["system"][:-1], ensure_ascii=False, sort_keys=True) for p in peticiones}
+    assert len(comunes) == 1  # byte to byte
+    fija = "\n".join(b["text"] for b in peticiones[0]["system"][:-1])
+    for dato in ("Road to Ejemplo 26", "Series de prueba 3×2000", "Gel de prueba", "Presión de prueba en el gemelo",
+                 "tostada de prueba", VALOR_INVENTADO):
+        assert dato in fija, dato
+    assert peticiones[0]["system"][-2]["cache_control"] == {"type": "ephemeral"}
+    assert len({p["system"][-1]["text"] for p in peticiones}) == 4  # each one its role, after the mark
+    assert all("cache_control" not in p["system"][-1] for p in peticiones)

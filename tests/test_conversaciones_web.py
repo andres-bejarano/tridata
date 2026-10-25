@@ -4,6 +4,10 @@ of Hoy. Starlette's TestClient over a temporary SQLite; Claude is `ClaudeFalso` 
 
 Plans `preguntar-equipo` REC-20: R1 (C-153), R2 (C-154, C-157), R6 (C-158), R7 (C-159, C-161), R8 (R-96, C-137),
 R9, R11 (R-97, R-98), R12 (C-160). Every value is invented.
+
+Unit 041 (REC-23): a conversation is born with a role and the list shows it (R1 · C-178), «Pedir opinión a…» (R3 ·
+C-180), `abrir_actividad` (R4 · C-181), the model of each role in Ajustes › El equipo with its price and the cap of
+15 $ (R7, R10 · C-184).
 """
 from __future__ import annotations
 
@@ -12,13 +16,15 @@ import logging
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
+import pytest
 from starlette.testclient import TestClient
 
 from test_conversaciones import VALOR_INVENTADO, ClaudeFalso, PdfFalso, fallo_de_red
 from test_conversaciones_contexto import HOY, Mundo
-from tridata.conversaciones import Conversaciones
+from tridata.conversaciones import Conversaciones, dolares
 from tridata.conversaciones.medicos import TranscriptorPDF
 from tridata.ia.conversacion import ConversadorClaude
+from tridata.models import Activity, ActivityLap
 from tridata.nutricion import ObjetivosDia
 from tridata.web import crear_app
 
@@ -273,11 +279,11 @@ def test_un_cambio_que_no_se_entiende_no_es_tarjeta(tmp_path):  # R8 · G-40
 
 def test_al_llegar_al_tope_avisa_y_no_manda_hasta_el_mes_siguiente(tmp_path):  # R9
     web = _web(tmp_path)
-    Conversaciones(web.db).apuntar_gasto(AHORA, "claude-sonnet-5-5", {"entrada": 0, "salida": 500_000,
+    Conversaciones(web.db).apuntar_gasto(AHORA, "claude-sonnet-5-5", {"entrada": 0, "salida": 1_500_000,
                                                                      "cache_escritura": 0, "cache_lectura": 0},
-                                         "mensaje")  # 5 $ this month
+                                         "mensaje")  # 15 $ this month (unit 041, R10)
     r = web.cliente.post("/api/conversaciones", json={"texto": "hola"})
-    assert r.status_code == 429 and "5 $" in r.json()["error"]
+    assert r.status_code == 429 and "15 $" in r.json()["error"]
     assert web.claude.peticiones == [] and web.lista() == []
     assert web.cliente.get("/api/conversaciones").json()["tope"]["alcanzado"] is True
     assert web.cliente.get("/api/hoy").status_code == 200  # the rest of the app goes on
@@ -293,7 +299,7 @@ def test_el_gasto_de_cada_respuesta_se_apunta(tmp_path):  # R9
     gastado = Conversaciones(web.db).gasto_del_mes(AHORA)
     assert gastado > 0
     tope = web.cliente.get("/api/conversaciones").json()["tope"]
-    assert tope["dolares"] == 5.0 and tope["alcanzado"] is False
+    assert tope["dolares"] == 15.0 and tope["alcanzado"] is False  # unit 041, R10
 
 
 def _filas_de_gasto(web) -> list[tuple[str, int, int]]:
@@ -393,3 +399,149 @@ def test_los_registros_no_llevan_lo_hablado_ni_valores_medicos(tmp_path, caplog)
     for prohibido in ("secreta", VALOR_INVENTADO, "58,31", "ferritina", "tostada de prueba", "71.9"):
         assert prohibido not in caplog.text, prohibido
     assert f"conversation {ident}" in caplog.text
+
+
+# -- unit 041 · R1 · C-178: a conversation is born with a role ----------------------------------------------------
+
+def test_nueva_conversacion_con_papel_y_la_lista_lo_ensena(tmp_path):  # R1 · C-178
+    web = _web(tmp_path)
+    web.claude.responder("Desde el entreno: vas bien.")
+    entrenador = web.nueva("¿cómo planteas la tirada?", papel="entrenador")
+    assert entrenador["conversacion"]["papel"] == "entrenador"
+    assert entrenador["mensaje"]["papel"] == "entrenador"
+    de_siempre = web.nueva("hola")  # without a role: the Asistente, as before
+    assert de_siempre["conversacion"]["papel"] == "asistente" and de_siempre["mensaje"]["papel"] == "asistente"
+    assert {c["id"]: c["papel"] for c in web.lista()} == {entrenador["conversacion"]["id"]: "entrenador",
+                                                          de_siempre["conversacion"]["id"]: "asistente"}
+    r = web.cliente.post("/api/conversaciones", json={"texto": "hola", "papel": "masajista"})
+    assert r.status_code == 400 and len(web.lista()) == 2  # nothing created
+
+
+def test_cada_papel_responde_con_su_papel_y_su_modelo(tmp_path):  # R1, R7 · C-178, C-184
+    web = _web(tmp_path)
+    fin = web.nueva("¿y el gemelo?", papel="fisio")
+    peticion = web.claude.peticiones[-1]
+    assert peticion["model"] == "claude-sonnet-5-5" and "Fisio" in peticion["system"][-1]["text"]
+    assert (fin["mensaje"]["papel"], fin["mensaje"]["modelo"]) == ("fisio", "claude-sonnet-5-5")
+    assert fin["linea"].endswith(" · Sonnet")
+    assert web.ver(fin["conversacion"]["id"])["linea"].endswith(" · Sonnet")
+    web.enviar(fin["conversacion"]["id"], "¿y mañana?")
+    assert "Fisio" in web.claude.peticiones[-1]["system"][-1]["text"]  # the conversation keeps its role
+
+
+# -- R3 · C-180: «Pedir opinión a…» ---------------------------------------------------------------------------------
+
+def test_pedir_opinion_hace_responder_a_otro_papel_viendo_lo_hablado(tmp_path):  # R3 · C-180
+    web = _web(tmp_path)
+    web.claude.responder("Tirada de 2h30 por bloques de prueba.")
+    fin = web.nueva("¿cómo planteas la tirada larga de 2h30?", papel="entrenador")
+    ident = fin["conversacion"]["id"]
+    web.claude.responder("Con la presión del gemelo de prueba, si no va a más, puedes hacerla.")
+    r = web.cliente.post(f"/api/conversaciones/{ident}/opinion", json={"papel": "fisio"})
+    eventos = web.eventos(r)
+    assert eventos[0]["tipo"] == "inicio" and eventos[-1]["tipo"] == "fin", eventos[-1]
+    opinion = eventos[-1]["mensaje"]
+    assert (opinion["quien"], opinion["papel"], opinion["modelo"]) == ("asistente", "fisio", "claude-sonnet-5-5")
+    assert opinion["texto"].startswith("Con la presión del gemelo de prueba")
+    peticion = web.claude.peticiones[-1]
+    assert "Fisio" in peticion["system"][-1]["text"]
+    dicho = json.dumps(peticion["messages"], ensure_ascii=False)
+    assert "¿cómo planteas la tirada larga de 2h30?" in dicho and "Tirada de 2h30 por bloques de prueba." in dicho
+    assert "Entrenador" in dicho  # it knows who said what
+    assert peticion["messages"][-1]["role"] == "user" and "Fisio" in json.dumps(peticion["messages"][-1],
+                                                                                 ensure_ascii=False)
+    vista = web.ver(ident)
+    assert [(m["quien"], m["papel"]) for m in vista["mensajes"]] == [
+        ("andres", None), ("asistente", "entrenador"), ("asistente", "fisio")]
+    assert vista["conversacion"]["papel"] == "entrenador"  # still the coach's conversation
+    web.enviar(ident, "vale, ¿y el domingo?")
+    siguiente = web.claude.peticiones[-1]
+    assert "Entrenador" in siguiente["system"][-1]["text"]
+    roles = [m["role"] for m in siguiente["messages"]]
+    assert all(a != b for a, b in zip(roles, roles[1:], strict=False))  # user and assistant take turns
+
+
+def test_pedir_opinion_mal_pedida_no_llama(tmp_path):  # R3
+    web = _web(tmp_path)
+    vacia = web.cliente.post("/api/conversaciones/999/opinion", json={"papel": "fisio"})
+    assert vacia.status_code == 404
+    fin = web.nueva("hola", papel="entrenador")
+    antes = len(web.claude.peticiones)
+    r = web.cliente.post(f"/api/conversaciones/{fin['conversacion']['id']}/opinion", json={"papel": "masajista"})
+    assert r.status_code == 400 and len(web.claude.peticiones) == antes
+
+
+# -- R4 · C-181: a role opens an activity ----------------------------------------------------------------------------
+
+def _series(web) -> None:
+    """An invented session of 4 repetitions on Wednesday 21-10, with its laps (pace, HR, cadence, climb)."""
+    web.store.save_activities([Activity(activity_id="series-1", activity_date=AHORA.date() - timedelta(days=3),
+                                        activity_type="running", name="Series de prueba", duration_seconds=3000,
+                                        distance_meters=10000, avg_hr=158, avg_cadence=176)])
+    web.store.save_activity_laps([
+        ActivityLap("series-1", i, distance_meters=1000.0, duration_seconds=d, avg_hr=hr, avg_cadence=c,
+                    elevation_gain_m=e)
+        for i, (d, hr, c, e) in enumerate([(244, 161, 181, 3), (241, 165, 183, 2), (239, 168, 184, 4),
+                                           (236, 172, 186, 1)], start=1)])
+
+
+def test_un_papel_abre_una_actividad_por_su_fecha_o_su_id(tmp_path):  # R4 · C-181, S-54
+    web = _web(tmp_path)
+    _series(web)
+    web.claude.responder("Abro el miércoles.", ("abrir_actividad", {"fecha": "2026-10-21", "id": ""}))
+    web.claude.responder(" La cuarta serie fue la más rápida, a 3:56 con 172 de pulso.")
+    fin = web.nueva("¿cómo me salieron las series del miércoles?", papel="entrenador")
+    assert fin["tipo"] == "fin" and "3:56" in fin["mensaje"]["texto"]
+    resultado = web.claude.peticiones[1]["messages"][-1]["content"][0]
+    assert resultado["type"] == "tool_result"
+    datos = json.loads(resultado["content"])
+    (actividad,) = datos["actividades"]
+    assert actividad["actividad"]["nombre"] == "Series de prueba"
+    vueltas = actividad["vueltas"]
+    assert len(vueltas) == 4
+    assert [v["ritmo_s_km"] for v in vueltas] == [244, 241, 239, 236]
+    assert [v["pulso_medio"] for v in vueltas] == [161, 165, 168, 172]
+    assert [v["cadencia"] for v in vueltas] == [181, 183, 184, 186]
+    assert [v["desnivel_m"] for v in vueltas] == [3, 2, 4, 1]
+    # by its id too; an id or a date without anything says so
+    web.claude.responder("", ("abrir_actividad", {"fecha": "", "id": "series-1"}),
+                         ("abrir_actividad", {"fecha": "2026-10-01", "id": ""}))
+    web.claude.responder("Vale.")
+    web.enviar(fin["conversacion"]["id"], "¿y por su id?")
+    por_id, nada = web.claude.peticiones[-1]["messages"][-1]["content"]
+    assert len(json.loads(por_id["content"])["actividades"][0]["vueltas"]) == 4
+    assert json.loads(nada["content"])["actividades"] == []
+    # the laps never go in the fixed part
+    fija = "\n".join(b["text"] for b in web.claude.peticiones[0]["system"])
+    assert '"cadencia"' not in fija and '"vueltas"' not in fija
+
+
+# -- R7, R10 · C-184: the model of each role, its price and the cap ------------------------------------------------
+
+def test_el_equipo_en_ajustes_elige_el_modelo_de_cada_papel(tmp_path):  # R7 · C-184, G-56
+    web = _web(tmp_path)
+    equipo = web.cliente.get("/api/equipo").json()
+    assert [(p["id"], p["nombre"], p["modelo"]) for p in equipo["papeles"]] == [
+        ("entrenador", "Entrenador", "claude-sonnet-5-5"), ("fisio", "Fisio", "claude-sonnet-5-5"),
+        ("nutricionista", "Nutricionista", "claude-sonnet-5-5"), ("asistente", "Asistente", "claude-haiku-5-5")]
+    assert {m["id"]: m["nombre"] for m in equipo["modelos"]} == {"claude-haiku-5-5": "Haiku",
+                                                                 "claude-sonnet-5-5": "Sonnet"}
+    assert equipo["tope"]["dolares"] == 15.0
+    r = web.cliente.put("/api/equipo", json={"papel": "entrenador", "modelo": "claude-haiku-5-5"})
+    assert r.status_code == 200
+    assert {p["id"]: p["modelo"] for p in r.json()["papeles"]}["entrenador"] == "claude-haiku-5-5"
+    for malo in ({"papel": "entrenador", "modelo": "gpt-de-prueba"}, {"papel": "masajista", "modelo": "claude-haiku-5-5"},
+                 {}):
+        r = web.cliente.put("/api/equipo", json=malo)
+        assert r.status_code == 400, malo
+    assert {p["id"]: p["modelo"] for p in web.cliente.get("/api/equipo").json()["papeles"]}["entrenador"] == \
+        "claude-haiku-5-5"
+    # the coach answers with Haiku now, and it says so; its cost counts for the cap at Haiku's price
+    fin = web.nueva("¿cómo planteas la tirada?", papel="entrenador")
+    assert web.claude.peticiones[-1]["model"] == "claude-haiku-5-5"
+    assert fin["mensaje"]["modelo"] == "claude-haiku-5-5" and fin["linea"].endswith(" · Haiku")
+    import sqlite3
+
+    with sqlite3.connect(web.db) as conn:
+        assert [f[0] for f in conn.execute("SELECT modelo FROM gasto_asistente")] == ["claude-haiku-5-5"]
+    assert Conversaciones(web.db).gasto_del_mes(AHORA) == pytest.approx(dolares("claude-haiku-5-5", fin["mensaje"]["uso"]))

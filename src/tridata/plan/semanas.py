@@ -7,7 +7,8 @@ types of `sync.py`. An activity without time in movement counts its total time, 
 Garmin for the running of that week. A week that has not started has nothing done (None), never a 0.
 
 Each day of a week carries its planned sessions and its activities: `hecho` if there is any, `no_hecho` if it is
-over without any, `hoy` today without any yet, `pendiente` after today.
+over without any, `hoy` today without any yet, `pendiente` after today. Unit 044: and the notes of how that day
+went (`notas`, R-150), as `Planes.notas_del_dia` gives them.
 """
 from __future__ import annotations
 
@@ -90,8 +91,10 @@ def _hecha(a: dict) -> dict[str, Any]:
             "ritmo_s_km": ritmo, "pulso_medio": a.get("avg_hr") or None}
 
 
-def semana(plan: dict, n: int, store: DataStore | None, hoy: date) -> dict[str, Any] | None:
-    """One week with its seven days (R3), or None if the plan has no week `n`."""
+def semana(plan: dict, n: int, store: DataStore | None, hoy: date,
+           notas: dict[str, list[str]] | None = None) -> dict[str, Any] | None:
+    """One week with its seven days (R3) and the notes of each day (`notas`, unit 044), or None if the plan has no
+    week `n`."""
     s = next((s for s in plan["semanas"] if s["n"] == n), None)
     if s is None:
         return None
@@ -103,6 +106,7 @@ def semana(plan: dict, n: int, store: DataStore | None, hoy: date) -> dict[str, 
         hechas = [_hecha(a) for a in _actividades(store, dia, dia)] if dia <= hoy else []
         estado = "hecho" if hechas else ("no_hecho" if dia < hoy else ("hoy" if dia == hoy else "pendiente"))
         dias.append({"fecha": dia.isoformat(), "estado": estado, "actividades": hechas,
+                     "notas": list((notas or {}).get(dia.isoformat(), [])),
                      "sesiones": [{"titulo": x["titulo"], "bloques": x["bloques"], "clave": x["clave"]}
                                   for x in plan["sesiones"] if x["fecha"] == dia.isoformat()]})
     return {**resumen, "dias": dias}

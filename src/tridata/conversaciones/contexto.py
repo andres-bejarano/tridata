@@ -15,6 +15,10 @@ the race nutrition) and its incidents. The fixed part is the same for the four r
 goes after the cache mark (`conversaciones/papeles.py`). The trainings carry their id, so a role can open their laps
 (`abrir_actividad`): the laps never go here (S-54).
 
+Unit 044 (REC-24, R-149 · G-46): "incidencias" carries the open incidents of every plan, always, and the closed ones of
+the plan in course, each one with its state, its visits to the physio or the doctor and its lesson (the ones of the
+.md, as before: date and text); and the plan carries the notes of each day (`notas_del_dia`).
+
 None of it carries the hour: with the same data it is the same text byte to byte, so every conversation shares the
 cache (R10). It changes only when a datum changes (a food, a weight, a sync) or the day does. The line «Ve tus …,
 hasta hoy 9:42» (R-115) goes apart (`linea`). Read only: nothing here writes.
@@ -37,7 +41,7 @@ from ..nutricion.asistente import texto_acciones
 from ..nutricion.peso import RegistroPeso
 from ..nutricion.registro import RegistroComidas
 from ..ia.modelos import nombre_de
-from ..plan import Planes
+from ..plan import ABIERTA, Planes
 from ..plan import semanas as semanas_del_plan
 from ..storage import DataStore
 from ..sync import ALL_SPORT_TYPES, CYCLING_TYPES, RUNNING_TYPES, SWIMMING_TYPES
@@ -57,7 +61,9 @@ kcal, peso, pasos, pulso en reposo, sueño, HRV, entrenos con su id y carga); "s
 semanas; "ajustes", sus objetivos de hoy; "carreras", sus carreras; "pulso", su frecuencia cardiaca máxima, de reposo \
 y sus zonas, y de dónde salen; "plan", su plan de entrenamiento en curso (sus carreras con su objetivo, sus semanas \
 con lo previsto en segundos y lo hecho según Garmin, sus sesiones por día con sus bloques y la nutrición en carrera); \
-"incidencias", sus molestias y lesiones apuntadas en el plan.
+"incidencias", sus molestias y lesiones apuntadas en el plan: las abiertas (estado abierta) siguen ahí, tenlas en \
+cuenta antes de proponerle cualquier sesión; las cerradas de su plan en curso, con su lección; cada una con sus \
+visitas al fisio o al médico (fecha, quién y qué le dijo); las que no dicen estado vienen de su .md.
 
 Cómo responder:
 - En español, de tú, breve y concreto, con sus números reales. En texto plano: sin Markdown (nada de asteriscos, \
@@ -68,7 +74,8 @@ almohadillas ni tablas); listas cortas con guiones si hacen falta.
 - No eres médico: ante un valor médico fuera de rango o un síntoma, explícalo con prudencia y recomienda consultarlo \
 con su médico.
 - Cambios: si Andrés pide cambiar algo de sus datos, o le propones un cambio concreto (apuntar o quitar algo, el \
-objetivo o los pasos de un día, un ajuste, una carrera, el peso de un día, una receta o un ingrediente), usa la \
+objetivo o los pasos de un día, un ajuste, una carrera, el peso de un día, una receta o un ingrediente, una incidencia \
+o una nota de cómo fue un entreno), usa la \
 herramienta proponer_cambio con una acción de la lista de abajo; un cambio por llamada. La app le enseña una tarjeta \
 «Voy a …» que él confirma o descarta: nunca digas que ya está hecho. Lo que no esté en la lista, dile dónde se hace.
 - Título: en el primer mensaje de una conversación, llama también a poner_titulo con un título corto del tema.
@@ -175,8 +182,26 @@ def plan_en_curso(planes: Planes | None, store: DataStore | None, hoy: date) -> 
         "nutricion": [{"producto": n["producto"], "pauta": n["pauta"]} for n in plan["nutricion"]],
         "notas": [n["texto"] for n in plan["notas"] if n["tipo"] == "nota"],
     }
-    incidencias = [{"fecha": i["fecha"], "texto": i["texto"]} for i in plan["incidencias"]]
-    return _limpio(datos), incidencias
+    notas_del_dia = planes.notas_del_dia(plan["id"]) if planes is not None else {}
+    datos["notas_del_dia"] = [{"fecha": dia, "texto": texto} for dia, textos in sorted(notas_del_dia.items())
+                              for texto in textos]
+    return _limpio(datos), _incidencias(planes, plan["id"]) if planes is not None else []
+
+
+def _incidencias(planes: Planes, plan_id: int) -> list[dict]:
+    """The open incidents of every plan and the closed ones of the plan in course, the open ones first (R-149)."""
+    abiertas = [i for i in planes.abiertas() if i["plan_id"] != plan_id]
+    del_plan = planes.incidencias(plan_id)  # its open ones first
+    todas = [i for i in del_plan if i["estado"] == ABIERTA] + abiertas + [i for i in del_plan if i["estado"] != ABIERTA]
+    salida = []
+    for i in todas:
+        if i["importada"]:  # the ones of the .md, as before (unit 041)
+            salida.append({"fecha": i["desde"], "texto": i["texto"]})
+            continue
+        salida.append(_limpio({"fecha": i["desde"], "texto": i["texto"], "zona": i["zona"], "lado": i["lado"],
+                               "estado": i["estado"], "visitas": i["visitas"], "leccion": i["leccion"],
+                               "cerrada": i["cerrada"]}))
+    return salida
 
 
 def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, store: DataStore | None,

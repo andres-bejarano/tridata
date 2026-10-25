@@ -17,9 +17,15 @@
                                       here, G-55); 422 with why if it cannot be sent (a block it cannot read, a day
                                       that is over), 404 without that session
     GET  /api/plan/sesion/ID.fit      unit 042: the session as a FIT workout file, made here (R-159); 422, 404 as above
+    GET  /api/plan/incidencias        unit 044: {plan: {id, nombre} | None, incidencias}: the incidents of that plan
+                                      (?id= too), the open ones first, with their visits and lesson (R-147)
+    POST /api/plan/incidencia/ID/cerrar  unit 044: {leccion}: closes it by hand with its lesson (R-148) and answers
+                                      like GET /api/plan/incidencias; 400 without a lesson, 404 without it, 409 closed
 
 Unit 042: each day of GET /api/plan/semana/N also brings `reloj`, one per session of `sesiones` and in its order:
 {id, estado: "al_dia" | "cambiada" | None, enviada}, whether it is in the watch as it is now.
+Unit 044: each day also brings its `notas` (how it went, R-150), and GET /api/plan its `abiertas`, how many incidents
+are open («⚠️ Incidencias (1)»).
 
 The proposals live only in memory until confirmed (the last few). The spending of every call to the AI goes to the
 month's cap as «importar plan» (`Conversaciones.apuntar_gasto`). Nothing here logs a text of the plan (R9).
@@ -44,7 +50,7 @@ from ..conversaciones import TOPE_DOLARES_MES, Conversaciones
 from ..fitness import detalle_actividad
 from ..ia.plan import ErrorPlan
 from ..nutricion.ajustes import Ajustes
-from ..plan import Planes, semanas
+from ..plan import ABIERTA, Planes, semanas
 from ..plan.acciones import tarjeta_garmin
 from ..plan.importar import confirmar, proponer
 from ..plan.markdown import escribir
@@ -90,7 +96,10 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
     def _vista(plan: dict | None) -> dict[str, Any]:
         dia = hoy()
         en_curso = planes.en_curso(dia)
-        return {"hoy": dia.isoformat(), "plan": semanas.vista(plan, store, dia) if plan is not None else None,
+        vista = semanas.vista(plan, store, dia) if plan is not None else None
+        if plan is not None and vista is not None:
+            vista["abiertas"] = len([i for i in planes.incidencias(plan["id"]) if i["estado"] == ABIERTA])
+        return {"hoy": dia.isoformat(), "plan": vista,
                 "planes": [{"id": p["id"], "nombre": p["nombre"], "en_curso": p["id"] == en_curso}
                            for p in planes.lista()]}
 
@@ -101,7 +110,7 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         return JSONResponse(await run_in_threadpool(_vista, plan))
 
     def _semana(plan: dict, n: int) -> dict[str, Any] | None:
-        vista = semanas.semana(plan, n, store, hoy())
+        vista = semanas.semana(plan, n, store, hoy(), notas=planes.notas_del_dia(plan["id"]))
         if vista is None:
             return None
         reloj = planes.sesiones_reloj(plan["id"])  # the same order as plan["sesiones"]
@@ -115,6 +124,31 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         if vista is None:
             return _error("Esa semana no está en el plan.", 404)
         return JSONResponse(vista)
+
+    def _incidencias(plan: dict | None) -> dict[str, Any]:
+        if plan is None:
+            return {"plan": None, "incidencias": []}
+        return {"plan": {"id": plan["id"], "nombre": plan["nombre"]}, "incidencias": planes.incidencias(plan["id"])}
+
+    async def ver_incidencias(request: Request) -> Response:
+        plan, falta = await run_in_threadpool(_plan_pedido, request)
+        if falta:
+            return _error(NO_ESTA, 404)
+        return JSONResponse(await run_in_threadpool(_incidencias, plan))
+
+    async def cerrar_incidencia(request: Request) -> Response:
+        ident = request.path_params["id"]
+        incidencia = await run_in_threadpool(planes.incidencia, ident)
+        if incidencia is None:
+            return _error("Esa incidencia ya no está en tu plan.", 404)
+        if incidencia["estado"] != ABIERTA:
+            return _error("Esa incidencia ya está cerrada.", 409)
+        leccion = (await _cuerpo(request) or {}).get("leccion")
+        leccion = " ".join(leccion.split()) if isinstance(leccion, str) else ""
+        if not leccion:
+            return _error("Escribe la lección que te llevas para cerrarla.", 400)
+        await run_in_threadpool(planes.cerrar_incidencia, ident, leccion, hoy())
+        return JSONResponse(await run_in_threadpool(lambda: _incidencias(planes.leer(incidencia["plan_id"]))))
 
     async def tarjeta_reloj(request: Request) -> Response:
         ident = request.path_params["id"]
@@ -214,4 +248,6 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         Route("/api/plan/{id:int}.md", bajar),
         Route("/api/plan/sesion/{id:int}/garmin", tarjeta_reloj, methods=["POST"]),
         Route("/api/plan/sesion/{id:int}.fit", bajar_fit),
+        Route("/api/plan/incidencias", ver_incidencias),
+        Route("/api/plan/incidencia/{id:int}/cerrar", cerrar_incidencia, methods=["POST"]),
     ]

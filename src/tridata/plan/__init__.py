@@ -10,7 +10,7 @@ sections (`plan/markdown.py`):
   when importing is kept, «hecho según el plan» (`hecho_plan_s`, `hecho_plan_km`), and it wins.
 - `plan_sesion`: a planned session of one day, its blocks as lines of text («15' a 5:45»).
 - `plan_nutricion`: the race nutrition (product and its schedule).
-- `plan_incidencia`: the incidents of the .md, read only (REC-24 will make them live).
+- `plan_incidencia`: the incidents, the ones of the .md (read only) and, since unit 044, the live ones.
 - `plan_nota`: what fits nowhere, with its text as it was (`tipo` "nota"), and the lines of the comparison with
   another year (`tipo` "comparativa").
 
@@ -21,6 +21,14 @@ Unit 042 (REC-26): a session sent to the watch keeps its `garmin_workout_id` and
 R-160), when it was sent (`garmin_enviada`) and what was sent (`garmin_texto`, «título: bloque · bloque»), so the plan
 says «en tu Garmin» or that it changed since. A session is addressed by its `rowid` (`sesion`, `sesiones_reloj`).
 `garmin()` is the logged-in Garmin client (`plan.reloj.cliente_garmin`, looked up when it is called).
+
+Unit 044 (REC-24, R-145..R-150): an incident comes alive. Opened (only from a confirmed card, `plan.acciones`) it
+keeps its zone, side, since when and what happened (`zona`, `lado`, `que_paso`, `estado` "abierta"), and its row of
+`plan_incidencia` gets the text «zona lado: qué pasó», so the .md writes it among the incidents as before; its
+visits to the physio or the doctor go to `plan_visita` (date, who, what they said); closing it keeps its lesson and
+the day (`leccion`, `cerrada`). The incidents of the .md have no state: they are history, and are shown as closed
+without a lesson (`importada`). The notes of a day («FC alta para el ritmo») go to `plan_nota_dia` and are shown in
+what was done that day (`plan/semanas.py`). `leer` gives the incidents as before (apartado, fecha, texto).
 """
 from __future__ import annotations
 
@@ -84,6 +92,19 @@ CREATE TABLE IF NOT EXISTS plan_incidencia (
     fecha TEXT,
     texto TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS plan_visita (
+    incidencia INTEGER NOT NULL,
+    fecha TEXT NOT NULL,
+    quien TEXT NOT NULL,
+    que_dijo TEXT NOT NULL,
+    creada TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS plan_nota_dia (
+    plan_id INTEGER NOT NULL REFERENCES plan(id),
+    fecha TEXT NOT NULL,
+    texto TEXT NOT NULL,
+    creada TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS plan_nota (
     plan_id INTEGER NOT NULL REFERENCES plan(id),
     orden INTEGER NOT NULL,
@@ -107,6 +128,10 @@ _BOOLEANOS = {("plan_carrera", "principal"), ("plan_sesion", "clave")}
 # unit 042: the columns of a session sent to the watch, added to an older base without them
 _RELOJ = (("garmin_workout_id", "INTEGER"), ("garmin_schedule_id", "INTEGER"), ("garmin_enviada", "TEXT"),
           ("garmin_texto", "TEXT"))
+# unit 044: the columns of a live incident, added to an older base without them
+_VIVA = (("zona", "TEXT"), ("lado", "TEXT"), ("que_paso", "TEXT"), ("estado", "TEXT"), ("leccion", "TEXT"),
+         ("cerrada", "TEXT"), ("abierta", "TEXT"))
+ABIERTA, CERRADA = "abierta", "cerrada"
 
 
 def texto_sesion(titulo: str, bloques: list[str]) -> str:
@@ -137,10 +162,11 @@ class Planes:
         self._db_path = Path(db_path)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
-            tiene = {f["name"] for f in conn.execute("PRAGMA table_info(plan_sesion)")}
-            for columna, tipo in _RELOJ:
-                if columna not in tiene:
-                    conn.execute(f"ALTER TABLE plan_sesion ADD COLUMN {columna} {tipo}")
+            for tabla, columnas in (("plan_sesion", _RELOJ), ("plan_incidencia", _VIVA)):
+                tiene = {f["name"] for f in conn.execute(f"PRAGMA table_info({tabla})")}
+                for columna, tipo in columnas:
+                    if columna not in tiene:
+                        conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -244,4 +270,93 @@ class Planes:
         return reloj.cliente_garmin()
 
 
-__all__ = ["Planes", "texto_sesion"]
+    # -- unit 044: the live incidents and the notes of a day ---------------------------------------------------------
+
+    def abrir_incidencia(self, plan_id: int, zona: str, lado: str | None, desde: date, que_paso: str,
+                         ahora: datetime) -> int:
+        """Opens an incident in that plan and returns its id (only from a confirmed card, R-145)."""
+        texto = f"{titulo_incidencia(zona, lado)}: {que_paso}"
+        with self._connect() as conn:
+            fila = conn.execute("SELECT MAX(apartado) FROM plan_incidencia WHERE plan_id = ?", (plan_id,)).fetchone()
+            apartado = fila[0]
+            if apartado is None:
+                (apartados,) = conn.execute("SELECT apartados FROM plan WHERE id = ?", (plan_id,)).fetchone()
+                apartado = max(len(json.loads(apartados)) - 1, 0)
+            (orden,) = conn.execute("SELECT COALESCE(MAX(orden), -1) + 1 FROM plan_incidencia WHERE plan_id = ?",
+                                    (plan_id,)).fetchone()
+            cursor = conn.execute(
+                "INSERT INTO plan_incidencia (plan_id, orden, apartado, fecha, texto, zona, lado, que_paso, estado, "
+                "abierta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (plan_id, orden, apartado, desde.isoformat(), texto, zona, lado, que_paso, ABIERTA,
+                 ahora.isoformat(timespec="seconds")))
+            return int(cursor.lastrowid or 0)
+
+    def anadir_visita(self, ident: int, fecha: date, quien: str, que_dijo: str, ahora: datetime) -> None:
+        """A visit to the physio or the doctor of that incident (R-146)."""
+        with self._connect() as conn:
+            conn.execute("INSERT INTO plan_visita (incidencia, fecha, quien, que_dijo, creada) VALUES (?, ?, ?, ?, ?)",
+                         (ident, fecha.isoformat(), quien, que_dijo, ahora.isoformat(timespec="seconds")))
+
+    def cerrar_incidencia(self, ident: int, leccion: str, dia: date) -> None:
+        """Closed with its lesson on that day: it is not treated as open any more (R-148)."""
+        with self._connect() as conn:
+            conn.execute("UPDATE plan_incidencia SET estado = ?, leccion = ?, cerrada = ? WHERE rowid = ?",
+                         (CERRADA, leccion, dia.isoformat(), ident))
+
+    def _incidencias(self, donde: str, valores: tuple) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            filas = conn.execute(f"SELECT rowid AS id, * FROM plan_incidencia WHERE {donde}", valores).fetchall()  # noqa: S608
+            visitas: dict[int, list[dict[str, Any]]] = {}
+            for v in conn.execute("SELECT incidencia, fecha, quien, que_dijo FROM plan_visita ORDER BY fecha, rowid"):
+                visitas.setdefault(v["incidencia"], []).append(
+                    {"fecha": v["fecha"], "quien": v["quien"], "que_dijo": v["que_dijo"]})
+        salida = []
+        for f in filas:
+            importada = f["estado"] is None
+            salida.append({
+                "id": f["id"], "plan_id": f["plan_id"], "zona": f["zona"], "lado": f["lado"],
+                "titulo": f["texto"] if importada else titulo_incidencia(f["zona"], f["lado"]),
+                "desde": f["fecha"], "que_paso": f["texto"] if importada else f["que_paso"], "texto": f["texto"],
+                "estado": CERRADA if importada else f["estado"], "leccion": f["leccion"], "cerrada": f["cerrada"],
+                "visitas": visitas.get(f["id"], []), "importada": importada})
+        abiertas = sorted((i for i in salida if i["estado"] == ABIERTA), key=lambda i: i["desde"] or "", reverse=True)
+        cerradas = sorted((i for i in salida if i["estado"] != ABIERTA),
+                          key=lambda i: i["cerrada"] or i["desde"] or "", reverse=True)
+        return abiertas + cerradas
+
+    def incidencias(self, plan_id: int) -> list[dict[str, Any]]:
+        """The incidents of a plan, the open ones first (R-147): `{id, plan_id, zona, lado, titulo, desde, que_paso,
+        texto, estado, leccion, cerrada, visitas, importada}`."""
+        return self._incidencias("plan_id = ?", (plan_id,))
+
+    def incidencia(self, ident: int) -> dict[str, Any] | None:
+        """One incident by its id, or None."""
+        return next(iter(self._incidencias("rowid = ?", (ident,))), None)
+
+    def abiertas(self) -> list[dict[str, Any]]:
+        """The open incidents of every plan."""
+        return self._incidencias("estado = ?", (ABIERTA,))
+
+    def nota_del_dia(self, plan_id: int, fecha: date, texto: str, ahora: datetime) -> None:
+        """A note of how a day went, in what was done that day (R-150)."""
+        with self._connect() as conn:
+            conn.execute("INSERT INTO plan_nota_dia (plan_id, fecha, texto, creada) VALUES (?, ?, ?, ?)",
+                         (plan_id, fecha.isoformat(), texto, ahora.isoformat(timespec="seconds")))
+
+    def notas_del_dia(self, plan_id: int) -> dict[str, list[str]]:
+        """`{fecha: [texto, …]}` of a plan, each day in the order they were written."""
+        with self._connect() as conn:
+            filas = conn.execute("SELECT fecha, texto FROM plan_nota_dia WHERE plan_id = ? ORDER BY fecha, rowid",
+                                 (plan_id,)).fetchall()
+        notas: dict[str, list[str]] = {}
+        for f in filas:
+            notas.setdefault(f["fecha"], []).append(f["texto"])
+        return notas
+
+
+def titulo_incidencia(zona: str | None, lado: str | None) -> str:
+    """«tobillo derecho, lateral»: how an incident is named."""
+    return " ".join(x for x in (zona, lado) if x)
+
+
+__all__ = ["ABIERTA", "CERRADA", "Planes", "texto_sesion", "titulo_incidencia"]

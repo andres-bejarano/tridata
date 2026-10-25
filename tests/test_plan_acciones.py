@@ -367,3 +367,163 @@ def test_el_entrenador_la_propone_y_solo_sale_al_confirmar(tmp_path, garmin):  #
     assert garmin.llamadas == []  # C-203
     assert web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta}).status_code == 200
     assert [e["workoutName"] for e in garmin.del_dia(MIERCOLES)] == ["Series de prueba 3×2000"]
+
+
+# -- unit 044 · R1, R2, R4, R6 (R-145..R-148, R-150 · C-187, C-188, C-190, C-192, C-204): incidents and notes -------
+
+INCIDENCIAS = ("abrir_incidencia", "anadir_visita", "cerrar_incidencia", "nota_del_dia")
+TOBILLO = {"accion": "abrir_incidencia", "objeto": "tobillo", "campo": "derecho, lateral", "desde": date(2026, 10, 20),
+           "texto": "molestia inventada en el lateral al acabar el rodaje"}
+VISITA = {"accion": "anadir_visita", "objeto": "tobillo", "campo": "fisio", "dia": date(2026, 10, 22),
+          "texto": "sin lesión, alta para correr"}
+
+
+def test_las_tarjetas_de_incidencias_y_notas_estan_en_el_catalogo():  # R1, R2, R4, R6
+    texto = texto_acciones()
+    for ident in INCIDENCIAS:
+        assert ident in catalogo(), ident
+        linea = next(x for x in texto.splitlines() if x.startswith(f"- {ident}:"))
+        assert not any(c.isdigit() for c in linea), linea  # no figure for Claude (G-38)
+
+
+def test_abrir_una_incidencia_solo_al_confirmar(b):  # R1 · C-187, C-204 — the criterio portante
+    t = b.uno(**TOBILLO)
+    assert t["tipo"] == "propuesta", t
+    assert t["texto"] == "Voy a abrir una incidencia: tobillo derecho, lateral, desde el 20/10"
+    assert t["antes"] is None and "molestia inventada en el lateral al acabar el rodaje" in t["despues"]
+    assert "Fitness › Plan › Incidencias" in t["donde"]
+    assert b.planes.incidencias(b.plan_id) == []  # C-204: proposing writes nothing
+    descartar(t, b.ctx)
+    assert b.planes.incidencias(b.plan_id) == []  # discarded: nothing either
+    hecho = confirmar(t, b.ctx)
+    assert "incidencia" in hecho["hecho"]
+    (i,) = b.planes.incidencias(b.plan_id)
+    assert (i["zona"], i["lado"], i["desde"], i["estado"]) == ("tobillo", "derecho, lateral", "2026-10-20", "abierta")
+    assert i["que_paso"] == "molestia inventada en el lateral al acabar el rodaje" and i["visitas"] == []
+
+
+def test_sin_decir_desde_cuando_es_desde_el_dia_que_lo_cuenta(b):  # R1
+    t = b.uno(**{**TOBILLO, "desde": None})
+    assert t["texto"] == "Voy a abrir una incidencia: tobillo derecho, lateral, desde el 22/10"
+
+
+def test_abrir_otra_vez_la_misma_se_rehace(b):  # R1 · G-41
+    t = b.uno(**TOBILLO)
+    confirmar(t, b.ctx)
+    with pytest.raises(Cambiado):
+        confirmar(t, b.ctx)  # the same card twice: it is already open
+    assert len(b.planes.incidencias(b.plan_id)) == 1
+
+
+def test_anadir_una_visita_solo_al_confirmar(b):  # R2 · C-188
+    confirmar(b.uno(**TOBILLO), b.ctx)
+    t = b.uno(**VISITA)
+    assert t["tipo"] == "propuesta", t
+    assert t["texto"] == "Voy a añadir a la incidencia: visita al fisio del 22/10 · sin lesión, alta para correr"
+    assert "tobillo derecho, lateral" in t["donde"]
+    assert t["antes"] == "sin visitas" and "22/10" in t["despues"] and "alta para correr" in t["despues"]
+    assert b.planes.incidencias(b.plan_id)[0]["visitas"] == []
+    confirmar(t, b.ctx)
+    assert b.planes.incidencias(b.plan_id)[0]["visitas"] == [
+        {"fecha": "2026-10-22", "quien": "fisio", "que_dijo": "sin lesión, alta para correr"}]
+
+
+def test_con_una_sola_abierta_no_hace_falta_nombrarla(b):  # R2
+    confirmar(b.uno(**TOBILLO), b.ctx)
+    t = b.uno(**{**VISITA, "objeto": None})
+    assert t["tipo"] == "propuesta" and "tobillo derecho, lateral" in t["donde"]
+
+
+def test_una_visita_cambiada_entre_medias_se_rehace(b):  # R2 · G-41
+    confirmar(b.uno(**TOBILLO), b.ctx)
+    t = b.uno(**VISITA)
+    (i,) = b.planes.incidencias(b.plan_id)
+    b.planes.anadir_visita(i["id"], date(2026, 10, 21), "médico", "reposo relativo inventado", AHORA)  # meanwhile
+    with pytest.raises(Cambiado) as exc:
+        confirmar(t, b.ctx)
+    assert "reposo relativo inventado" in exc.value.tarjeta["antes"]
+    assert len(b.planes.incidencias(b.plan_id)[0]["visitas"]) == 1  # nothing applied
+
+
+def test_cerrar_con_su_leccion_solo_al_confirmar(b):  # R4 · C-190
+    confirmar(b.uno(**TOBILLO), b.ctx)
+    t = b.uno(accion="cerrar_incidencia", objeto="tobillo", texto="bici nunca tras la tirada larga")
+    assert t["tipo"] == "propuesta", t
+    assert t["texto"] == "Voy a cerrar la incidencia: tobillo derecho, lateral · lección: bici nunca tras la tirada larga"
+    assert t["antes"] == "abierta desde el 20/10"
+    assert b.planes.incidencias(b.plan_id)[0]["estado"] == "abierta"
+    confirmar(t, b.ctx)
+    (i,) = b.planes.incidencias(b.plan_id)
+    assert (i["estado"], i["leccion"], i["cerrada"]) == ("cerrada", "bici nunca tras la tirada larga", "2026-10-22")
+    assert b.uno(**VISITA)["tipo"] == "no"  # closed: it is not treated as open any more (R-148)
+
+
+def test_cerrada_a_mano_entre_medias_se_rehace(b):  # R4 · G-41
+    confirmar(b.uno(**TOBILLO), b.ctx)
+    t = b.uno(accion="cerrar_incidencia", objeto="tobillo", texto="bici nunca tras la tirada larga")
+    (i,) = b.planes.incidencias(b.plan_id)
+    b.planes.cerrar_incidencia(i["id"], "otra lección inventada", HOY)  # closed by hand in Fitness › Plan
+    with pytest.raises(Cambiado):
+        confirmar(t, b.ctx)
+    assert b.planes.incidencias(b.plan_id)[0]["leccion"] == "otra lección inventada"
+
+
+def test_una_nota_del_dia_sale_en_lo_hecho(b):  # R6 · C-192
+    from tridata.plan import semanas
+
+    t = b.uno(accion="nota_del_dia", dia=date(2026, 10, 21), texto="FC alta para el ritmo, piernas del domingo")
+    assert t["tipo"] == "propuesta", t
+    assert t["texto"] == "Voy a apuntar en lo hecho del mié 21/10: FC alta para el ritmo, piernas del domingo"
+    assert b.planes.notas_del_dia(b.plan_id) == {}
+    confirmar(t, b.ctx)
+    vista = semanas.semana(b.plan(), 9, None, HOY, notas=b.planes.notas_del_dia(b.plan_id))
+    miercoles = next(d for d in vista["dias"] if d["fecha"] == "2026-10-21")
+    assert miercoles["notas"] == ["FC alta para el ritmo, piernas del domingo"]
+    otra = b.uno(accion="nota_del_dia", dia=date(2026, 10, 21), texto="dormí poco")
+    assert otra["antes"] == "FC alta para el ritmo, piernas del domingo"  # what that day already says
+
+
+@pytest.mark.parametrize(("campos", "dice"), [
+    ({**TOBILLO, "objeto": None}, "dónde"),
+    ({**TOBILLO, "texto": None}, "qué pasó"),
+    ({**TOBILLO, "desde": date(2026, 10, 30)}, "aún no ha llegado"),
+    (VISITA, "ninguna incidencia abierta"),
+    ({"accion": "cerrar_incidencia", "objeto": "tobillo", "texto": "lección"}, "ninguna incidencia abierta"),
+    ({"accion": "nota_del_dia", "dia": date(2026, 10, 30), "texto": "nota"}, "aún no ha llegado"),
+    ({"accion": "nota_del_dia", "dia": date(2026, 10, 21)}, "qué nota"),
+], ids=["sin-zona", "sin-que-paso", "desde-futuro", "visita-sin-abierta", "cerrar-sin-abierta", "nota-futura",
+        "nota-vacia"])
+def test_lo_que_no_se_puede_de_incidencias_lo_dice(b, campos, dice):  # G-40
+    t = b.uno(**campos)
+    assert t["tipo"] == "no" and dice in t["texto"].lower(), t
+
+
+@pytest.mark.parametrize(("campos", "dice"), [
+    ({**VISITA, "campo": None}, "quién"),
+    ({**VISITA, "texto": None}, "qué te dijo"),
+    ({**VISITA, "objeto": "rodilla"}, "rodilla"),
+    ({"accion": "cerrar_incidencia", "objeto": "tobillo"}, "lección"),
+], ids=["sin-quien", "sin-que-dijo", "otra-zona", "sin-leccion"])
+def test_lo_que_no_se_puede_con_una_abierta_lo_dice(b, campos, dice):  # G-40
+    confirmar(b.uno(**TOBILLO), b.ctx)
+    t = b.uno(**campos)
+    assert t["tipo"] == "no" and dice in t["texto"].lower(), t
+
+
+def test_el_fisio_la_propone_y_solo_se_abre_al_confirmar(tmp_path):  # R1 · C-187, C-204 through the web
+    from test_conversaciones_web import Web
+
+    web = Web(tmp_path)
+    Planes(web.db).crear(plan_de_prueba(), AHORA)
+    web.claude.responder("Te la apunto.", ("proponer_cambio", {
+        "accion": "abrir_incidencia", "objeto": "tobillo", "campo": "derecho, lateral", "desde": "2026-10-20",
+        "texto": "molestia inventada al acabar el rodaje"}))
+    web.claude.responder(" Confírmala si te parece.")
+    fin = web.nueva("al acabar el rodaje noto el lateral del tobillo", papel="fisio")
+    (tarjeta,) = fin["mensaje"]["tarjetas"]
+    assert tarjeta["texto"] == "Voy a abrir una incidencia: tobillo derecho, lateral, desde el 20/10"
+    assert web.cliente.get("/api/plan/incidencias").json()["incidencias"] == []  # C-204
+    r = web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta})
+    assert r.status_code == 200, r.text
+    (i,) = web.cliente.get("/api/plan/incidencias").json()["incidencias"]
+    assert (i["titulo"], i["estado"]) == ("tobillo derecho, lateral", "abierta")

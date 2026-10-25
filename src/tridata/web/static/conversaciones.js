@@ -112,9 +112,24 @@ async function cargarLista() {
   $("conv-lista").replaceChildren(...filas);
   $("conv-lista").hidden = !filas.length;
   $("conv-vacia").hidden = Boolean(filas.length);
+  pintarGasto(datos.tope);
   $("conv-tope").hidden = !datos.tope.alcanzado;
   $("conv-tope").textContent = datos.tope.alcanzado
     ? `Has llegado al tope de ${datos.tope.dolares} $ de este mes: el asistente vuelve el día 1.` : "";
+}
+
+// -- unit 039: what the month has cost of the cap ------------------------------------------------------------------
+
+function dolares(x) {
+  return x > 0 && x < 0.01 ? "< 0,01 $" : `${x.toFixed(2).replace(".", ",")} $`;
+}
+
+function pintarGasto(tope) {
+  const barra = $("conv-gasto-barra");
+  barra.max = tope.dolares;
+  barra.low = barra.high = tope.dolares * 0.8;  // from 80 %: the meter's warning colour
+  barra.value = Math.min(tope.gastado, tope.dolares);  // never past full
+  $("conv-gasto").textContent = `Gasto del mes: ${dolares(tope.gastado)} de ${tope.dolares} $`;
 }
 
 // -- what it knows of the medical documents (R4) --------------------------------------------------------------------

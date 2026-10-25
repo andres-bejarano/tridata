@@ -802,3 +802,8 @@ button.opcion-ruta { display: grid; gap: 2px; width: 100%; min-height: 48px; pad
 .opcion-ruta .suave { font-size: .88rem; }
 .subir-gpx { display: grid; gap: 4px; }
 .subir-gpx input[type="file"] { max-width: 100%; min-height: 44px; }
+/* unit 045: the strategy of a race in Fitness › Plan (painted by plan.js once the patch of the 045 is applied) */
+.carrera-plan { flex-wrap: wrap; }
+.estrategia-carrera { flex-basis: 100%; margin-top: 6px; font-size: .92rem; }
+.estrategia-carrera summary { color: var(--acento); min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.estrategia-carrera ul { margin: 0; padding-left: 1.2rem; }

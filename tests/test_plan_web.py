@@ -20,7 +20,6 @@ from test_plan_importar import FIXTURE, OrdenadorFalso, sembrar_garmin
 
 from tridata.conversaciones import Conversaciones
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, ObjetivosDia, RegistroComidas
-from tridata.plan import Planes
 from tridata.storage import DataStore
 from tridata.web import crear_app
 
@@ -190,14 +189,3 @@ def test_nada_del_plan_en_los_registros(web, caplog):  # R9 · C-177
     web.ordenador.fallar_en = "Incidencias"
     web.cliente.post("/api/plan/importar", json={"texto": texto})
     assert marcador not in caplog.text
-
-
-def test_la_estrategia_de_una_carrera_se_ve_en_fitness_plan(web):  # unit 045 · R6 (R-156, C-198)
-    vista = web.confirmar(web.importar(), {"4": "plan"})
-    plan_id = vista["plan"]["id"]
-    carrera = vista["plan"]["carreras"][-1]["nombre"]
-    assert all(c["estrategia"] == [] for c in vista["plan"]["carreras"])
-    Planes(web.db).guardar_estrategia(plan_id, carrera, ["km 0-4 · llano · 4:15/km · paso 17:00", "gel: km 6,5"])
-    carreras = web.cliente.get("/api/plan").json()["plan"]["carreras"]
-    assert carreras[-1]["estrategia"] == ["km 0-4 · llano · 4:15/km · paso 17:00", "gel: km 6,5"]
-    assert all(c["estrategia"] == [] for c in carreras[:-1])

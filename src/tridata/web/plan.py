@@ -99,8 +99,6 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         vista = semanas.vista(plan, store, dia) if plan is not None else None
         if plan is not None and vista is not None:
             vista["abiertas"] = len([i for i in planes.incidencias(plan["id"]) if i["estado"] == ABIERTA])
-            for carrera in vista["carreras"]:  # unit 045: the strategy by stretches saved with a card (R-156)
-                carrera["estrategia"] = planes.estrategia(plan["id"], carrera["nombre"])
         return {"hoy": dia.isoformat(), "plan": vista,
                 "planes": [{"id": p["id"], "nombre": p["nombre"], "en_curso": p["id"] == en_curso}
                            for p in planes.lista()]}

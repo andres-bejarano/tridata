@@ -781,3 +781,29 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .cerrar-incid { display: grid; gap: 8px; margin-top: 6px; }
 .cerrar-incid .aviso { margin: 0; }
 .nota-dia { margin: 0; font-size: .92rem; color: var(--suave); }
+
+/* unit 045: «Adjuntar ruta» and the profile of the route, on top of a conversation */
+.conv-ruta-zona { display: grid; gap: 8px; margin: 0 0 12px; }
+.conv-ruta { display: block; padding: 12px 14px; border-color: var(--acento); }
+.conv-ruta p { margin: 0; }
+.ruta-titulo { font-size: 1.02rem; overflow-wrap: anywhere; }
+.ruta-datos, .ruta-nota { font-size: .88rem; margin-top: 2px; }
+.ruta-perfil { display: block; width: 100%; height: auto; margin: 8px 0 4px; overflow: visible; }
+.ruta-subida { fill: var(--alerta-fondo); stroke: none; }
+.ruta-area { fill: var(--acento-suave); stroke: none; }
+.ruta-linea { fill: none; stroke: var(--acento); stroke-width: 1.6; stroke-linejoin: round; }
+.ruta-eje { stroke: var(--borde); stroke-width: 1; }
+.ruta-km { fill: var(--suave); font-size: 10px; }
+button.conv-adjuntar { justify-self: start; min-height: 44px; margin: 0 4px; }
+.conv-rutas { display: grid; gap: 8px; padding: 12px 14px; }
+.conv-rutas .aviso, .conv-rutas .titulo-bloque { margin: 0; }
+.lista-rutas { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+button.opcion-ruta { display: grid; gap: 2px; width: 100%; min-height: 48px; padding: 8px 12px; text-align: left; overflow-wrap: anywhere; }
+.opcion-ruta .suave { font-size: .88rem; }
+.subir-gpx { display: grid; gap: 4px; }
+.subir-gpx input[type="file"] { max-width: 100%; min-height: 44px; }
+/* unit 045: the strategy of a race in Fitness › Plan (painted by plan.js once the patch of the 045 is applied) */
+.carrera-plan { flex-wrap: wrap; }
+.estrategia-carrera { flex-basis: 100%; margin-top: 6px; font-size: .92rem; }
+.estrategia-carrera summary { color: var(--acento); min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.estrategia-carrera ul { margin: 0; padding-left: 1.2rem; }

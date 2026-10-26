@@ -277,3 +277,57 @@ class TestEntrenos:
         api.delete_workout.side_effect = GarminConnectConnectionError("500 Server Error")
         with pytest.raises(GarminWorkoutError):
             c.borrar_entreno(123)
+
+
+# ---------------------------------------------------------------------------
+# unit 045 (REC-25): the saved routes (courses) and the GPX of an activity
+# ---------------------------------------------------------------------------
+
+class TestRutas:
+    CURSOS = {"coursesForUser": [
+        {"courseId": 11, "courseName": "Ruta de prueba", "distanceInMeters": 21097.5, "elevationGainInMeters": 185.2,
+         "elevationLossInMeters": 190.4, "activityType": {"typeKey": "running"}},
+        {"courseId": 12, "courseName": "Otra de prueba", "distanceInMeters": 10000.0, "elevationGainInMeters": None,
+         "elevationLossInMeters": None},
+    ]}
+
+    def test_la_lista_de_rutas_guardadas(self, client):  # R1 · C-193
+        c, api = client
+        api.connectapi.return_value = self.CURSOS
+        assert c.rutas_guardadas() == [
+            {"id": 11, "nombre": "Ruta de prueba", "distancia_m": 21097.5, "sube_m": 185.2, "baja_m": 190.4},
+            {"id": 12, "nombre": "Otra de prueba", "distancia_m": 10000.0, "sube_m": None, "baja_m": None}]
+        api.connectapi.assert_called_once_with("/web-gateway/course/owner/")
+
+    def test_los_puntos_de_una_ruta(self, client):  # R2
+        c, api = client
+        api.connectapi.return_value = {"courseId": 11, "geoPoints": [
+            {"distance": 0.0, "elevation": 12.0, "latitude": 1.0, "longitude": 2.0, "timestamp": None},
+            {"distance": 50.0, "elevation": None, "latitude": 1.0004, "longitude": 2.0, "timestamp": None},
+        ]}
+        assert c.ruta(11) == [{"distancia_m": 0.0, "altitud_m": 12.0, "lat": 1.0, "lon": 2.0},
+                              {"distancia_m": 50.0, "altitud_m": None, "lat": 1.0004, "lon": 2.0}]
+        api.connectapi.assert_called_once_with("/course-service/course/11")
+
+    def test_el_gpx_de_una_actividad(self, client):  # R1
+        from garminconnect import Garmin
+        c, api = client
+        api.download_activity.return_value = b"<gpx/>"
+        assert c.gpx_actividad("123") == b"<gpx/>"
+        api.download_activity.assert_called_once_with("123", dl_fmt=Garmin.ActivityDownloadFormat.GPX)
+
+    def test_si_garmin_no_responde_es_un_error_de_ruta(self, client):  # R3
+        from garminconnect import GarminConnectConnectionError, GarminConnectTooManyRequestsError
+
+        from tridata.garmin_client import GarminRateLimitError, GarminRutaError
+        c, api = client
+        api.connectapi.side_effect = GarminConnectConnectionError("500 Server Error")
+        with pytest.raises(GarminRutaError):
+            c.rutas_guardadas()
+        api.connectapi.side_effect = None
+        api.connectapi.return_value = {"courseId": 11}  # no points: nothing to draw
+        with pytest.raises(GarminRutaError):
+            c.ruta(11)
+        api.download_activity.side_effect = GarminConnectTooManyRequestsError("429 Too Many Requests")
+        with pytest.raises(GarminRateLimitError):
+            c.gpx_actividad("123")

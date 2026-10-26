@@ -32,6 +32,23 @@ Unit 041 (REC-23): the team.
     PUT  /api/equipo                            {"papel", "modelo"} the model of a role, among the catalogue (R7);
                                                 anything else is 400 and nothing changes
 
+Unit 045 (REC-25): «Adjuntar ruta».
+
+    GET  /api/rutas                     {garmin: the routes saved in Garmin [{id, nombre, distancia_km, sube_m}],
+                                        actividades: what was run, on this PC [{id, nombre, fecha, distancia_km,
+                                        sube_m}], aviso: why there are no routes of Garmin (it did not answer: upload
+                                        a GPX), or None} (R1, R3)
+    POST /api/conversaciones/N/ruta     {"garmin": id} | {"actividad": id} | {"gpx": its text, "nombre"?}: the profile
+                                        of that route with the conversation ({ruta, linea}, R2), replacing the one it
+                                        had; 422 without altitude or not a GPX, 502 if Garmin did not answer, both
+                                        with `subir_gpx` (R3); 400 without a route, 404 without the conversation
+    POST /api/conversaciones/ruta       the same with {"papel"}: a conversation that starts by its route (R1)
+
+GET /api/conversaciones/N also brings its `ruta` (or None), and the line says «ruta adjunta: …». With a route, its
+profile (`plan.rutas.perfil_para_modelo`: km, altitude and stretches, and to answer the strategy by stretches, R-155)
+goes at the head of the message to the model, never in the fixed part, and never a coordinate (R4 · G-57).
+Attaching never calls the API.
+
 Every answer keeps the role and the model that gave it, and the line says the model. A role can open an activity
 (`abrir_actividad`: its laps with pace, HR, cadence and climb, by its date or its id, R4).
 
@@ -66,13 +83,27 @@ from ..ia import ErrorTranscripcion
 from ..ia.claude import CambioInterpretado
 from ..ia.conversacion import ErrorConversacion, Respuesta
 from ..nutricion.asistente import Contexto as ContextoAsistente, Peticion, proponer
+from ..nutricion.ajustes import DESDE_SIEMPRE
 from ..plan import Planes
+from ..plan import rutas as perfiles
+from ..sync import RUNNING_TYPES
 
 log = logging.getLogger(__name__)
 
 AUDIO_MAX_BYTES = 10 * 1024 * 1024
 NO_DICTADO = "El dictado no está disponible en el PC ahora mismo. Escribe la pregunta."
 SIN_TEXTO = "Te he dejado el cambio aquí abajo."
+NO_GARMIN = ("Garmin no responde ahora: sube el GPX de la ruta (en Garmin Connect o en Strava, «Exportar GPX»).")
+GPX_MAX = 10 * 1024 * 1024
+ACTIVIDADES_RUTA = 20  # the last runs offered as a route
+
+
+class _NoSale(Exception):
+    """A route that cannot be attached: its status and what Andrés is told (R3)."""
+
+    def __init__(self, estado: int, texto: str, subir_gpx: bool = True) -> None:
+        super().__init__(texto)
+        self.estado, self.texto, self.subir_gpx = estado, texto, subir_gpx
 
 
 def _error(mensaje: str, estado: int, **extra: Any) -> JSONResponse:
@@ -196,6 +227,8 @@ def rutas(conversaciones: Conversaciones, conversador: Any, medicos: Medicos, mo
             pregunta = conversaciones.anadir_mensaje(ident, "andres", texto, momento, sin_respuesta=True,
                                                      contexto_hasta=momento)
         mensaje = texto if texto is not None else peticion_de_opinion(papel)
+        ruta = conversaciones.ruta(ident)  # unit 045: its profile goes in the message, not in the fixed part (R4)
+        al_modelo = f"{perfiles.perfil_para_modelo(ruta)}\n\n{mensaje}" if ruta else mensaje
         yield _linea_json({"tipo": "inicio", "conversacion": conversaciones.conversacion(ident), "mensaje": pregunta})
         tarjetas: list[dict] = []
         primero = not antes
@@ -223,7 +256,7 @@ def rutas(conversaciones: Conversaciones, conversador: Any, medicos: Medicos, mo
         try:
             ctx = montar()
             respuesta: Respuesta | None = None
-            for evento in conversador.responder(ctx.bloques, _historial(antes, papel), mensaje, pensar=pensar,
+            for evento in conversador.responder(ctx.bloques, _historial(antes, papel), al_modelo, pensar=pensar,
                                                 al_usar=al_usar, modelo=modelo, papel=bloque(papel)):
                 if isinstance(evento, Respuesta):
                     respuesta = evento
@@ -258,7 +291,8 @@ def rutas(conversaciones: Conversaciones, conversador: Any, medicos: Medicos, mo
                  "cache_read=%d", ident, papel, respuesta.modelo, len(tarjetas), u["entrada"], u["salida"],
                  u["cache_escritura"], u["cache_lectura"])
         yield _linea_json({"tipo": "fin", "conversacion": conversaciones.conversacion(ident), "mensaje": contestado,
-                           "pregunta": pregunta, "linea": linea(ctx, momento, respuesta.modelo)})
+                           "pregunta": pregunta,
+                           "linea": linea(ctx, momento, respuesta.modelo, ruta["nombre"] if ruta else None)})
 
     def _flujo(ident: int, texto: str | None, pensar: bool, papel: str | None = None) -> StreamingResponse:
         return StreamingResponse(_conversar(ident, texto, pensar, papel), media_type="application/x-ndjson",
@@ -268,7 +302,7 @@ def rutas(conversaciones: Conversaciones, conversador: Any, medicos: Medicos, mo
         texto = cuerpo.get("texto")
         return texto.strip() if isinstance(texto, str) and texto.strip() else None
 
-    def _linea(modelo: str | None = None) -> str:
+    def _linea(modelo: str | None = None, ruta: dict | None = None) -> str:
         """The line of R5 without building the whole context: what the medical documents say now and, unit 041, the
         plan in course and its incidents, and the model."""
         estado = medicos.estado()
@@ -278,7 +312,8 @@ def rutas(conversaciones: Conversaciones, conversador: Any, medicos: Medicos, mo
         ident = planes.en_curso(hoy()) if planes is not None else None
         plan = planes.leer(ident) if planes is not None and ident is not None else None
         return linea(Contexto(bloques=(), ve=tuple(ve), aviso=estado["aviso"], plan=plan["nombre"] if plan else None,
-                              incidencias=len(plan["incidencias"]) if plan else 0), ahora(), modelo)
+                              incidencias=len(plan["incidencias"]) if plan else 0), ahora(), modelo,
+                     ruta["nombre"] if ruta else None)
 
     def _equipo() -> dict[str, Any]:
         """The team with the model of each role (R7) and the catalogue it is chosen from."""
@@ -333,8 +368,105 @@ def rutas(conversaciones: Conversaciones, conversador: Any, medicos: Medicos, mo
 
     def _vista(ident: int) -> dict[str, Any]:
         conversacion = conversaciones.conversacion(ident)
-        return {"conversacion": conversacion, "mensajes": conversaciones.mensajes(ident),
-                "linea": _linea(conversaciones.modelo_de(conversacion["papel"]))}
+        ruta = conversaciones.ruta(ident)
+        return {"conversacion": conversacion, "mensajes": conversaciones.mensajes(ident), "ruta": ruta,
+                "linea": _linea(conversaciones.modelo_de(conversacion["papel"]), ruta)}
+
+    # -- unit 045: «Adjuntar ruta» -------------------------------------------------------------------------------
+
+    def _garmin() -> Any:
+        if planes is None:
+            raise RuntimeError("no plans, no Garmin")
+        return planes.garmin()
+
+    def _corridas() -> list[dict[str, Any]]:
+        store = asistente.store
+        if store is None:
+            return []
+        hechas = [a for a in store.activities_between(DESDE_SIEMPRE, hoy())
+                  if a.get("activity_type") in RUNNING_TYPES and a.get("distance_meters")]
+        hechas.sort(key=lambda a: (a.get("activity_date") or "", a["activity_id"]), reverse=True)
+        return [{"id": a["activity_id"], "nombre": a.get("name") or "Carrera", "fecha": a.get("activity_date"),
+                 "distancia_km": round(float(a["distance_meters"]) / 1000, 1),
+                 "sube_m": round(a["elevation_gain_m"]) if a.get("elevation_gain_m") is not None else None}
+                for a in hechas[:ACTIVIDADES_RUTA]]
+
+    def _rutas() -> dict[str, Any]:
+        garmin: list[dict[str, Any]] = []
+        aviso = None
+        try:
+            garmin = [{"id": r["id"], "nombre": r["nombre"],
+                       "distancia_km": round(float(r["distancia_m"]) / 1000, 1) if r.get("distancia_m") else None,
+                       "sube_m": round(r["sube_m"]) if r.get("sube_m") is not None else None}
+                      for r in _garmin().rutas_guardadas()]
+        except Exception as exc:  # noqa: BLE001 - the unofficial way fails at times: said, and the GPX offered (R3)
+            log.warning("routes: Garmin did not answer (%s)", type(exc).__name__)
+            aviso = NO_GARMIN
+        return {"garmin": garmin, "actividades": _corridas(), "aviso": aviso}
+
+    def _de_garmin(llamada: Callable[[Any], Any]) -> Any:
+        try:
+            return llamada(_garmin())
+        except Exception as exc:  # noqa: BLE001 - as above
+            log.warning("route: Garmin did not answer (%s)", type(exc).__name__)
+            raise _NoSale(502, NO_GARMIN) from None
+
+    def _perfil(cuerpo: dict) -> dict[str, Any]:
+        """The profile of the route asked for (R1, R2), or `_NoSale` (R3). Never a coordinate in it (G-57)."""
+        gpx, garmin, actividad = cuerpo.get("gpx"), cuerpo.get("garmin"), cuerpo.get("actividad")
+        nombre = cuerpo.get("nombre") if isinstance(cuerpo.get("nombre"), str) else None
+        try:
+            if isinstance(gpx, str) and gpx.strip():
+                if len(gpx) > GPX_MAX:
+                    raise _NoSale(413, "El GPX pasa de 10 MB.")
+                fichero = nombre.rsplit("/", 1)[-1].removesuffix(".gpx").removesuffix(".GPX") if nombre else None
+                return perfiles.perfil(perfiles.puntos_gpx(gpx), perfiles.nombre_gpx(gpx) or fichero or "Ruta", "gpx")
+            if isinstance(garmin, int) and not isinstance(garmin, bool):
+                puntos = _de_garmin(lambda g: g.ruta(garmin))
+                if not nombre:
+                    nombre = next((r["nombre"] for r in _de_garmin(lambda g: g.rutas_guardadas())
+                                   if r["id"] == garmin), "Ruta de Garmin")
+                return perfiles.perfil(perfiles.puntos_garmin(puntos), nombre, "garmin")
+            if isinstance(actividad, str) and actividad.strip():
+                hecha = asistente.store.get_activity(actividad) if asistente.store is not None else None
+                if not hecha:
+                    raise _NoSale(404, "Esa actividad no está en el PC.", subir_gpx=False)
+                datos = _de_garmin(lambda g: g.gpx_actividad(actividad))
+                return perfiles.perfil(perfiles.puntos_gpx(datos), hecha.get("name") or "Carrera", "actividad")
+        except perfiles.SinAltitud:
+            raise _NoSale(422, perfiles.SIN_ALTITUD) from None
+        except perfiles.RutaMal as exc:
+            raise _NoSale(422, f"{exc} Prueba con el GPX de la ruta.") from None
+        raise _NoSale(400, "Elige una ruta de Garmin, una actividad o sube un GPX.", subir_gpx=False)
+
+    def _adjuntar(ident: int | None, cuerpo: dict) -> dict[str, Any]:
+        perfil = _perfil(cuerpo)
+        if ident is None:
+            papel = _papel_pedido(cuerpo, POR_DEFECTO)
+            if papel is None:
+                raise _NoSale(400, "Elige con quién quieres hablar: Entrenador, Fisio, Nutricionista o Asistente.",
+                              subir_gpx=False)
+            ident = conversaciones.crear(titulo_provisional(perfil["nombre"]), ahora(), papel)["id"]
+            log.info("conversation %d: created for %s by a route", ident, papel)
+        conversaciones.adjuntar_ruta(ident, perfil, ahora())
+        log.info("conversation %d: route attached (%s, %d stretches)", ident, perfil["fuente"], len(perfil["tramos"]))
+        return {**_vista(ident), "ruta": perfil}
+
+    async def ver_rutas(request: Request) -> Response:
+        return JSONResponse(await run_in_threadpool(_rutas))
+
+    async def adjuntar(request: Request) -> Response:
+        ident = request.path_params.get("id")
+        cuerpo = await _cuerpo(request)
+        if ident is not None:
+            try:
+                await run_in_threadpool(conversaciones.conversacion, ident)
+            except NoEsta:
+                return _error("Esa conversación ya no está.", 404)
+        try:
+            return JSONResponse(await run_in_threadpool(_adjuntar, ident, cuerpo))
+        except _NoSale as exc:
+            return _error(exc.texto, exc.estado, subir_gpx=exc.subir_gpx)
 
     async def ver_equipo(request: Request) -> Response:
         return JSONResponse(await run_in_threadpool(_equipo))
@@ -456,6 +588,9 @@ def rutas(conversaciones: Conversaciones, conversador: Any, medicos: Medicos, mo
         Route("/api/conversaciones/medicos/releer", releer_medicos, methods=["POST"]),
         Route("/api/conversaciones/dictado", dictado, methods=["POST"]),
         Route("/api/conversaciones/mensaje/{id:int}/tarjetas", poner_tarjetas, methods=["POST"]),
+        Route("/api/rutas", ver_rutas),
+        Route("/api/conversaciones/ruta", adjuntar, methods=["POST"]),
+        Route("/api/conversaciones/{id:int}/ruta", adjuntar, methods=["POST"]),
         Route("/api/conversaciones/{id:int}", ver),
         Route("/api/conversaciones/{id:int}/mensajes", enviar, methods=["POST"]),
         Route("/api/conversaciones/{id:int}/opinion", opinion, methods=["POST"]),

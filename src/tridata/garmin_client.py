@@ -49,6 +49,10 @@ class GarminWorkoutError(RuntimeError):
     """Garmin Connect refused a workout, or did not answer (unit 042, R-159): the card offers the file instead."""
 
 
+class GarminRutaError(RuntimeError):
+    """Garmin Connect did not give a route or the GPX of an activity (unit 045, R-153): the app offers the GPX."""
+
+
 def _es_429(exc: BaseException | None) -> bool:
     """Whether `exc`, or what caused it, is Garmin limiting the requests (a 429)."""
     vistos = 0
@@ -426,8 +430,9 @@ class GarminClient:
 
     # -- Workouts to the watch (unit 042, REC-26) ----------------------------
 
-    def _workout_call(self, what: str, call: Any, *args: Any, missing_ok: bool = False) -> Any:
-        """One call of the workout service: a 429 is `GarminRateLimitError`, anything else `GarminWorkoutError`;
+    def _workout_call(self, what: str, call: Any, *args: Any, missing_ok: bool = False,
+                      error: type[RuntimeError] = GarminWorkoutError) -> Any:
+        """One call of the workout service: a 429 is `GarminRateLimitError`, anything else `error`;
         with `missing_ok`, a 404 (removed by hand in Garmin Connect) is nothing."""
         api = self.api  # GarminAuthError without login
         try:
@@ -438,7 +443,7 @@ class GarminClient:
             if missing_ok and "404" in str(exc):
                 logger.info("Garmin Connect: %s, it was not there any more", what)
                 return None
-            raise GarminWorkoutError(f"Garmin Connect could not {what} ({type(exc).__name__})") from exc
+            raise error(f"Garmin Connect could not {what} ({type(exc).__name__})") from exc
 
     def subir_entreno(self, entreno: dict[str, Any]) -> int:
         """Upload a workout (the JSON of `plan.reloj.a_garmin`) to the library; its `workoutId`."""
@@ -469,6 +474,40 @@ class GarminClient:
     def bajar_fit(self, workout_id: int) -> bytes:
         """The FIT file of a workout of the library, as Garmin Connect gives it."""
         return bytes(self._workout_call("download the workout", lambda api, w: api.download_workout(w), workout_id))
+
+    # -- Routes (unit 045, REC-25) ----------------------------------------------------------------------------------
+    # The library has no call for the saved routes (courses): the endpoints of the web, through `connectapi`
+    # (tried on 2026-10-25). The unofficial way: a 429 is `GarminRateLimitError`, anything else `GarminRutaError`.
+
+    def rutas_guardadas(self) -> list[dict[str, Any]]:
+        """The routes saved in Garmin Connect: `[{id, nombre, distancia_m, sube_m, baja_m}]`."""
+        raw = self._workout_call("list the routes", lambda api: api.connectapi("/web-gateway/course/owner/"),
+                                 error=GarminRutaError)
+        if isinstance(raw, dict):
+            raw = raw.get("coursesForUser", next((v for v in raw.values() if isinstance(v, list)), []))
+        if not isinstance(raw, list):
+            raise GarminRutaError("Garmin Connect did not give the list of routes")
+        return [{"id": int(c["courseId"]), "nombre": str(c.get("courseName") or "Ruta"),
+                 "distancia_m": c.get("distanceInMeters"), "sube_m": c.get("elevationGainInMeters"),
+                 "baja_m": c.get("elevationLossInMeters")}
+                for c in raw if isinstance(c, dict) and c.get("courseId") is not None]
+
+    def ruta(self, course_id: int) -> list[dict[str, Any]]:
+        """The points of a saved route: `[{distancia_m, altitud_m, lat, lon}]` (the altitude None where it has none).
+        Latitude and longitude stay on this PC (G-57): `plan.rutas` keeps only the profile."""
+        raw = self._workout_call("get the route", lambda api, i: api.connectapi(f"/course-service/course/{i}"),
+                                 int(course_id), error=GarminRutaError)
+        puntos = raw.get("geoPoints") if isinstance(raw, dict) else None
+        if not puntos:
+            raise GarminRutaError("Garmin Connect gave the route without its points")
+        return [{"distancia_m": p.get("distance"), "altitud_m": p.get("elevation"), "lat": p.get("latitude"),
+                 "lon": p.get("longitude")} for p in puntos if isinstance(p, dict)]
+
+    def gpx_actividad(self, activity_id: str) -> bytes:
+        """The GPX of an activity already done, as Garmin Connect gives it."""
+        return bytes(self._workout_call(
+            "download the GPX", lambda api, i: api.download_activity(i, dl_fmt=Garmin.ActivityDownloadFormat.GPX),
+            activity_id, error=GarminRutaError))
 
     def iter_days(self, start: date, end: date):
         """Yield each date from start to end inclusive."""

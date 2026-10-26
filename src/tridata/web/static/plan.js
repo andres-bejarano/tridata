@@ -138,7 +138,10 @@ function filaCarrera(c) {
       el("strong", { textContent: c.fecha ? `${c.nombre} · ${diaMes(c.fecha)}` : c.nombre }),
       c.objetivo ? el("small", { className: "suave", textContent: `${c.principal ? "objetivo principal" : "objetivo"} ${c.objetivo}` }) : null),
     el("span", { className: `estado-carrera${hecho ? " bien" : ""}`, textContent: estado,
-      title: c.principal ? "Carrera principal" : "" }));
+      title: c.principal ? "Carrera principal" : "" }),
+    c.estrategia?.length ? el("details", { className: "estrategia-carrera" },
+      el("summary", { textContent: "Estrategia por tramos" }),
+      el("ul", {}, ...c.estrategia.map((linea) => el("li", { textContent: linea })))) : null);
 }
 
 function hechoCorto(h) {

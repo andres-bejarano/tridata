@@ -8,6 +8,7 @@ until the card is confirmed with /api/asistente/confirmar, and then Fitness › 
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 
 import pytest
@@ -527,3 +528,62 @@ def test_el_fisio_la_propone_y_solo_se_abre_al_confirmar(tmp_path):  # R1 · C-1
     assert r.status_code == 200, r.text
     (i,) = web.cliente.get("/api/plan/incidencias").json()["incidencias"]
     assert (i["titulo"], i["estado"]) == ("tobillo derecho, lateral", "abierta")
+
+
+# -- unit 045 · R5, R6 (R-155, R-156, C-197, C-198, G-55): «Voy a guardar en el plan: estrategia de …» --------------
+
+ESTRATEGIA = ("km 0-4 · llano · 4:15/km · paso 17:00 | km 4-6,5 · subida · por esfuerzo, ~4:40 · paso 28:40 | "
+              "km 6,5-20 · bajada y llano · 4:10/km · paso 1:24:55 | gel: km 6,5, coronando")
+LINEAS_ESTRATEGIA = ["km 0-4 · llano · 4:15/km · paso 17:00", "km 4-6,5 · subida · por esfuerzo, ~4:40 · paso 28:40",
+                     "km 6,5-20 · bajada y llano · 4:10/km · paso 1:24:55", "gel: km 6,5, coronando"]
+
+
+def test_la_estrategia_esta_en_el_catalogo_sin_cifras():  # R6 · G-38
+    assert "guardar_estrategia" in catalogo()
+    linea = next(x for x in texto_acciones().splitlines() if x.startswith("- guardar_estrategia:"))
+    assert " | " in linea and not re.search(r"\d", linea)  # flat (bug 036) and no figure for Claude (G-38)
+
+
+def test_guardar_la_estrategia_solo_al_confirmar(b):  # R6 · C-198, G-55
+    t = b.uno(accion="guardar_estrategia", objeto="maraton de ejemplo", texto=ESTRATEGIA)
+    assert t["tipo"] == "propuesta", t
+    assert t["texto"] == "Voy a guardar en el plan: estrategia de Maratón de ejemplo (3 tramos, 1 gel)"
+    assert t["lineas"] == LINEAS_ESTRATEGIA  # the table, one line per stretch
+    assert t["antes"] is None
+    assert "Maratón de ejemplo" in t["donde"] and "Fitness › Plan" in t["donde"]
+    assert b.planes.estrategia(b.plan_id, "Maratón de ejemplo") == []  # proposing writes nothing
+    descartar(t, b.ctx)
+    assert b.planes.estrategia(b.plan_id, "Maratón de ejemplo") == []
+    hecho = confirmar(t, b.ctx)
+    assert "Maratón de ejemplo" in hecho["hecho"]
+    assert b.planes.estrategia(b.plan_id, "Maratón de ejemplo") == LINEAS_ESTRATEGIA
+    # in that race of the plan, and only there (read with `Planes.estrategia`: `leer` gives the races as before)
+    assert b.planes.estrategia(b.plan_id, "10K de ejemplo") == []
+    carrera = next(c for c in b.plan()["carreras"] if c["nombre"] == "Maratón de ejemplo")
+    assert carrera["objetivo"] == "3:05"  # nothing else of the race changes
+
+
+def test_otra_estrategia_dice_la_de_antes_y_la_sustituye(b):  # R6 · G-41
+    confirmar(b.uno(accion="guardar_estrategia", objeto="Maratón de ejemplo", texto=ESTRATEGIA), b.ctx)
+    otra = b.uno(accion="guardar_estrategia", objeto="Maratón de ejemplo", texto="km 0-20 · todo · 4:15/km · paso 1:25:00")
+    assert otra["tipo"] == "propuesta" and otra["antes"] == " | ".join(LINEAS_ESTRATEGIA)
+    igual = b.uno(accion="guardar_estrategia", objeto="Maratón de ejemplo", texto=ESTRATEGIA)
+    assert igual["tipo"] == "no" and "ya" in igual["texto"].lower()
+    # saved by another card in between: the one Andrés saw is redone, nothing applied
+    import sqlite3
+    with sqlite3.connect(b.db) as conn:
+        conn.execute("UPDATE plan_carrera SET estrategia = ? WHERE nombre = 'Maratón de ejemplo'",
+                     ('["km 0-20 · otra"]',))
+    with pytest.raises(Cambiado):
+        confirmar(otra, b.ctx)
+    assert b.planes.estrategia(b.plan_id, "Maratón de ejemplo") == ["km 0-20 · otra"]
+
+
+@pytest.mark.parametrize(("campos", "dice"), [
+    ({"accion": "guardar_estrategia", "objeto": "carrera que no está", "texto": ESTRATEGIA}, "no está en tu plan"),
+    ({"accion": "guardar_estrategia", "texto": ESTRATEGIA}, "qué carrera"),
+    ({"accion": "guardar_estrategia", "objeto": "Maratón de ejemplo"}, "qué estrategia"),
+], ids=["sin-carrera", "sin-nombre", "sin-texto"])
+def test_lo_que_no_se_puede_de_la_estrategia_lo_dice(b, campos, dice):  # G-40
+    t = b.uno(**campos)
+    assert t["tipo"] == "no" and dice in t["texto"].lower(), t

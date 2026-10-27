@@ -10,6 +10,9 @@ of the settings: 10,000 in total, the missing ones are assumed, C-13). If Garmin
 lower than what the running alone estimates (the «⚠ incompleto» rule of the exporter), those steps
 are not used and it is said. Garmin's own total kcal of the day is never used here (that is the
 close of the day, unit 007 of the roadmap).
+
+Unit 047: the planned training may be several (a list); every one adds. The breakdown keeps `previsto` (the
+first or None) and `previsto_kcal` (the sum) as before, and adds `previstos` (the list).
 """
 from __future__ import annotations
 
@@ -48,16 +51,32 @@ def kcal_previstas(actividad: Mapping[str, Any], minutos: Any) -> float:
     return round(float(actividad.get("calories") or 0) * n / duracion, 1)
 
 
+def _previstos(previsto: Mapping[str, Any] | Iterable[Mapping[str, Any]] | None) -> list[dict]:
+    """The planned trainings as a list: one object (as before unit 047), a list, or None."""
+    if not previsto:
+        return []
+    if isinstance(previsto, Mapping):
+        return [dict(previsto)]
+    return [dict(p) for p in previsto]
+
+
+def nombres_juntos(nombres: list[str]) -> str:
+    """«Natación», «Natación y Bici», «Natación, Bici y Carrera»."""
+    return nombres[0] if len(nombres) == 1 else f"{', '.join(nombres[:-1])} y {nombres[-1]}"
+
+
 def estimar_gasto(
     config: ConfigGasto, stats: Mapping[str, Any] | None, actividades: Iterable[Mapping[str, Any]],
-    previsto: Mapping[str, Any] | None = None, *, cuando: str = "de hoy",
+    previsto: Mapping[str, Any] | Iterable[Mapping[str, Any]] | None = None, *, cuando: str = "de hoy",
 ) -> dict:
     """Expenditure of the day with its breakdown and warnings.
 
     `config` is the `ConfigGasto` of the day (basal of `basal_del_dia`, planned or default steps,
     kcal per step in force). `stats` and `actividades` are the `DataStore` payloads of that day.
-    `previsto` is the planned training saved in `objetivo_dia` (with its scaled `kcal`).
+    `previsto` is the planned training saved in `objetivo_dia` (with its scaled `kcal`): one, a list (unit 047)
+    or None.
     """
+    previstos = _previstos(previsto)
     lista: list[dict] = [dict(a) for a in actividades]
     avisos: list[str] = []
     agregados = MarkdownExporter._daily_activity_aggregates(lista)
@@ -83,7 +102,7 @@ def estimar_gasto(
                        "minutos": _minutos(a), "kcal": 0.0 if sin_kcal else round(float(a["calories"]), 1),
                        "sin_kcal": sin_kcal})
     hecho_kcal = round(sum(float(h["kcal"]) for h in hechos), 1)
-    previsto_kcal = round(float(previsto["kcal"]), 1) if previsto else 0.0
+    previsto_kcal = round(sum(float(p["kcal"]) for p in previstos), 1)
     pasos_kcal = round(pasos * config.kcal_por_paso, 1)
 
     hay_datos = stats is not None or bool(lista)
@@ -111,7 +130,8 @@ def estimar_gasto(
             "pasos_kcal": pasos_kcal,
             "entreno_hecho": hechos,
             "entreno_hecho_kcal": hecho_kcal,
-            "previsto": dict(previsto) if previsto else None,
+            "previsto": previstos[0] if previstos else None,
+            "previstos": previstos,
             "previsto_kcal": previsto_kcal,
         },
         "avisos": avisos,
@@ -137,7 +157,9 @@ def gasto_hecho(estimado: Mapping[str, Any], *, cuando: str = "de hoy") -> dict:
     elif d["pasos_garmin"] is None:
         aviso = f"Garmin aún no trae los pasos {cuando}: lo hecho no cuenta pasos"
     kcal = d["basal_kcal"] + (pasos or 0) * d["kcal_por_paso"] + d["entreno_hecho_kcal"]
-    previsto = d.get("previsto") or {}
+    previstos = d.get("previstos") or ([d["previsto"]] if d.get("previsto") else [])
+    nombres = [p.get("nombre") or "entreno" for p in previstos]
     return {"kcal": round(min(kcal, estimado["kcal"]), 1), "pasos_hechos": pasos, "pasos_del_dia": d["pasos_del_dia"],
             "entreno_hecho_kcal": d["entreno_hecho_kcal"], "previsto_kcal": d["previsto_kcal"],
-            "previsto_nombre": previsto.get("nombre"), "aviso": aviso}
+            "previsto_nombre": (previstos[0].get("nombre") if len(previstos) == 1 else nombres_juntos(nombres))
+            if previstos else None, "aviso": aviso}

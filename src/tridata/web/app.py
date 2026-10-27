@@ -33,7 +33,11 @@
                                   "previsto"?: {"actividad_id", "minutos"} | null}; changes `objetivo_dia` of that
                                   day, never the plan (R-16, R-18), and returns it recomputed. Unit 034: a past day
                                   or a date that is not one is 422 and changes nothing. Unit 021: also "pasos"?
-                                  (0 to 50,000; null: the default steps of Ajustes)
+                                  (0 to 50,000; null: the default steps of Ajustes). Unit 047: several planned
+                                  trainings a day (at most 10), one of these at a time: "previsto_anadir":
+                                  {"actividad_id", "minutos"} adds one, "previsto_cambiar": {"posicion", "minutos",
+                                  "actividad_id"?} changes that one, "previsto_quitar": posicion removes it (positions
+                                  from 0 in `previstos`); "previsto" (object: only that one; null: none) as before
     GET  /api/actividades-recientes  activities of the last 14 days, to choose the planned training
     POST /api/simular             {"alimentos": [...]} reviewed list -> margins and bar if eaten, and
                                   how much of each food fits; saves NOTHING (R-17, REC-2)
@@ -181,6 +185,7 @@ from ..nutricion.balance import (
 )
 from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
 from ..nutricion.margen import cabe_de_receta
+from ..nutricion.objetivo_dia import PREVISTOS_MAX
 from ..nutricion.asistente import Contexto as ContextoAsistente, Peticion, proponer as proponer_cambios
 from ..nutricion.recetas import ErrorDatos, _numero
 from ..fitness import detalle_actividad, fitness, texto_pulso
@@ -896,6 +901,55 @@ def crear_app(
             return _error(f"No se ha cambiado nada: {exc}.", 422)
         return JSONResponse({"alimento": movido, "dia": _dia(date.fromisoformat(movido["dia"]))})
 
+    def _previsto_elegido(actividad_id: Any, minutos: Any) -> dict:
+        """A planned training like one of the last 14 days, its kcal scaled to `minutos`. `ValueError` otherwise."""
+        actividad = next((a for a in _recientes() if a.get("activity_id") == actividad_id), None)
+        if actividad is None:
+            raise ValueError(f"solo puedes elegir un entreno de los últimos {DIAS_RECIENTES} días")
+        kcal = kcal_previstas(actividad, minutos)
+        return {**_actividad_corta(actividad), "minutos": minutos, "kcal": kcal}
+
+    def _posicion(valor: Any, lista: list) -> int:
+        if isinstance(valor, bool) or not isinstance(valor, int) or not 0 <= valor < len(lista):
+            raise ValueError(f"no hay entreno previsto en la posición {valor!r}")
+        return valor
+
+    def _previstos_por_posicion(fecha: date, campos: dict) -> None:
+        """Unit 047: `previsto_anadir`, `previsto_cambiar` or `previsto_quitar` -> the whole list in `previstos`.
+
+        One at a time (and not with the old `previsto`); `ValueError` says what is wrong and changes nothing."""
+        if "previstos" in campos:  # their kcal are always computed here, never taken from the body
+            raise ValueError("los entrenos previstos se añaden, cambian o quitan de uno en uno")
+        claves = [c for c in ("previsto", "previsto_anadir", "previsto_cambiar", "previsto_quitar") if c in campos]
+        if len(claves) > 1:
+            raise ValueError("los entrenos previstos se cambian de uno en uno")
+        if not claves or claves[0] == "previsto":
+            return
+        clave = claves[0]
+        valor = campos.pop(clave)
+        lista = list((objetivos.del_dia(fecha) or {}).get("previstos") or [])
+        if clave == "previsto_quitar":
+            lista.pop(_posicion(valor, lista))
+        elif not isinstance(valor, dict):
+            raise ValueError("el entreno previsto tiene que ser un objeto")
+        elif clave == "previsto_anadir":
+            if len(lista) >= PREVISTOS_MAX:
+                raise ValueError(f"como mucho {PREVISTOS_MAX} entrenos previstos en un día")
+            lista.append(_previsto_elegido(valor.get("actividad_id"), valor.get("minutos")))
+        else:
+            i = _posicion(valor.get("posicion"), lista)
+            actual = lista[i]
+            otra = valor.get("actividad_id")
+            if otra is not None and otra != actual.get("actividad_id"):
+                lista[i] = _previsto_elegido(otra, valor.get("minutos"))
+            elif any(a.get("activity_id") == actual.get("actividad_id") for a in _recientes()):
+                lista[i] = _previsto_elegido(actual.get("actividad_id"), valor.get("minutos"))
+            else:  # its activity is older than 14 days by now: scaled from what was saved
+                guardada = {"duration_seconds": float(actual["minutos"]) * 60, "calories": actual["kcal"]}
+                lista[i] = {**actual, "minutos": valor.get("minutos"),
+                            "kcal": kcal_previstas(guardada, valor.get("minutos"))}
+        campos["previstos"] = lista
+
     async def cambiar_objetivo(request: Request) -> Response:
         """The %, levels and planned training of today or a future day (unit 034); checked first, so a bad value
         changes nothing (R6)."""
@@ -909,17 +963,13 @@ def crear_app(
             return _error("No se ha cambiado nada: solo se puede ajustar hoy o un día que aún no ha llegado.", 422)
         if not campos:
             return _error("No hay nada que cambiar en el objetivo del día.", 400)
-        if isinstance(campos.get("previsto"), dict):
-            elegido = campos["previsto"]
-            actividad = next((a for a in _recientes() if a.get("activity_id") == elegido.get("actividad_id")), None)
-            if actividad is None:
-                return _error(f"No se ha cambiado nada: solo puedes elegir un entreno de los últimos "
-                              f"{DIAS_RECIENTES} días.", 400)
-            try:
-                kcal = kcal_previstas(actividad, elegido.get("minutos"))
-            except ValueError as exc:
-                return _error(f"No se ha cambiado nada: {exc}.", 400)
-            campos["previsto"] = {**_actividad_corta(actividad), "minutos": elegido["minutos"], "kcal": kcal}
+        try:
+            if isinstance(campos.get("previsto"), dict):
+                campos["previsto"] = _previsto_elegido(campos["previsto"].get("actividad_id"),
+                                                       campos["previsto"].get("minutos"))
+            _previstos_por_posicion(fecha, campos)
+        except ValueError as exc:
+            return _error(f"No se ha cambiado nada: {exc}.", 400)
         try:
             guardado = objetivos.cambiar(fecha, **campos)
         except ValueError as exc:

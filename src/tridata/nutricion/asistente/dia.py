@@ -19,6 +19,9 @@ come → planeado, today or a past day → comido. Its kcal do not change, so it
 `ObjetivosDia.cambiar`: today or a day that has not come («ese día ya pasó»; a past day is spread in Balance).
 The warning «tenías X, no Y» (R-77) in every action with a before, `pasos_dia` included: what Andrés said of the
 before (`antes_dicho`) against what the base has.
+
+Unit 047: a day may have several planned trainings. `entreno_previsto` ADDS one; it only replaces the one of the same
+activity (Garmin's `tipo`; without it, the same `actividad_id`), and the card says which. At most `PREVISTOS_MAX`.
 """
 from __future__ import annotations
 
@@ -32,7 +35,7 @@ from typing import Any
 from ..dia import _retraso, plan_del_dia
 from ..gasto import kcal_previstas
 from ..margen import NIVELES_POR_DEFECTO, PASOS_POR_DEFECTO, objetivo_del_dia
-from ..objetivo_dia import _porcentaje, niveles_validos, pasos_validos
+from ..objetivo_dia import PREVISTOS_MAX, _porcentaje, niveles_validos, pasos_validos
 from ..recetas import normalizar
 from ..registro import Alimento, RegistroComidas
 from . import (
@@ -92,7 +95,7 @@ class _ConCambios:
         if dia != self._dia:
             return actual
         base = actual or {"dia": dia.isoformat(), "tipo": None, "porcentaje": None, "niveles": None, "entreno": None,
-                          "pasos": None, "previsto": None, "repartido": False, "creado": None}
+                          "pasos": None, "previsto": None, "previstos": [], "repartido": False, "creado": None}
         return {**base, **self._campos}
 
     def __getattr__(self, nombre: str) -> Any:
@@ -575,6 +578,25 @@ def _previsto_texto(previsto: dict | None) -> str:
     return f"{numero(previsto['minutos'])} min de {previsto.get('nombre') or 'entreno'} ({numero(round(previsto['kcal']))} kcal)"
 
 
+def _previstos_texto(previstos: list[dict]) -> str:
+    return " + ".join(_previsto_texto(p) for p in previstos) if previstos else "ninguno"
+
+
+def _misma_actividad(a: dict, b: dict) -> bool:
+    """Unit 047: the same activity is Garmin's same `tipo` (a run and a run); without a `tipo`, the same activity."""
+    if a.get("tipo") and b.get("tipo"):
+        return bool(a["tipo"] == b["tipo"])
+    return bool(a.get("actividad_id") == b.get("actividad_id"))
+
+
+def _con_el_nuevo(previstos: list[dict], previsto: dict) -> tuple[list[dict], dict | None]:
+    """The planned trainings with `previsto`: in place of the one of its same activity (returned), else added."""
+    for i, p in enumerate(previstos):
+        if _misma_actividad(p, previsto):
+            return [*previstos[:i], previsto, *previstos[i + 1:]], p
+    return [*previstos, previsto], None
+
+
 def _proponer_entreno(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
     if cambio.cantidad is None:
         return no("No sé cuántos minutos quieres de entreno previsto")
@@ -600,29 +622,42 @@ def _rehacer_entreno(parametros: dict, valores: dict, ctx: Contexto, peticion: P
     if dia < peticion.fecha:
         error = YA_PASO_PLAN
     previsto = {**_actividad_corta(actividad), "minutos": minutos, "kcal": kcal}
-    antes = (ctx.objetivos.del_dia(dia) or {}).get("previsto")
-    if error is None and antes and antes.get("actividad_id") == previsto["actividad_id"] \
-            and antes.get("minutos") == minutos and antes.get("kcal") == kcal:
-        return no(f"El entreno previsto del {corta(dia)} ya es {_previsto_texto(antes)}")
+    antes = (ctx.objetivos.del_dia(dia) or {}).get("previstos") or []
+    lista, sustituido = _con_el_nuevo(antes, previsto)
+    if error is None and sustituido and sustituido.get("actividad_id") == previsto["actividad_id"] \
+            and sustituido.get("minutos") == minutos and sustituido.get("kcal") == kcal:
+        return no(f"El entreno previsto del {corta(dia)} ya es {_previsto_texto(sustituido)}")
+    if error is None and len(lista) > PREVISTOS_MAX:
+        return no(f"El {corta(dia)} ya tiene {PREVISTOS_MAX} entrenos previstos, que es el máximo de un día")
     de = corta(date.fromisoformat(actividad["activity_date"])) if actividad.get("activity_date") else "reciente"
-    despues = _previsto_texto(previsto) if error is None else f"{minutos} min de {previsto['nombre']}"
-    texto = (f"Voy a poner de entreno previsto del {corta(dia)}: {numero(minutos) if error is None else minutos} min "
+    despues = _previstos_texto(lista) if error is None else f"{minutos} min de {previsto['nombre']}"
+    verbo = "sumar al" if antes and sustituido is None else "poner de"
+    texto = (f"Voy a {verbo} entreno previsto del {corta(dia)}: {numero(minutos) if error is None else minutos} min "
              f"de {previsto['nombre']} ({numero(round(kcal))} kcal, estimadas desde el del {de})")
+    if sustituido is not None:
+        avisos = [f"sustituye al previsto de la misma actividad que tenías: {_previsto_texto(sustituido)}"]
+    elif antes:
+        avisos = [f"se suma a lo que ya tenías previsto: {_previstos_texto(antes)}"]
+    else:
+        avisos = []
     return tarjeta(accion="entreno_previsto",
                    parametros={"dia": dia.isoformat(), "actividad_id": previsto["actividad_id"], "minutos": minutos,
                                "previsto": previsto},
-                   peticion=peticion, texto=texto, antes=_previsto_texto(antes), despues=despues, dia=dia,
-                   donde="solo ese día; suma al gasto estimado", avisos=[] if not antes else
-                   [f"sustituye al previsto que tenías: {_previsto_texto(antes)}"],
-                   lineas=_efecto(ctx, dia, previsto=previsto) if error is None else [],
+                   peticion=peticion, texto=texto, antes=_previstos_texto(antes), despues=despues, dia=dia,
+                   donde="solo ese día; suma al gasto estimado", avisos=avisos,
+                   lineas=_efecto(ctx, dia, previstos=lista, previsto=lista[0]) if error is None else [],
                    campos=[campo("minutos", "Minutos", "numero", minutos), campo("dia", "Día", "fecha", dia.isoformat())],
                    error=error)
 
 
 def _aplicar_entreno(parametros: dict, ctx: Contexto) -> str:
     dia = fecha_de(parametros["dia"])
-    guardado = ctx.objetivos.cambiar(dia, previsto=parametros["previsto"])  # as choosing it on the screen
-    return f"el entreno previsto del {corta(dia)} es {_previsto_texto(guardado['previsto'])}"
+    antes = (ctx.objetivos.del_dia(dia) or {}).get("previstos") or []
+    lista, _ = _con_el_nuevo(antes, parametros["previsto"])  # unit 047: added, or in place of its same activity
+    guardado = ctx.objetivos.cambiar(dia, previstos=lista)
+    if len(guardado["previstos"]) == 1:
+        return f"el entreno previsto del {corta(dia)} es {_previsto_texto(guardado['previsto'])}"
+    return f"los entrenos previstos del {corta(dia)} son {_previstos_texto(guardado['previstos'])}"
 
 
 ACCIONES = [
@@ -649,8 +684,8 @@ ACCIONES = [
            "mantenimiento»). valor: el % con su signo, negativo si es déficit, cero si es mantenimiento; dia: el día "
            "del que habla, o null.",
            _proponer_objetivo, _rehacer_objetivo, _aplicar_objetivo),
-    Accion("entreno_previsto", "poner el entreno previsto de hoy o de un día que aún no ha llegado como uno de los "
-           "últimos días («hoy además tantos minutos de bici como el del domingo»). objeto: qué entreno es, como lo "
+    Accion("entreno_previsto", "poner un entreno previsto de hoy o de un día que aún no ha llegado (se suma a los que "
+           "ya haya; solo sustituye al de la misma actividad) como uno de los últimos días («hoy además tantos minutos de bici como el del domingo»). objeto: qué entreno es, como lo "
            "dice; cantidad: los minutos; fecha: el día del entreno parecido si lo dice; dia: el día del que habla, o "
            "null.",
            _proponer_entreno, _rehacer_entreno, _aplicar_entreno),

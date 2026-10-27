@@ -117,8 +117,8 @@ def test_contar_una_molestia_al_fisio_y_seguirla(servidor, abrir, capturar, oscu
     expect(abierta).to_contain_text("Tobillo derecho, lateral")
     expect(abierta).to_contain_text("21/10 · Fisio: sin lesión, alta para correr")
     expect(abierta).to_contain_text("todo el equipo la tiene en cuenta")
-    expect(del_md.locator(".estado")).to_have_text("CERRADA · 23/9")
-    expect(del_md).to_contain_text("Lección: —")
+    expect(del_md.locator(".estado")).to_have_text("DEL PLAN · 23/9")  # unit 048 (R5): its state is not known
+    expect(del_md).not_to_contain_text("Lección: —")
     _sin_scroll(p, "incidencias")
     capturar(p, f"044-incidencias-{tema}", completa=True)
 

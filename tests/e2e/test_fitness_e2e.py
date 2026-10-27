@@ -106,6 +106,9 @@ def test_pulso_y_zonas_en_ajustes(servidor, abrir, capturar, oscuro):  # R6, R7
     grupo.locator("button.ajuste").first.click()
     ficha = grupo.locator(".tarjeta.nueva")
     expect(ficha).to_be_visible()
+    # the card puts the cursor in «FC máxima» a moment later (a timer, late under the test clock): typing before
+    # it lands sends the next field's digits to «FC máxima» («18055»)
+    expect(ficha.get_by_label("FC máxima (ppm)")).to_be_focused()
     ficha.get_by_label("FC máxima (ppm)").fill("180")
     ficha.get_by_label("FC en reposo (ppm)").fill("55")
     for i, (desde, hasta) in enumerate(ZONAS, start=1):
@@ -124,6 +127,7 @@ def test_pulso_y_zonas_en_ajustes(servidor, abrir, capturar, oscuro):  # R6, R7
     # R7: a resting HR above the max is not saved and says why
     grupo.locator("button.ajuste").first.click()
     ficha = grupo.locator(".tarjeta.nueva")
+    expect(ficha.get_by_label("FC máxima (ppm)")).to_be_focused()
     ficha.get_by_label("FC en reposo (ppm)").fill("95")
     ficha.get_by_label("FC máxima (ppm)").fill("90")
     ficha.get_by_role("button", name="Guardar").click()

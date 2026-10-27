@@ -19,6 +19,9 @@ Unit 044 (REC-24, R-149 · G-46): "incidencias" carries the open incidents of ev
 the plan in course, each one with its state, its visits to the physio or the doctor and its lesson (the ones of the
 .md, as before: date and text); and the plan carries the notes of each day (`notas_del_dia`).
 
+Unit 048: each session of the plan carries its id (`Planes.sesiones_reloj`), so a role can name one of two with the
+same title the same day in the cards that change or remove it.
+
 Unit 045 (REC-25, R-154): a route attached to a conversation is NOT here: its profile goes in the message
 (`web/conversaciones.py`, `plan.rutas.perfil_para_modelo`), so the fixed part, and its cache, stay the same; only the
 line says «ruta adjunta: …».
@@ -64,7 +67,7 @@ sus PDF) y sus datos en JSON: "hoy" es la fecha de hoy; "dias", las últimas 8 s
 kcal, peso, pasos, pulso en reposo, sueño, HRV, entrenos con su id y carga); "semanas", lo anterior resumido por \
 semanas; "ajustes", sus objetivos de hoy; "carreras", sus carreras; "pulso", su frecuencia cardiaca máxima, de reposo \
 y sus zonas, y de dónde salen; "plan", su plan de entrenamiento en curso (sus carreras con su objetivo, sus semanas \
-con lo previsto en segundos y lo hecho según Garmin, sus sesiones por día con sus bloques y la nutrición en carrera); \
+con lo previsto en segundos y lo hecho según Garmin, sus sesiones por día con su id y sus bloques y la nutrición en carrera); \
 "incidencias", sus molestias y lesiones apuntadas en el plan: las abiertas (estado abierta) siguen ahí, tenlas en \
 cuenta antes de proponerle cualquier sesión; las cerradas de su plan en curso, con su lección; cada una con sus \
 visitas al fisio o al médico (fecha, quién y qué le dijo); las que no dicen estado vienen de su .md.
@@ -181,8 +184,8 @@ def plan_en_curso(planes: Planes | None, store: DataStore | None, hoy: date) -> 
     vista = semanas_del_plan.vista(plan, store, hoy)
     datos = {
         "nombre": plan["nombre"], "carreras": vista["carreras"], "semanas": vista["semanas"],
-        "sesiones": [{"fecha": x["fecha"], "titulo": x["titulo"], "bloques": x["bloques"], "clave": x["clave"]}
-                     for x in sorted(plan["sesiones"], key=lambda x: x["fecha"])],
+        "sesiones": [{"id": ident, "fecha": x["fecha"], "titulo": x["titulo"], "bloques": x["bloques"],
+                      "clave": x["clave"]} for x, ident in sorted(_con_id(planes, plan), key=lambda x: x[0]["fecha"])],
         "nutricion": [{"producto": n["producto"], "pauta": n["pauta"]} for n in plan["nutricion"]],
         "notas": [n["texto"] for n in plan["notas"] if n["tipo"] == "nota"],
     }
@@ -190,6 +193,13 @@ def plan_en_curso(planes: Planes | None, store: DataStore | None, hoy: date) -> 
     datos["notas_del_dia"] = [{"fecha": dia, "texto": texto} for dia, textos in sorted(notas_del_dia.items())
                               for texto in textos]
     return _limpio(datos), _incidencias(planes, plan["id"]) if planes is not None else []
+
+
+def _con_id(planes: Planes | None, plan: dict) -> list[tuple[dict, int | None]]:
+    """Each session of the plan with its id (unit 048, the one of `sesiones_reloj`, in the same order as `leer`), so
+    the team can name one of two with the same title the same day."""
+    ids = [s["id"] for s in planes.sesiones_reloj(plan["id"])] if planes is not None else []
+    return [(s, ids[i] if i < len(ids) else None) for i, s in enumerate(plan["sesiones"])]
 
 
 def _incidencias(planes: Planes, plan_id: int) -> list[dict]:

@@ -5,7 +5,8 @@
 // says why nothing is proposed. Nothing changes until a card is confirmed (G-37): the server redoes it with what is
 // in the base then and, if it is not what was shown, answers 409 with the redone card, which is painted again
 // with «Ha cambiado desde que la viste: mírala otra vez» (G-41, R-78). Each card is decided on its own;
-// «Confirmar y guardar» of the review never touches them (R-72).
+// «Confirmar y guardar» of the review never touches them (R-72). Unit 048: a card «Mandar a tu Garmin» whose
+// confirmation fails (422) shows the error and «Bajar fichero», the same session as a FIT file.
 
 const CAMBIADO = "Ha cambiado desde que la viste: mírala otra vez";
 
@@ -110,7 +111,9 @@ function tarjetaCambio(c, { api, alHecho, quitar, poner }) {
     const { ok, estado, datos } = await api("/api/asistente/confirmar", { tarjeta: limpia(c) });
     if (ok) { alHecho(datos); quitar(c); return; }
     if (estado === 409 && datos.tarjeta) { poner(c, { ...datos.tarjeta, _nota: CAMBIADO }); return; }
-    poner(c, { ...c, _nota: datos.error ?? "No se ha podido hacer." });
+    // unit 048 (R-159): Garmin did not take it: the same session as a file, to import by hand
+    const fichero = c.accion === "mandar_a_garmin" && estado === 422;
+    poner(c, { ...c, _nota: datos.error ?? "No se ha podido hacer.", _fichero: fichero });
   });
   descartar.addEventListener("click", async () => {
     ocupado(true);
@@ -147,5 +150,8 @@ function tarjetaCambio(c, { api, alHecho, quitar, poner }) {
     c.lineas.length ? el("ul", { className: "lineas" }, ...c.lineas.map((l) => el("li", { textContent: l }))) : null,
     ...c.avisos.map((a) => el("p", { className: "suave aviso-cambio", textContent: mayuscula(a) })),
     error, caja,
+    c._fichero && c.parametros?.sesion !== undefined
+      ? el("a", { className: "bajar-fit", href: `/api/plan/sesion/${c.parametros.sesion}.fit`, download: "", textContent: "Bajar fichero" })
+      : null,
     el("div", { className: "acciones" }, ...botones));
 }

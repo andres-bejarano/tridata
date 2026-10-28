@@ -241,8 +241,9 @@ function pintarDia(dia) {
   $("t-comido-dia").textContent = esHoy ? "Tu día" : mayuscula(deFecha(dia.fecha));
   $("vacio").textContent = esHoy ? "Aún no has apuntado nada hoy." : `No hay nada apuntado el ${deFecha(dia.fecha)}.`;
   $("total").textContent = `${kcalEnteras(dia.total_kcal)} kcal comidas`;
-  const previsto = dia.gasto.desglose && dia.gasto.desglose.previsto;
-  $("ajustar-resumen").textContent = `gasto ${kcalEnteras(dia.gasto.kcal)}${previsto ? " · entreno" : ""} ›`;
+  const previstos = previstosDe(dia).length; // unit 047: several planned trainings
+  const entrenos = previstos === 0 ? "" : previstos === 1 ? " · entreno" : ` · ${previstos} entrenos`;
+  $("ajustar-resumen").textContent = `gasto ${kcalEnteras(dia.gasto.kcal)}${entrenos} ›`;
   pintarTarjeta(dia);
   pintarBarra(dia);
   pintarHoja(dia, esHoy);
@@ -635,7 +636,9 @@ function pintarBarraReal(dia, escala) {
   const objetivo = `de tu objetivo (${dia.objetivo.porcentaje === 0 ? "mantenimiento" : etiquetaNivel(dia.objetivo.porcentaje)})`;
   const partes = [r.pasado_kcal > 0 ? `te has pasado ${kcalEnteras(r.pasado_kcal)} kcal ${objetivo}` : `te quedan ${kcalEnteras(r.quedan_kcal)} kcal ${objetivo}`];
   if (h.pasos_hechos !== null) partes.push(`${enteras.format(h.pasos_hechos)} de ${enteras.format(h.pasos_del_dia)} pasos`);
-  if (h.previsto_kcal > 0) {
+  if (h.previsto_kcal > 0 && previstosDe(dia).length > 1) { // unit 047: «Natación, Bici y Carrera»
+    partes.push(`entrenos previstos (${h.previsto_nombre}) ${kcalEnteras(h.previsto_kcal)} kcal aún no están en Garmin`);
+  } else if (h.previsto_kcal > 0) {
     const nombre = h.previsto_nombre ? `${h.previsto_nombre.charAt(0).toLowerCase()}${h.previsto_nombre.slice(1)} prevista` : "entreno previsto";
     partes.push(`${nombre} ${kcalEnteras(h.previsto_kcal)} kcal aún no está en Garmin`);
   }
@@ -643,6 +646,13 @@ function pintarBarraReal(dia, escala) {
   texto.textContent = `Con lo hecho ahora: ${partes.join(" · ")}`;
   texto.hidden = false;
   $("barra-real").title = `con lo hecho ahora (gasto ${kcal(h.kcal)}): objetivo ${kcal(r.objetivo_kcal)}`;
+}
+
+// Unit 047: the planned trainings of the day (a breakdown from before has only `previsto`).
+function previstosDe(dia) {
+  const d = dia.gasto.desglose;
+  if (!d) return [];
+  return d.previstos ?? (d.previsto ? [d.previsto] : []);
 }
 
 function linea(etiqueta, valor) {
@@ -660,7 +670,7 @@ function pintarDesglose(dia) {
     : `${numero.format(d.pasos_hechos)} hechos + ${numero.format(d.pasos_supuestos)} supuestos`;
   lineas.push(linea(`Pasos: ${pasos} × ${porPaso.format(d.kcal_por_paso)} kcal`, kcalEnteras(d.pasos_kcal)));
   for (const h of d.entreno_hecho) lineas.push(linea(`Hecho: ${h.nombre} (${numero.format(h.minutos)} min)${h.sin_kcal ? " · sin kcal" : ""}`, kcalEnteras(h.kcal)));
-  if (d.previsto) lineas.push(linea(`Previsto: ${d.previsto.nombre ?? "entreno"} (${numero.format(d.previsto.minutos)} min)`, kcalEnteras(d.previsto_kcal)));
+  for (const p of previstosDe(dia)) lineas.push(linea(`Previsto: ${p.nombre ?? "entreno"} (${numero.format(p.minutos)} min)`, kcalEnteras(p.kcal)));
   if (g.origen === "garmin") { // unit 014: the day closed with Garmin counts the real one
     lineas.push(linea("Estimado", kcalEnteras(g.estimado_kcal)));
     const real = linea("Real de Garmin", kcalEnteras(g.real_kcal));
@@ -702,7 +712,6 @@ function pintarHoja(dia, esHoy) {
   $("objetivo-titulo").textContent = esHoy ? "Objetivo de hoy" : "Objetivo del día";
   $("objetivo-pct-etiqueta").textContent = esHoy ? "% de hoy (con signo)" : "% del día (con signo)";
   $("objetivo-guardar").textContent = esHoy ? "Cambiar el de hoy" : "Cambiar el del día";
-  $("previsto-quitar").textContent = esHoy ? "Ya hecho" : "Quitar";
   const o = dia.objetivo;
   const cual = o.porcentaje === 0 ? "Mantenimiento" : `${signo(o.porcentaje)} %`;
   $("objetivo-valor").textContent = `${cual} · ${o.origen === "dia" ? (esHoy ? "hoy" : "del día") : o.origen === "plan" ? "plan" : "sin plan"}`;
@@ -719,12 +728,58 @@ function pintarHoja(dia, esHoy) {
   $("retraso").hidden = !o.retraso;
   if (document.activeElement !== $("niveles-texto")) $("niveles-texto").value = textoNiveles(dia.margenes.map((m) => m.nivel));
   $("niveles-defecto").hidden = !dia.niveles_elegidos;
-  const p = dia.gasto.desglose && dia.gasto.desglose.previsto;
-  $("previsto-valor").textContent = p ? `${numero.format(p.minutos)} min` : "—";
-  $("previsto-actual").textContent = p
-    ? `Previsto: ${p.nombre ?? "entreno"}, ${numero.format(p.minutos)} min (${kcal(p.kcal)}). Quítalo cuando ya esté hecho.`
-    : "Sin entreno previsto.";
-  $("previsto-quitar").hidden = !p;
+  pintarPrevistos(dia, esHoy);
+}
+
+// Unit 047: one row per planned training, each with «Cambiar» (its minutes or its activity) and «Ya hecho» (today)
+// or «Quitar» (a day to come), and «Añadir otro» with the box of before.
+function pintarPrevistos(dia, esHoy) {
+  const previstos = previstosDe(dia);
+  const minutos = previstos.reduce((suma, p) => suma + Number(p.minutos), 0);
+  $("previsto-valor").textContent = previstos.length === 0 ? "—"
+    : `${previstos.length > 1 ? `${previstos.length} · ` : ""}${numero.format(minutos)} min`;
+  $("previsto-actual").textContent = previstos.length === 0 ? "Sin entreno previsto."
+    : previstos.length === 1 ? "Quítalo cuando ya esté hecho." : "Quita cada uno cuando ya esté hecho.";
+  $("previsto-lista").replaceChildren(...previstos.map((p, i) => filaPrevisto(p, i, esHoy)));
+  $("abrir-previsto").textContent = previstos.length ? "Añadir otro" : "Añadir";
+}
+
+function filaPrevisto(p, posicion, esHoy) {
+  const editor = el("div", { className: "desplegable previsto-editor", hidden: true });
+  const cambiar = el("button", { type: "button", className: "boton previsto-cambiar", textContent: "Cambiar" });
+  const quitar = el("button", { type: "button", className: "boton previsto-quitar-fila", textContent: esHoy ? "Ya hecho" : "Quitar" });
+  if (posicion === 0) quitar.id = "previsto-quitar"; // the «Ya hecho» of before (unit 008) is the first row's
+  quitar.addEventListener("click", () => cambiarObjetivo({ previsto_quitar: posicion }, "previsto-error"));
+  cambiar.addEventListener("click", () => {
+    editor.hidden = !editor.hidden;
+    if (!editor.hidden) abrirEditorPrevisto(editor, p, posicion);
+  });
+  return el("li", { className: "previsto-fila" },
+    el("div", { className: "dato-fila" },
+      el("span", { textContent: `${p.nombre ?? "entreno"} · ${numero.format(p.minutos)} min` }),
+      el("strong", { className: "num", textContent: kcal(p.kcal) })),
+    el("div", { className: "botones" }, cambiar, quitar),
+    editor);
+}
+
+async function abrirEditorPrevisto(editor, p, posicion) {
+  const minutos = el("input", { type: "number", inputMode: "numeric", min: "1", max: "600", step: "1", value: String(p.minutos) });
+  const actividad = el("select", {}, el("option", { value: "", textContent: `Como ahora: ${p.nombre ?? "entreno"}` }));
+  const guardar = el("button", { type: "button", className: "principal", textContent: "Guardar" });
+  guardar.addEventListener("click", () => {
+    const n = comoNumero(minutos.value);
+    if (n === null || Number.isNaN(n) || n <= 0) { avisar("previsto-error", "Pon los minutos que harás."); return; }
+    const cambio = { posicion, minutos: n };
+    if (actividad.value) cambio.actividad_id = actividad.value;
+    cambiarObjetivo({ previsto_cambiar: cambio }, "previsto-error");
+  });
+  editor.replaceChildren(
+    el("label", { className: "campo" }, el("span", { textContent: "Como este entreno (últimos 14 días)" }), actividad),
+    el("label", { className: "campo" }, el("span", { textContent: "Minutos que harás" }), minutos),
+    guardar);
+  minutos.focus();
+  const otras = (await actividadesRecientes()).filter((a) => a.actividad_id !== p.actividad_id);
+  actividad.append(...otras.map(opcionReciente));
 }
 
 // «Nivel que miras» in the sheet: the levels as a selector, the same effect as the card buttons.
@@ -780,12 +835,18 @@ async function actualizarGarmin() {
   cargarHoy(); // unit 030: the cards and the hour of Hoy too
 }
 
-async function cargarRecientes() {
+async function actividadesRecientes() {
   const { ok, datos } = await api("/api/actividades-recientes");
-  const lista = ok ? datos.actividades : [];
-  const opciones = lista.map((a) => el("option", {
-    value: a.actividad_id, textContent: `${mayuscula(deFecha(a.fecha))} · ${a.nombre} · ${numero.format(a.minutos)} min · ${kcal(a.kcal)}`,
-  }));
+  return ok ? datos.actividades : [];
+}
+
+const opcionReciente = (a) => el("option", {
+  value: a.actividad_id, textContent: `${mayuscula(deFecha(a.fecha))} · ${a.nombre} · ${numero.format(a.minutos)} min · ${kcal(a.kcal)}`,
+});
+
+async function cargarRecientes() {
+  const lista = await actividadesRecientes();
+  const opciones = lista.map(opcionReciente);
   $("previsto-actividad").replaceChildren(...(opciones.length ? opciones : [el("option", { value: "", textContent: "No hay entrenos en los últimos 14 días" })]));
   const primero = lista[0];
   if (primero && !$("previsto-minutos").value) $("previsto-minutos").value = Math.round(primero.minutos);
@@ -816,9 +877,13 @@ function enlazarControles() {
     const minutos = comoNumero($("previsto-minutos").value);
     if (!actividad) { avisar("previsto-error", "Elige un entreno de los últimos 14 días."); return; }
     if (minutos === null || Number.isNaN(minutos) || minutos <= 0) { avisar("previsto-error", "Pon los minutos que harás."); return; }
-    cambiarObjetivo({ previsto: { actividad_id: actividad, minutos } }, "previsto-error");
+    // unit 047: it adds one more; the box closes so the next «Añadir otro» starts again
+    cambiarObjetivo({ previsto_anadir: { actividad_id: actividad, minutos } }, "previsto-error").then((ok) => {
+      if (!ok) return;
+      $("caja-previsto").hidden = true;
+      $("previsto-minutos").value = "";
+    });
   });
-  $("previsto-quitar").addEventListener("click", () => cambiarObjetivo({ previsto: null }, "previsto-error"));
 }
 
 // -- unit 008: «si te lo comes» and «¿cuánto me cabe?» over the reviewed list (saves nothing) --

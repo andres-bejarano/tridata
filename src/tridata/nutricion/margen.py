@@ -223,9 +223,11 @@ def _explicacion_completa(gasto: Mapping[str, Any], basal: Any, entreno: str | N
               f"{pasos} × {_texto_numero(d['kcal_por_paso'])} kcal/paso"]
     for h in d["entreno_hecho"]:
         partes.append(f"{h['nombre']} {h['kcal']:g} kcal (hecho, Garmin)")
-    if d["previsto"]:
-        p = d["previsto"]
-        partes.append(f"{d['previsto_kcal']:g} kcal de entreno previsto ({p.get('nombre') or 'entreno'}, "
+    # unit 047: one part per planned training (a breakdown from before has only `previsto`)
+    previstos = d.get("previstos", [d["previsto"]] if d["previsto"] else [])
+    for p in previstos:
+        kcal = d["previsto_kcal"] if len(previstos) == 1 else round(float(p["kcal"]), 1)
+        partes.append(f"{kcal:g} kcal de entreno previsto ({p.get('nombre') or 'entreno'}, "
                       f"{_texto_numero(p['minutos'])} min)")
     texto = " + ".join(partes)
     if entreno and not d["previsto"]:

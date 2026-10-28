@@ -150,8 +150,10 @@ def gasto_estimado_del_dia(dia: date, ajustes: Ajustes, pesos: RegistroPeso, obj
     objetivo_dia = objetivos.del_dia(dia)
     stats = store.daily_stats_on(dia) if store is not None else None
     actividades = store.activities_between(dia, dia) if store is not None else []
-    return estimar_gasto(config_del_dia(config, basal, objetivo_dia), stats, actividades,
-                         objetivo_dia.get("previsto") if objetivo_dia else None, cuando=cuando)
+    previstos = None
+    if objetivo_dia:  # unit 047: every planned training (a day simulated with only `previsto` too)
+        previstos = objetivo_dia["previstos"] if "previstos" in objetivo_dia else objetivo_dia.get("previsto")
+    return estimar_gasto(config_del_dia(config, basal, objetivo_dia), stats, actividades, previstos, cuando=cuando)
 
 
 # -- pure rules -------------------------------------------------------------------------------------

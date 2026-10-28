@@ -15,6 +15,13 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icono-180.png">
   <link rel="stylesheet" href="/static/estilos.css">
   <link rel="stylesheet" href="/static/balance.css">
+  <style>
+    /* unit 047: one row per planned training in «Ajustes del día» */
+    .previsto-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+    .previsto-lista:empty { display: none; }
+    .previsto-fila { display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid var(--borde); }
+    .previsto-fila:first-child { border-top: 0; }
+  </style>
   <script type="module" src="/static/app.js"></script>
 </head>
 <body>
@@ -311,10 +318,8 @@
       <article id="previsto" class="tarjeta bloque">
         <div class="dato-fila"><h4>Entreno previsto</h4><strong id="previsto-valor" class="num">—</strong></div>
         <p id="previsto-actual" class="suave"></p>
-        <div class="botones">
-          <button id="abrir-previsto" type="button" class="boton">Cambiar</button>
-          <button id="previsto-quitar" type="button" class="boton">Ya hecho</button>
-        </div>
+        <ul id="previsto-lista" class="previsto-lista"></ul>
+        <button id="abrir-previsto" type="button" class="boton ancho">Añadir</button>
         <div id="caja-previsto" class="desplegable" hidden>
           <label class="campo"><span>Como este entreno (últimos 14 días)</span>
             <select id="previsto-actividad"></select></label>

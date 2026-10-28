@@ -14,6 +14,11 @@ Unit 018 extends it again (no new table): column `repartido`, set by «Aplicar»
 
 Unit 021: `cambiar(dia, pasos=…)` changes only the planned steps of that day (`None`: back to the default steps
 of Ajustes), checked as `objetivo_valido` does (`pasos_validos`); the assistant applies its card with it.
+
+Unit 047: `previsto` keeps a LIST of planned trainings (natación, bici y carrera the same day), at most
+`PREVISTOS_MAX`. A row saved before keeps ONE object and is read as a list of one, with no migration. `del_dia`
+gives `previstos` (the list, `[]` without any) and `previsto` (the first or None, as before). `cambiar(dia,
+previsto=obj|None)` leaves only that one or none, as always; `cambiar(dia, previstos=[…])` saves the whole list.
 """
 from __future__ import annotations
 
@@ -31,8 +36,9 @@ from ..storage import DEFAULT_DB_PATH
 PORCENTAJE = (-50, 50)  # the same range as the plan target in Ajustes
 PASOS = (0, 50_000)
 NIVELES_MAX = 5
+PREVISTOS_MAX = 10  # unit 047: planned trainings of one day
 CAMPOS = ("tipo", "porcentaje", "niveles", "entreno", "pasos")
-CAMBIABLES = ("porcentaje", "niveles", "previsto", "pasos")
+CAMBIABLES = ("porcentaje", "niveles", "previsto", "previstos", "pasos")
 _COLUMNAS = "dia, tipo, porcentaje, niveles, entreno, pasos, previsto, repartido, creado"
 
 _SCHEMA = """
@@ -170,7 +176,8 @@ class ObjetivosDia:
             return None
         datos = dict(fila)
         datos["niveles"] = None if datos["niveles"] is None else json.loads(datos["niveles"])
-        datos["previsto"] = None if datos["previsto"] is None else json.loads(datos["previsto"])
+        datos["previstos"] = _lista_de_previstos(datos.pop("previsto"))
+        datos["previsto"] = datos["previstos"][0] if datos["previstos"] else None
         if datos["porcentaje"] is not None:
             datos["porcentaje"] = _entero_si_puede(float(datos["porcentaje"]))
         datos["repartido"] = bool(datos["repartido"])
@@ -197,8 +204,13 @@ class ObjetivosDia:
             valores["repartido"] = 1 if repartido and valores["porcentaje"] is not None else None
         if "niveles" in campos:
             valores["niveles"] = None if campos["niveles"] is None else json.dumps(niveles_validos(campos["niveles"]))
-        if "previsto" in campos:
-            valores["previsto"] = None if campos["previsto"] is None else json.dumps(previsto_valido(campos["previsto"]))
+        if "previsto" in campos and "previstos" in campos:
+            raise ValueError("el entreno previsto se cambia de una forma o de la otra, no de las dos")
+        if "previsto" in campos:  # the old shape: only that one, or none
+            valores["previsto"] = None if campos["previsto"] is None else json.dumps([previsto_valido(campos["previsto"])])
+        if "previstos" in campos:
+            lista = previstos_validos(campos["previstos"])
+            valores["previsto"] = json.dumps(lista) if lista else None
         if "pasos" in campos:
             valores["pasos"] = pasos_validos(campos["pasos"])
         ahora = datetime.now().isoformat(timespec="seconds")
@@ -227,6 +239,25 @@ def niveles_validos(crudos: Any) -> list[float | int]:
     if len(limpios) > NIVELES_MAX:
         raise ValueError(f"los niveles del día son como mucho {NIVELES_MAX}")
     return limpios
+
+
+def _lista_de_previstos(crudo: str | None) -> list[dict]:
+    """The planned trainings of the column: a list, or the ONE object a row saved before unit 047 keeps."""
+    if crudo is None:
+        return []
+    datos = json.loads(crudo)
+    if isinstance(datos, dict):
+        return [datos]
+    return list(datos) if isinstance(datos, list) else []
+
+
+def previstos_validos(crudos: Any) -> list[dict]:
+    """The planned trainings of a day (unit 047): a list of 0 to `PREVISTOS_MAX`, each checked by `previsto_valido`."""
+    if not isinstance(crudos, list):
+        raise ValueError("los entrenos previstos tienen que ser una lista")
+    if len(crudos) > PREVISTOS_MAX:
+        raise ValueError(f"como mucho {PREVISTOS_MAX} entrenos previstos en un día")
+    return [previsto_valido(p) for p in crudos]
 
 
 def previsto_valido(datos: Any) -> dict:

@@ -91,8 +91,11 @@ tridata web                      # http://127.0.0.1:8765 — this PC only by def
 | `dev` | Tests, linters and the security checks. |
 | `e2e` | End-to-end tests of the phone screen in a real Chromium (Playwright). |
 
-Optional settings in `.env`: `TRIDATA_MODELO_ASISTENTE` (default `claude-haiku-5-5`; «Pensar más» uses Sonnet),
-`TRIDATA_MODELO_VOZ`, `TRIDATA_MEDICOS_DIR` (the folder with your medical PDFs; they are read there, never copied).
+Optional settings in `.env`: `TRIDATA_MODELO_ASISTENTE` (only the fallback model of the Asistente: the model of each
+role of the team is chosen in the app, Ajustes › El equipo; «Pensar más» uses Sonnet), `TRIDATA_MODELO_VOZ`,
+`TRIDATA_MEDICOS_DIR` (the folder with your medical PDFs; they are read there, never copied) and
+`TRIDATA_GOOGLE_CLIENTE` (the path of the JSON of your Google OAuth client for Google Calendar, outside any
+repository; the token is saved in `~/.tridata/google-token.json`).
 
 ## Commands
 

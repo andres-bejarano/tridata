@@ -23,6 +23,13 @@ a apuntar en lo hecho del mié 21/10: …». The visit and the closing go to an 
 zone, or the only one open. Confirming redoes it (G-41): an incident already open with that name, a visit added or an
 incident closed in between, a note added that day, and the card is redone.
 
+Unit 048: a session to change or remove goes by its id (`Planes.sesiones_reloj`, the same as «Mandar a mi Garmin»),
+paired with the session of `leer` by its position, never by its title: two sessions with the same title the same day
+are two. `objeto` can name it by its id («#12» or «12»), which the context of the team gives. Confirming a card whose
+session is gone says so and touches no other one; one whose id now has another day or title (SQLite reuses the rowid
+of the last row deleted) is redone with what is there now and nothing is applied. A card from before (by title) is
+still confirmed if its title is unique that day.
+
 Unit 045 (REC-25, R-155, R-156): `guardar_estrategia`, «Voy a guardar en el plan: estrategia de Behobia (6 tramos, 2
 geles)», the strategy by stretches the coach answered with a route attached, one line per stretch (its km, terrain,
 pace or effort and time of passage) and one per gel, in that race of the plan in course; it replaces the one it had
@@ -31,6 +38,7 @@ pace or effort and time of passage) and one per gel, in that race of the plan in
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -70,22 +78,39 @@ def _partes(texto: Any) -> tuple[str, list[str]] | None:
 _sesion_texto = texto_sesion
 
 
-def _sesiones_del_dia(plan: dict, dia: date, objeto: Any) -> list[dict]:
-    """The sessions of that day; with `objeto`, the ones whose title has it (without case or accents)."""
-    del_dia = [s for s in plan["sesiones"] if s["fecha"] == dia.isoformat()]
-    buscado = normalizar(objeto) if isinstance(objeto, str) else ""
-    if not buscado:
-        return del_dia
-    return [s for s in del_dia if buscado in normalizar(s["titulo"])] or del_dia
+_ID = re.compile(r"^#?\s*(\d+)$")
 
 
-def _la_sesion(cambio: Any, plan: dict, dia: date) -> dict | str:
-    """The one session of that day, or why not."""
-    sesiones = _sesiones_del_dia(plan, dia, cambio.objeto)
+def _id_de(objeto: Any) -> int | None:
+    """«#12» or «12» -> 12; anything else, None."""
+    if isinstance(objeto, int) and not isinstance(objeto, bool):
+        return objeto
+    encontrado = _ID.match(objeto.strip()) if isinstance(objeto, str) else None
+    return int(encontrado.group(1)) if encontrado else None
+
+
+def _con_ids(ctx: Contexto, plan: dict) -> list[tuple[dict, int]]:
+    """Each session of `leer` with its id: `sesiones_reloj` gives them in the same order (paired by position)."""
+    reloj = ctx.planes.sesiones_reloj(plan["id"]) if ctx.planes is not None else []
+    return [(s, int(r["id"])) for s, r in zip(plan["sesiones"], reloj, strict=False)
+            if (s["fecha"], s["titulo"]) == (r["fecha"], r["titulo"])]
+
+
+def _la_sesion(cambio: Any, ctx: Contexto, plan: dict, dia: date) -> tuple[dict, int] | str:
+    """The one session of that day (named by its id, or by its title if there are several) and its id, or why not."""
+    del_dia = [(s, i) for s, i in _con_ids(ctx, plan) if s["fecha"] == dia.isoformat()]
+    ident = _id_de(cambio.objeto)
+    if ident is not None:
+        elegida = [(s, i) for s, i in del_dia if i == ident]
+        return elegida[0] if elegida else f"El {dia_corto(dia)} no hay ninguna sesión #{ident} en tu plan"
+    buscado = normalizar(cambio.objeto) if isinstance(cambio.objeto, str) else ""
+    sesiones = [(s, i) for s, i in del_dia if buscado and buscado in normalizar(s["titulo"])] or del_dia
     if not sesiones:
         return f"El {dia_corto(dia)} no hay ninguna sesión en tu plan"
     if len(sesiones) > 1:
-        return f"El {dia_corto(dia)} hay {len(sesiones)} sesiones en tu plan: dime cuál por su nombre"
+        cuales = ", ".join(f"#{i} {s['titulo']}" for s, i in sesiones)
+        return (f"El {dia_corto(dia)} hay {len(sesiones)} sesiones en tu plan: dime cuál por su nombre o su id "
+                f"({cuales})")
     return sesiones[0]
 
 
@@ -105,12 +130,30 @@ def _proponer_sesion(que: str) -> Any:
         if nueva is not None:
             parametros.update(nuevo_titulo=nueva[0], bloques=nueva[1])
         if que != "anadir":
-            sesion = _la_sesion(cambio, plan, cambio.dia)
-            if isinstance(sesion, str):
-                return no(sesion)
-            parametros["titulo"] = sesion["titulo"]
+            elegida = _la_sesion(cambio, ctx, plan, cambio.dia)
+            if isinstance(elegida, str):
+                return no(elegida)
+            parametros.update(titulo=elegida[0]["titulo"], sesion=elegida[1])
         return _rehacer_sesion(que)(parametros, {}, ctx, peticion)
     return proponer
+
+
+def _sesion_de(parametros: dict, ctx: Contexto) -> dict | str:
+    """The session the card speaks of, as it is NOW: by its id (unit 048) or, a card from before, by its title if it
+    is the only one with it that day; else why not. Its day and title are the ones it has now (R9: if they are not
+    the ones the card showed, the redone card shows them and nothing is applied)."""
+    if "sesion" in parametros:
+        sesion = ctx.planes.sesion(int(parametros["sesion"]))
+        if sesion is None or sesion["plan_id"] != parametros["plan_id"]:
+            return NO_ESTA
+        return sesion
+    iguales = [s for s in ctx.planes.sesiones_reloj(parametros["plan_id"])
+               if s["fecha"] == parametros["fecha"] and s["titulo"] == parametros["titulo"]]
+    if not iguales:
+        return NO_ESTA
+    if len(iguales) > 1:
+        return f"Hay {len(iguales)} sesiones «{parametros['titulo']}» ese día: pídemelo otra vez y dime cuál"
+    return ctx.planes.sesion(int(iguales[0]["id"])) or NO_ESTA
 
 
 def _rehacer_sesion(que: str) -> Any:
@@ -120,16 +163,16 @@ def _rehacer_sesion(que: str) -> Any:
         plan = ctx.planes.leer(parametros["plan_id"]) if ctx.planes is not None else None
         if plan is None:
             return no(SIN_PLAN)
+        antes = despues = None
+        if que != "anadir":
+            sesion = _sesion_de(parametros, ctx)
+            if isinstance(sesion, str):
+                return no(sesion)
+            parametros = {**parametros, "fecha": sesion["fecha"], "titulo": sesion["titulo"], "sesion": sesion["id"]}
+            antes = _sesion_texto(sesion["titulo"], sesion["bloques"])
         dia = fecha_de(parametros["fecha"])
         if dia < peticion.fecha:
             return no(YA_PASO)
-        antes = despues = None
-        if que != "anadir":
-            sesion = next((s for s in plan["sesiones"] if s["fecha"] == dia.isoformat()
-                           and s["titulo"] == parametros["titulo"]), None)
-            if sesion is None:
-                return no(NO_ESTA)
-            antes = _sesion_texto(sesion["titulo"], sesion["bloques"])
         titulo = parametros.get("nuevo_titulo") or parametros.get("titulo") or ""
         bloques = list(parametros.get("bloques") or [])
         if que != "quitar":
@@ -157,8 +200,10 @@ def _aplicar_sesion(que: str) -> Any:
                              (plan_id, orden, apartado, fecha, parametros["nuevo_titulo"],
                               json.dumps(parametros["bloques"], ensure_ascii=False)))
                 return f"el {dia} tienes en el plan «{parametros['nuevo_titulo']}»"
-            fila = conn.execute("SELECT rowid FROM plan_sesion WHERE plan_id = ? AND fecha = ? AND titulo = ? "
-                                "ORDER BY orden LIMIT 1", (plan_id, fecha, parametros["titulo"])).fetchone()
+            # by its id, and only if it is still the session of the card (the redone card always carries it)
+            fila = conn.execute("SELECT rowid FROM plan_sesion WHERE rowid = ? AND plan_id = ? AND fecha = ? "
+                                "AND titulo = ?", (int(parametros["sesion"]), plan_id, fecha,
+                                                   parametros["titulo"])).fetchone()
             if fila is None:
                 raise TarjetaMal(NO_ESTA.lower())
             if que == "quitar":
@@ -268,14 +313,10 @@ def _proponer_garmin(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
         return no("No sé qué día del plan es")
     if cambio.dia < peticion.fecha:
         return no(YA_PASO)
-    sesion = _la_sesion(cambio, plan, cambio.dia)
-    if isinstance(sesion, str):
-        return no(sesion)
-    del_dia = [s for s in ctx.planes.sesiones_reloj(plan["id"])
-               if s["fecha"] == cambio.dia.isoformat() and s["titulo"] == sesion["titulo"]]
-    if not del_dia:
-        return no(NO_ESTA)
-    return _rehacer_garmin({"sesion": del_dia[0]["id"]}, {}, ctx, peticion)
+    elegida = _la_sesion(cambio, ctx, plan, cambio.dia)
+    if isinstance(elegida, str):
+        return no(elegida)
+    return _rehacer_garmin({"sesion": elegida[1]}, {}, ctx, peticion)
 
 
 def _rehacer_garmin(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
@@ -595,14 +636,18 @@ _SESION = ("texto: «título | bloque | bloque…», cada bloque en números red
            "esfuerzo y su recuperación (p. ej. «Series | calentamiento suave | series a ritmo de diez mil con "
            "recuperación al trote | vuelta a la calma»)")
 
+# unit 048: two sessions the same day can have the same title, so the one meant goes by its id
+_OBJETO = ("objeto: si ese día hay varias sesiones, su id tal como viene en esa sesión de \"plan\" (con # delante) o "
+           "su título; si solo hay una, null")
+
 ACCIONES = [
     Accion("plan_cambiar_sesion", "cambiar una sesión prevista del plan en curso, de hoy o de un día que aún no ha "
-           f"llegado. dia: el día de la sesión; objeto: su título si ese día hay varias, o null; {_SESION}.",
+           f"llegado. dia: el día de la sesión; {_OBJETO}; {_SESION}.",
            _proponer_sesion("cambiar"), _rehacer_sesion("cambiar"), _aplicar_sesion("cambiar")),
     Accion("plan_anadir_sesion", "añadir una sesión al plan en curso, hoy o un día que aún no ha llegado. dia: el día; "
            f"{_SESION}.", _proponer_sesion("anadir"), _rehacer_sesion("anadir"), _aplicar_sesion("anadir")),
-    Accion("plan_quitar_sesion", "quitar una sesión prevista del plan en curso. dia: el día de la sesión; objeto: su "
-           "título si ese día hay varias, o null.",
+    Accion("plan_quitar_sesion", "quitar una sesión prevista del plan en curso. dia: el día de la sesión; "
+           f"{_OBJETO}.",
            _proponer_sesion("quitar"), _rehacer_sesion("quitar"), _aplicar_sesion("quitar")),
     Accion("plan_objetivo_carrera", "cambiar el objetivo de una carrera del plan en curso (p. ej. un tiempo). objeto: "
            "el nombre de la carrera; texto: el objetivo nuevo.",
@@ -611,7 +656,7 @@ ACCIONES = [
            _aplicar_nota),
     Accion("mandar_a_garmin", "mandar a su reloj Garmin una sesión de carrera a pie del plan en curso, de hoy o de un "
            "día que aún no ha llegado, para que el reloj le guíe bloque a bloque (si la cambias, primero la cambias "
-           "en el plan). dia: el día de la sesión; objeto: su título si ese día hay varias, o null.",
+           f"en el plan). dia: el día de la sesión; {_OBJETO}.",
            _proponer_garmin, _rehacer_garmin, _aplicar_garmin),
     Accion("abrir_incidencia", "abrir una incidencia en el plan en curso cuando Andrés cuenta una molestia, un dolor o "
            "un problema físico (sobrecarga, rampas…); pregúntale antes lo que falte. objeto: la zona (p. ej. tobillo); "

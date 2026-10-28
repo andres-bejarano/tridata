@@ -14,6 +14,8 @@
 // or discarded with /api/asistente/* like every card (nothing goes to Garmin before «Confirmar», G-55); confirmed,
 // the session says «en tu Garmin». If Garmin fails, the card says so and offers «Bajar fichero»
 // (GET /api/plan/sesion/ID.fit, the same session as a FIT file).
+// Unit 048: a day with two or more sessions shows one row per session (its title, only its blocks and its «Mandar a
+// mi Garmin»); with one, as before. An incident of the .md, whose state is not known, says «DEL PLAN · 23/9».
 // Unit 044 (REC-24): «⚠️ Incidencias (N)» opens Fitness › Plan › Incidencias (GET /api/plan/incidencias): the open
 // ones first, with since when, what happened, the visits to the physio or the doctor and the lesson; an open one is
 // closed by hand with «Cerrar con lección…» (POST /api/plan/incidencia/ID/cerrar). Opening one or adding a visit is a
@@ -232,12 +234,21 @@ function lineaHecha(a) {
 
 function filaDia(d) {
   const nombre = DIAS[fecha(d.fecha).getUTCDay()];
-  const titulos = d.sesiones.map((s) => s.titulo).join(" + ");
+  const varias = d.sesiones.length > 1; // unit 048: one row per session, each with its blocks and its watch
+  const titulo = varias ? `${d.sesiones.length} sesiones` : (d.sesiones[0]?.titulo ?? "sin sesión prevista");
   const nodo = el("li", { className: `dia-plan ${d.estado}` },
-    el("strong", { textContent: `${nombre} ${diaMes(d.fecha)} · ${titulos || "sin sesión prevista"}` }));
-  const bloques = d.sesiones.flatMap((s) => s.bloques);
-  if (bloques.length) nodo.append(el("ul", { className: "bloques" }, ...bloques.map((b) => el("li", { textContent: b }))));
-  (d.reloj ?? []).forEach((r, i) => nodo.append(filaReloj(d, d.sesiones[i], r)));
+    el("strong", { textContent: `${nombre} ${diaMes(d.fecha)} · ${titulo}` }));
+  const reloj = d.reloj ?? [];
+  if (varias) {
+    nodo.append(el("ul", { className: "sesiones-dia" }, ...d.sesiones.map((s, i) => el("li", { className: "sesion-plan" },
+      el("span", { className: "titulo-sesion", textContent: s.titulo }),
+      s.bloques.length ? el("ul", { className: "bloques" }, ...s.bloques.map((b) => el("li", { textContent: b }))) : null,
+      reloj[i] ? filaReloj(d, reloj[i]) : null))));
+  } else {
+    const bloques = d.sesiones[0]?.bloques ?? [];
+    if (bloques.length) nodo.append(el("ul", { className: "bloques" }, ...bloques.map((b) => el("li", { textContent: b }))));
+    if (reloj[0]) nodo.append(filaReloj(d, reloj[0]));
+  }
   for (const a of d.actividades) nodo.append(...lineaHecha(a));
   for (const n of d.notas ?? []) nodo.append(el("p", { className: "nota-dia", textContent: `📝 ${n}` }));
   if (!d.actividades.length) {
@@ -249,12 +260,11 @@ function filaDia(d) {
 
 // -- unit 042: the session to the watch -------------------------------------------------------------------------
 
-function filaReloj(d, sesion, r) {
+function filaReloj(d, r) {
   const caja = el("div", { className: "reloj-sesion" });
-  const varias = d.sesiones.length > 1 ? ` (${sesion.titulo})` : "";
   const fila = el("div", { className: "fila-reloj" });
-  if (r.estado === "al_dia") fila.append(el("span", { className: "en-garmin", textContent: `⌚ en tu Garmin${varias}` }));
-  if (r.estado === "cambiada") fila.append(el("span", { className: "garmin-cambiada", textContent: `Cambiada desde que la mandaste a tu Garmin${varias}` }));
+  if (r.estado === "al_dia") fila.append(el("span", { className: "en-garmin", textContent: "⌚ en tu Garmin" }));
+  if (r.estado === "cambiada") fila.append(el("span", { className: "garmin-cambiada", textContent: "Cambiada desde que la mandaste a tu Garmin" }));
   if (r.estado !== "al_dia" && (d.estado === "hoy" || d.estado === "pendiente")) {
     const boton = el("button", { type: "button", className: "enlace-boton", textContent: "Mandar a mi Garmin" });
     boton.addEventListener("click", () => pedirTarjeta(r.id, caja, boton));
@@ -370,6 +380,7 @@ async function abrirIncidencias(id) {
 const mayusculaInicial = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 
 function cuandoIncidencia(i) {
+  if (i.importada) return `DEL PLAN${i.desde ? ` · ${diaMes(i.desde)}` : ""}`; // unit 048: its state is not known
   if (i.estado === "abierta") return `ABIERTA · desde ${diaMes(i.desde)}`;
   if (i.desde && i.cerrada && i.cerrada !== i.desde) return `CERRADA · ${rango(i.desde, i.cerrada)}`;
   return `CERRADA${i.desde ? ` · ${diaMes(i.desde)}` : ""}`;
@@ -377,10 +388,11 @@ function cuandoIncidencia(i) {
 
 function filaIncidencia(i) {
   const nodo = el("li", { className: "incid" },
-    el("span", { className: `estado ${i.estado}`, textContent: cuandoIncidencia(i) }),
+    el("span", { className: `estado ${i.importada ? "del-plan" : i.estado}`, textContent: cuandoIncidencia(i) }),
     el("strong", { textContent: mayusculaInicial(i.titulo) }),
     !i.importada && i.que_paso ? el("small", { textContent: mayusculaInicial(i.que_paso) }) : null,
     ...i.visitas.map((v) => el("small", { className: "visita", textContent: `${diaMes(v.fecha)} · ${mayusculaInicial(v.quien)}: ${v.que_dijo}` })));
+  if (i.importada) return nodo; // from the .md: no lesson to show
   if (i.estado !== "abierta") {
     nodo.append(el("small", { className: "leccion", textContent: `Lección: ${i.leccion || "—"}` }));
     return nodo;

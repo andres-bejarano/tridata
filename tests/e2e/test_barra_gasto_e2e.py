@@ -75,6 +75,8 @@ def test_se_pone_al_dia_al_volver_a_la_lista(servidor, abrir, capturar, oscuro):
     p.locator("#texto").fill(PRIMERO)
     p.locator("#enviar").click()
     expect(p.locator("#conv-chat")).to_contain_text("Vas bien encaminado")
+    # the first words come in pieces; the spending is noted when the answer ends, and only then «Pedir opinión a…»
+    expect(p.locator("#conv-opinion")).to_be_visible()
     p.evaluate("location.hash = 'asistente'")
     expect(p.locator("#conv-gasto")).to_have_text("Gasto del mes: < 0,01 $ de 15 $")
     ancho = p.evaluate("document.documentElement.scrollWidth")

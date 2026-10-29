@@ -294,3 +294,43 @@ def test_la_nota_del_dia_va_en_el_contexto(tmp_path):  # R6 · C-192
     planes.nota_del_dia(planes.en_curso(HOY), date(2026, 10, 21), "FC alta para el ritmo, piernas del domingo", AHORA)
     plan = _datos(mundo.contexto(planes=planes))["plan"]
     assert plan["notas_del_dia"] == [{"fecha": "2026-10-21", "texto": "FC alta para el ritmo, piernas del domingo"}]
+
+
+# -- bug 052: every date the team talks about carries its weekday; the model never has to work it out ---------------
+
+MIERCOLES = date(2026, 10, 28)  # the Wednesday of the report: the coach said «mié 29/10»
+
+
+def test_cada_fecha_lleva_su_dia_de_la_semana(tmp_path):  # bug 052 · R1
+    mundo = Mundo(tmp_path)
+    d = _datos(mundo.contexto(hoy=MIERCOLES, planes=mundo.plan()))
+    assert d["hoy"] == "2026-10-28" and d["dia_semana"] == "miércoles"
+    dias = {x["fecha"]: x for x in d["dias"]}
+    assert dias["2026-10-28"]["dia"] == "miércoles" and dias["2026-10-24"]["dia"] == "sábado"
+    assert all("dia" in x for x in d["dias"])
+    sesiones = {s["fecha"]: s for s in d["plan"]["sesiones"]}
+    assert sesiones["2026-10-28"]["dia"] == "miércoles" and sesiones["2026-10-14"]["dia"] == "miércoles"
+    semana = next(s for s in d["plan"]["semanas"] if s["n"] == 10)
+    assert (semana["desde"], semana["desde_dia"], semana["hasta"], semana["hasta_dia"]) == \
+        ("2026-10-26", "lunes", "2026-11-01", "domingo")
+    calendario = d["calendario"]  # from the Monday of this week to the Sunday of the next one
+    assert len(calendario) == 14
+    assert calendario[0] == {"fecha": "2026-10-26", "dia": "lunes"}
+    assert calendario[-1] == {"fecha": "2026-11-08", "dia": "domingo"}
+    assert {"fecha": "2026-10-28", "dia": "miércoles"} in calendario
+    assert {"fecha": "2026-10-29", "dia": "jueves"} in calendario
+
+
+def test_las_instrucciones_dicen_que_el_dia_se_lee_no_se_calcula(tmp_path):  # bug 052 · R2
+    instrucciones = Mundo(tmp_path).contexto(hoy=MIERCOLES).bloques[0]
+    assert '"dia_semana"' in instrucciones and '"calendario"' in instrucciones
+    assert "no lo calcules" in instrucciones
+
+
+def test_el_resto_del_contexto_no_cambia(tmp_path):  # bug 052 · R3
+    mundo = Mundo(tmp_path)
+    d = _datos(mundo.contexto(hoy=MIERCOLES, planes=mundo.plan()))
+    sesion = next(s for s in d["plan"]["sesiones"] if s["fecha"] == "2026-10-28")
+    assert set(sesion) == {"id", "fecha", "dia", "titulo", "bloques", "clave"}
+    semana = next(s for s in d["plan"]["semanas"] if s["n"] == 10)
+    assert set(semana) - {"desde_dia", "hasta_dia"} == {"n", "desde", "hasta", "previsto_s", "clave", "hoy", "hecho"}

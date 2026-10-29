@@ -26,7 +26,7 @@ import json
 import sqlite3
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +178,17 @@ def garmin_incompleto(stats: Mapping[str, Any] | None, actividades: Iterable[Map
     if basal is not None and total < basal:
         return f"el total de Garmin ({_kcal(total)} kcal) queda por debajo del basal estimado ({_kcal(basal)} kcal)"
     return None
+
+
+def sincronizado_antes_de_acabar(dia: date, ok_en: str | None) -> str | None:
+    """Bug 051 (R-26): why the saved total of `dia` may still miss part of it, or None.
+
+    `ok_en` is the last good sync (local ISO, `DataStore.estado_sync`). Synced before the end of `dia`, its
+    total lacks the basal of the hours left. Without any sync written down there is no signal: as before.
+    """
+    if ok_en is None or datetime.fromisoformat(ok_en) >= datetime.combine(dia + timedelta(days=1), time.min):
+        return None
+    return "Garmin aún no se ha sincronizado después de acabar ese día: su total no lo tiene entero"
 
 
 def balance(comido: float, gasto: float) -> dict:
@@ -471,6 +482,8 @@ class Cierres:
     def _cerrar_con_garmin(self, dia: date, espera_antes: str | None) -> bool:
         stats, actividades = self._garmin_del_dia(dia)
         motivo = garmin_incompleto(stats, actividades, None)  # without a total there is no need for the basal
+        if motivo is None and self._store is not None:
+            motivo = sincronizado_antes_de_acabar(dia, (self._store.estado_sync() or {}).get("ok_en"))
         estimado: dict | None = None
         if motivo is None:
             try:

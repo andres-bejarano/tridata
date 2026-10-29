@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .calendario import DESDE_HECHOS
 from .garmin_client import GarminClient
 from .storage import DataStore
 
@@ -200,6 +201,7 @@ class SyncService:
             activities = self._client.get_activities(start, end)
             self._store.save_activities(activities)
             logger.info("Synced %d activities (%s to %s)", len(activities), start, end)
+        self.rellenar_horas(until)
 
         for day in self._days_to_check("daily_stats", "stat_date", since, until, revalidate_days):
             stats = self._client.get_daily_stats(day)
@@ -250,6 +252,19 @@ class SyncService:
                     self._store.save_race_predictions(prediction)
 
         logger.info("Sync complete: %s to %s", since, until)
+
+    def rellenar_horas(self, hasta: date) -> int:
+        """Unit 054 (R4): the activities since `DESDE_HECHOS` saved without their hour (before the 054) get it, with
+        ONE call to Garmin for the whole range; none if no hour is missing. Returns how many got it."""
+        sin_hora = {a["activity_id"] for a in self._store.activities_between(DESDE_HECHOS, hasta)
+                    if not a.get("start_time_local")}
+        if not sin_hora:
+            return 0
+        traidas = [a for a in self._client.get_activities(DESDE_HECHOS, hasta) if a.start_time_local]
+        self._store.save_activities(traidas)
+        rellenas = len(sin_hora & {a.activity_id for a in traidas})
+        logger.info("Start time filled for %d of %d activities", rellenas, len(sin_hora))
+        return rellenas
 
     _LAP_TYPES = RUNNING_TYPES + CYCLING_TYPES + SWIMMING_TYPES
     _WEATHER_TYPES = RUNNING_TYPES + CYCLING_TYPES

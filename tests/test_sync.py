@@ -321,7 +321,12 @@ def test_rellenar_horas_does_not_call_garmin_when_none_is_missing(tmp_path) -> N
 def test_the_daily_sync_fills_the_missing_hours(tmp_path) -> None:  # R4: the routine of 08:00 brings them
     store = DataStore(tmp_path / "t.db")
     store.save_activities([_con_hora("a", date(2026, 8, 3), None)])
-    client = _StubClient(activities=[_con_hora("a", date(2026, 8, 3), "06:10:00")])
+
+    class _PorFechas(_StubClient):  # like Garmin: only the activities of the range asked
+        def get_activities(self, start: date, end: date) -> list[Activity]:
+            return [a for a in super().get_activities(start, end) if start <= a.activity_date <= end]
+
+    client = _PorFechas(activities=[_con_hora("a", date(2026, 8, 3), "06:10:00")])
     SyncService(client, store).sync(since=HOY_054, until=HOY_054, revalidate_days=0)
     assert (DESDE_HECHOS, HOY_054) in client.get_activities_calls
     assert store.get_activity("a")["start_time_local"] == "2026-08-03 06:10:00"

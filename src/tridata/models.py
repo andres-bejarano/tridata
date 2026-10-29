@@ -49,6 +49,7 @@ class Activity:
     pool_length_m: float | None = None
     avg_water_temp_c: float | None = None
     moving_duration_seconds: float | None = None  # unit 040: Garmin's `movingDuration` (the time in movement)
+    start_time_local: str | None = None  # unit 054: Garmin's `startTimeLocal` (ISO, no zone); None if saved before
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:

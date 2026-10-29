@@ -1,5 +1,6 @@
 """Google Calendar (unit 043, REC-27 of `mandar-sesion-reloj`): the calendar «TriData» where every planned session of
-the plan goes as an all-day event (G-59).
+the plan goes as an all-day event (G-59); unit 054: and every training done in Garmin since `DESDE_HECHOS`, at its
+hour, with only its sport, duration and distance.
 
 - Permission: only `calendar.app.created` (the app creates «TriData» and touches nothing else of the agenda).
 - Connecting is the installed-app flow of a Desktop client, redirected to 127.0.0.1: the browser of this PC opens
@@ -19,7 +20,7 @@ import os
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ FALTA_CLIENTE = ("Falta TRIDATA_GOOGLE_CLIENTE en .env: la ruta del JSON del cli
                  "en este PC.")
 LISTO = "Listo: ya puedes cerrar esta pestaña y volver a TriData."
 ESPERA_PERMISO_S = 300  # the browser waits this long for Andrés to say yes
+DESDE_HECHOS = date(2026, 8, 1)  # unit 054: the trainings done in Garmin go to «TriData» from this day on
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS calendario_estado (clave TEXT PRIMARY KEY, valor TEXT);
@@ -252,4 +254,4 @@ class Calendario:
                     raise
 
 
-__all__ = ["ALCANCE", "NOMBRE", "SIN_CONECTAR", "Calendario", "ErrorCalendario"]
+__all__ = ["ALCANCE", "DESDE_HECHOS", "NOMBRE", "SIN_CONECTAR", "Calendario", "ErrorCalendario"]

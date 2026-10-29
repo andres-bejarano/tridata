@@ -334,3 +334,34 @@ def test_el_resto_del_contexto_no_cambia(tmp_path):  # bug 052 · R3
     assert set(sesion) == {"id", "fecha", "dia", "titulo", "bloques", "clave"}
     semana = next(s for s in d["plan"]["semanas"] if s["n"] == 10)
     assert set(semana) - {"desde_dia", "hasta_dia"} == {"n", "desde", "hasta", "previsto_s", "clave", "hoy", "hecho"}
+
+
+# -- unit 054 · R7: the team knows what Google Calendar carries (it said «deberían aparecer», and they did not) ------
+
+def test_el_contexto_dice_si_google_calendar_esta_conectado_y_que_lleva(tmp_path):  # R7
+    mundo = Mundo(tmp_path)
+    conectado = _datos(mundo.contexto(calendario_conectado=True))["google_calendar"]
+    assert conectado["conectado"] is True
+    lleva = conectado["lleva"]
+    assert "sesiones previstas del plan en curso" in lleva
+    assert "entrenos hechos" in lleva and "2026-08-01" in lleva and "10 minutos" in lleva
+
+    sin = _datos(mundo.contexto())["google_calendar"]  # without saying it: not connected
+    assert sin["conectado"] is False and "nada" in sin["lleva"]
+    assert _datos(mundo.contexto(calendario_conectado=False))["google_calendar"] == sin
+
+
+def test_las_instrucciones_dicen_que_el_equipo_no_toca_el_calendario(tmp_path):  # R7
+    instrucciones = Mundo(tmp_path).contexto().bloques[0]
+    assert '"google_calendar"' in instrucciones
+    assert "no puedes poner ni quitar nada" in instrucciones
+    assert "Sincronizar ahora" in instrucciones and "Ajustes" in instrucciones
+
+
+def test_la_app_le_pasa_al_equipo_el_estado_del_calendario(web):  # R7: through the routes
+    web.sembrar()
+    web.claude.responder("Mira Ajustes.")
+    web.nueva("¿está mi rodaje de ayer en el calendario?")
+    (peticion,) = web.claude.peticiones
+    fija = "\n".join(b["text"] for b in peticion["system"])
+    assert '"google_calendar":{"conectado":false' in fija

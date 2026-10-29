@@ -5,6 +5,8 @@ from datetime import date, timedelta
 
 import pytest
 
+from tridata.calendario import DESDE_HECHOS
+from tridata.garmin_client import GarminClient
 from tridata.models import Activity, DailyStats, HRVRecord, SleepRecord
 from tridata.storage import DataStore
 from tridata.sync import SyncService
@@ -71,6 +73,7 @@ def _activity(day: date, activity_id: str) -> Activity:
         duration_seconds=3600.0,
         distance_meters=10000.0,
         avg_hr=145.0,
+        start_time_local=f"{day.isoformat()} 07:00:00",  # unit 054: the client always brings it now
     )
 
 
@@ -264,3 +267,61 @@ class TestRevalidateDaysOverride:
 
         svc.sync(since=stale_day, until=date.today(), revalidate_days=15)
         assert stale_day in client.get_daily_stats_calls
+
+
+# ---------------------------------------------------------------------------
+# Unit 054 (R4): the hour of the activities saved before it, asked once
+# ---------------------------------------------------------------------------
+
+HOY_054 = date(2026, 10, 29)
+
+
+def _con_hora(activity_id: str, day: date, hora: str | None) -> Activity:
+    return Activity(activity_id=activity_id, activity_date=day, activity_type="running", name="Invented Run",
+                    duration_seconds=2400.0, distance_meters=8000.0,
+                    start_time_local=f"{day.isoformat()} {hora}" if hora else None)
+
+
+def test_garmin_client_keeps_the_start_time_local() -> None:  # R4
+    class _Api:
+        def get_activities_by_date(self, start: str, end: str) -> list[dict]:
+            return [{"activityId": 42, "startTimeLocal": "2026-10-27 18:30:00", "activityType": {"typeKey": "running"},
+                     "activityName": "Invented", "duration": 3120.0, "distance": 10200.0}]
+
+    client = GarminClient("invented@example.com", "invented")
+    client._api = _Api()
+    (activity,) = client.get_activities(date(2026, 10, 27), date(2026, 10, 27))
+    assert activity.start_time_local == "2026-10-27 18:30:00"
+    assert activity.to_dict()["start_time_local"] == "2026-10-27 18:30:00"
+
+
+def test_rellenar_horas_asks_garmin_once_for_every_missing_hour(tmp_path) -> None:  # R4
+    store = DataStore(tmp_path / "t.db")
+    store.save_activities([_con_hora("a", date(2026, 8, 3), None), _con_hora("b", date(2026, 10, 2), None),
+                           _con_hora("c", date(2026, 10, 3), "07:00:00"),
+                           _con_hora("julio", date(2026, 7, 30), None)])
+    client = _StubClient(activities=[_con_hora("a", date(2026, 8, 3), "06:10:00"),
+                                     _con_hora("b", date(2026, 10, 2), "19:45:00"),
+                                     _con_hora("c", date(2026, 10, 3), "07:00:00")])
+    SyncService(client, store).rellenar_horas(HOY_054)
+    assert client.get_activities_calls == [(DESDE_HECHOS, HOY_054)]
+    horas = {a["activity_id"]: a.get("start_time_local") for a in store.activities_between(date(2026, 7, 1), HOY_054)}
+    assert horas == {"a": "2026-08-03 06:10:00", "b": "2026-10-02 19:45:00", "c": "2026-10-03 07:00:00",
+                     "julio": None}  # before the 1st of August nothing is asked
+
+
+def test_rellenar_horas_does_not_call_garmin_when_none_is_missing(tmp_path) -> None:  # R4
+    store = DataStore(tmp_path / "t.db")
+    store.save_activities([_con_hora("c", date(2026, 10, 3), "07:00:00"), _con_hora("julio", date(2026, 7, 30), None)])
+    client = _StubClient()
+    SyncService(client, store).rellenar_horas(HOY_054)
+    assert client.get_activities_calls == []
+
+
+def test_the_daily_sync_fills_the_missing_hours(tmp_path) -> None:  # R4: the routine of 08:00 brings them
+    store = DataStore(tmp_path / "t.db")
+    store.save_activities([_con_hora("a", date(2026, 8, 3), None)])
+    client = _StubClient(activities=[_con_hora("a", date(2026, 8, 3), "06:10:00")])
+    SyncService(client, store).sync(since=HOY_054, until=HOY_054, revalidate_days=0)
+    assert (DESDE_HECHOS, HOY_054) in client.get_activities_calls
+    assert store.get_activity("a")["start_time_local"] == "2026-08-03 06:10:00"

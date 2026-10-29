@@ -7,17 +7,22 @@ from __future__ import annotations
 
 import json
 import stat
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httplib2
 import pytest
 from googleapiclient.errors import HttpError
+from test_sync import _StubClient
 
-from tridata.calendario import ALCANCE, NOMBRE, Calendario, ErrorCalendario
-from tridata.calendario.sincronizar import cuerpo_del_evento, sincronizar
+from tridata.calendario import ALCANCE, DESDE_HECHOS, NOMBRE, Calendario, ErrorCalendario
+from tridata.calendario.sincronizar import CLAVE_HECHO, cuerpo_del_evento, cuerpo_del_hecho, sincronizar
+from tridata.models import Activity
 from tridata.plan import Planes
+from tridata.storage import DataStore
+from tridata.sync import SyncService
+from tridata.web.calendario import Sincronizacion
 
 HOY = date(2026, 10, 26)  # Monday
 AHORA = datetime(2026, 10, 26, 9, 0)
@@ -232,7 +237,9 @@ def test_sincronizar_crea_actualiza_conservando_la_hora_y_borra_y_es_idempotente
         end={"dateTime": "2026-10-27T20:15:00+01:00", "timeZone": "Europe/Madrid"}))
     quitado = b.google._events_insert(cal, evento_de(b.sesion(plan_id, 9), start={"date": "2026-10-30"},
                                                      end={"date": "2026-10-31"}))
-    pasado = b.google._events_insert(cal, evento_de(b.sesion(plan_id, 8), start={"date": "2026-10-19"},
+    # unit 054 (R5): history is an event of a past day of ANOTHER plan (`0-8`: no plan has the id 0); one of the
+    # plan in course whose session left is deleted whatever its day (`test_las_sesiones_pasadas_tambien_van`)
+    pasado = b.google._events_insert(cal, evento_de("0-8", start={"date": "2026-10-19"},
                                                     end={"date": "2026-10-20"}))
     suyo = b.google._events_insert(cal, {"summary": "Fisio inventado", "start": {"date": "2026-10-30"},
                                          "end": {"date": "2026-10-31"}})
@@ -250,7 +257,7 @@ def test_sincronizar_crea_actualiza_conservando_la_hora_y_borra_y_es_idempotente
     assert series["end"] == {"dateTime": "2026-10-28T20:15:00+01:00", "timeZone": "Europe/Madrid"}
     sesiones = [e["extendedProperties"]["private"]["tridata_sesion"] for e in eventos.values()
                 if "extendedProperties" in e]
-    assert sorted(sesiones) == sorted([b.sesion(plan_id, n) for n in (0, 1, 2, 8)])
+    assert sorted(sesiones) == sorted([b.sesion(plan_id, n) for n in (0, 1, 2)] + ["0-8"])
 
     escrito = len(b.google.escrituras())
     assert sincronizar(b.planes, b.calendario, HOY) == {"creados": 0, "cambiados": 0, "borrados": 0}
@@ -305,11 +312,6 @@ def test_dos_eventos_de_la_misma_sesion_quedan_en_uno(b):  # R3
     assert len(b.google.de(cal)) == 1
 
 
-def test_las_sesiones_ya_pasadas_no_se_mandan(b):  # R2: «prevista» is today or a day to come
-    b.planes.crear(plan_inventado([PASADA, SERIES]), AHORA)
-    b.conectar()
-    sincronizar(b.planes, b.calendario, HOY)
-    assert [e["start"] for e in b.google.de(b.cal())] == [{"date": "2026-10-28"}]
 
 
 def test_el_evento_guarda_su_id_en_la_base(b):  # R3: the eventId of each session is kept in the SQLite
@@ -387,3 +389,231 @@ def test_sin_conectar_no_se_habla_con_google(tmp_path):  # R6
     with pytest.raises(ErrorCalendario):
         sincronizar(Planes(tmp_path / "data.sqlite3"), calendario, HOY)
     assert construido == []
+
+
+# == unit 054: what was really trained (Garmin) and the past sessions, in «TriData» ===================================
+#
+# R1-R6, R8 of `054-calendario-entrenos-hechos` (P-20261029-821f09b9, P-20261029-6cf17cd2). The activities live in a
+# temporary `DataStore` (the same SQLite), Garmin is the `_StubClient` of `test_sync` and Google the `GoogleDoble`:
+# nothing talks to Garmin or to Google. Every value is invented.
+
+HOY_HECHOS = date(2026, 10, 29)  # Thursday
+ZONA = "Europe/Madrid"
+LUGAR = "Lugar Inventado de Prueba"  # the name of the activity in Garmin often carries the place: never to Google
+
+
+def hecho(ident: str, dia: str, tipo: str, segundos: float, metros: float | None, hora: str | None = "18:30:00",
+          **extra: Any) -> Activity:
+    return Activity(activity_id=ident, activity_date=date.fromisoformat(dia), activity_type=tipo,
+                    name=f"{LUGAR} {ident}", duration_seconds=segundos, distance_meters=metros, avg_hr=157,
+                    max_hr=177, calories=733, training_effect_aerobic=3.7, avg_pace_seconds_per_km=307,
+                    start_time_local=f"{dia} {hora}" if hora else None, **extra)
+
+
+CARRERA = hecho("h-carrera", "2026-10-27", "running", 3120, 10200.0)
+NATACION = hecho("h-natacion", "2026-10-27", "lap_swimming", 1800, 1500.0, hora="07:15:00")
+FUERZA = hecho("h-fuerza", "2026-10-27", "strength_training", 2700, None, hora="20:00:00")
+TEMPO = hecho("h-tempo", "2026-10-28", "running", 3600, 12000.0, hora="19:00:00")
+JULIO = hecho("h-julio", "2026-07-31", "running", 2400, 8000.0)
+
+
+class BaseHechos(Base):
+    def __init__(self, tmp_path: Path, doble: GoogleDoble | None = None) -> None:
+        super().__init__(tmp_path, doble)
+        self.store = DataStore(self.db)
+
+    def pasada(self, hoy: date = HOY_HECHOS) -> dict[str, int]:
+        return sincronizar(self.planes, self.calendario, hoy, self.store, zona=ZONA)
+
+    def hechos(self) -> dict[str, dict]:
+        """`{activity id: its event}` in «TriData»; an activity with two events fails here."""
+        eventos = [e for e in self.google.de(self.cal())
+                   if CLAVE_HECHO in ((e.get("extendedProperties") or {}).get("private") or {})]
+        ids = [e["extendedProperties"]["private"][CLAVE_HECHO] for e in eventos]
+        assert len(ids) == len(set(ids)), "two events of the same activity"
+        return {e["extendedProperties"]["private"][CLAVE_HECHO]: e for e in eventos}
+
+
+@pytest.fixture
+def h(tmp_path) -> BaseHechos:
+    return BaseHechos(tmp_path)
+
+
+# -- R1, R2: the event of a training done ----------------------------------------------------------------------------
+
+def test_el_hecho_es_un_evento_a_su_hora_con_deporte_duracion_y_distancia():  # R1, R2 (criterio portante)
+    assert DESDE_HECHOS == date(2026, 8, 1)
+    assert cuerpo_del_hecho(CARRERA.to_dict(), ZONA) == {
+        "summary": "✅ 🏃 Carrera · 52' · 10,2 km", "description": "Hecho según Garmin",
+        "start": {"dateTime": "2026-10-27T18:30:00+01:00", "timeZone": ZONA},
+        "end": {"dateTime": "2026-10-27T19:22:00+01:00", "timeZone": ZONA},
+        "extendedProperties": {"private": {CLAVE_HECHO: "h-carrera"}}}
+
+
+@pytest.mark.parametrize("actividad, titulo", [
+    (NATACION, "✅ 🏊 Natación · 30' · 1500 m"),  # the swim in metres
+    (FUERZA, "✅ 🏋️ Fuerza · 45'"),  # without distance
+    (hecho("h-bici", "2026-10-25", "road_biking", 5400, 45000.0), "✅ 🚴 Bici · 90' · 45,0 km"),
+    (hecho("h-cinta", "2026-10-25", "treadmill_running", 1500, 5000.0), "✅ 🏃 Carrera · 25' · 5,0 km"),
+    (hecho("h-otro", "2026-10-25", "hiking", 4500, 9300.0), "✅ 🏃 Entreno · 75' · 9,3 km"),
+])
+def test_el_titulo_dice_el_deporte_los_minutos_y_la_distancia(actividad, titulo):  # R1
+    assert cuerpo_del_hecho(actividad.to_dict(), ZONA)["summary"] == titulo
+
+
+def test_en_verano_la_hora_lleva_su_desfase():  # R1: its real hour, the offset of that day
+    agosto = hecho("h-agosto", "2026-08-04", "running", 2400, 8000.0, hora="07:05:00")
+    cuerpo = cuerpo_del_hecho(agosto.to_dict(), ZONA)
+    assert cuerpo["start"] == {"dateTime": "2026-08-04T07:05:00+02:00", "timeZone": ZONA}
+    assert cuerpo["end"] == {"dateTime": "2026-08-04T07:45:00+02:00", "timeZone": ZONA}
+
+
+def test_al_calendario_solo_va_deporte_hora_duracion_y_distancia(h):  # R2 · G-59 ampliada
+    h.store.save_activities([CARRERA, NATACION, FUERZA])
+    h.conectar()
+    h.pasada()
+    insertados = [ll[2]["body"] for ll in h.google.llamadas if ll[:2] == ("events", "insert")]
+    assert len(insertados) == 3
+    for cuerpo in insertados:
+        assert set(cuerpo) == {"summary", "description", "start", "end", "extendedProperties"}
+        assert cuerpo["description"] in ("", "Hecho según Garmin")
+    enviado = json.dumps([ll[2] for ll in h.google.llamadas], ensure_ascii=False)
+    for prohibido in (LUGAR, "157", "177", "733", "3.7", "307", "ppm", "kcal", "ritmo", "Inventado"):
+        assert prohibido not in enviado, prohibido
+
+
+# -- R3: idempotent, follows Garmin, nothing before the 1st of August -------------------------------------------------
+
+def test_los_hechos_desde_agosto_llegan_una_vez_y_siguen_a_garmin(h):  # R3
+    h.store.save_activities([CARRERA, NATACION, FUERZA, JULIO])
+    h.conectar()
+    assert h.pasada() == {"creados": 3, "cambiados": 0, "borrados": 0}
+    assert set(h.hechos()) == {"h-carrera", "h-natacion", "h-fuerza"}  # nothing of July
+
+    escrito = len(h.google.escrituras())
+    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}  # a second pass writes nothing
+    assert len(h.google.escrituras()) == escrito
+
+    # it changes in Garmin (longer and further): its event changes, the same one
+    antes = h.hechos()["h-carrera"]["id"]
+    h.store.save_activities([hecho("h-carrera", "2026-10-27", "running", 3600, 11000.0)])
+    assert h.pasada() == {"creados": 0, "cambiados": 1, "borrados": 0}
+    carrera = h.hechos()["h-carrera"]
+    assert carrera["id"] == antes and carrera["summary"] == "✅ 🏃 Carrera · 60' · 11,0 km"
+    assert carrera["end"]["dateTime"] == "2026-10-27T19:30:00+01:00"
+
+    # it leaves the base: its event is deleted
+    with h.store._connect() as conn:
+        conn.execute("DELETE FROM activities WHERE activity_id = 'h-fuerza'")
+    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 1}
+    assert set(h.hechos()) == {"h-carrera", "h-natacion"}
+
+
+# -- R4: an activity saved without its hour ---------------------------------------------------------------------------
+
+def test_sin_hora_va_todo_el_dia_y_pasa_a_su_hora_cuando_la_rutina_la_trae(h):  # R4
+    h.store.save_activities([hecho("h-carrera", "2026-10-27", "running", 3120, 10200.0, hora=None)])
+    h.conectar()
+    h.pasada()
+    (evento,) = h.hechos().values()
+    assert evento["start"] == {"date": "2026-10-27"} and evento["end"] == {"date": "2026-10-28"}
+
+    garmin = _StubClient(activities=[CARRERA])
+    SyncService(garmin, h.store).rellenar_horas(HOY_HECHOS)
+    assert garmin.get_activities_calls == [(DESDE_HECHOS, HOY_HECHOS)]  # one call for every missing hour
+
+    assert h.pasada() == {"creados": 0, "cambiados": 1, "borrados": 0}
+    (ahora,) = h.hechos().values()
+    assert ahora["id"] == evento["id"]
+    assert ahora["start"].get("dateTime") == "2026-10-27T18:30:00+01:00" and not ahora["start"].get("date")
+    assert ahora["end"].get("dateTime") == "2026-10-27T19:22:00+01:00" and not ahora["end"].get("date")
+    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}
+
+
+# -- R5: every planned session of the plan in course, the past ones too ---------------------------------------------
+
+def test_las_sesiones_pasadas_tambien_van(b):  # R5: the tempo moved to the 28th, synced on the 29th
+    viejo = b.planes.crear(plan_inventado([PASADA], carreras=[{"apartado": 0, "nombre": "Carrera pasada inventada",
+                                                               "fecha": "2026-10-01", "objetivo": "", "estado": "",
+                                                               "principal": True}]), AHORA)
+    actual = b.planes.crear(plan_inventado([PASADA, SERIES]), AHORA)
+    b.conectar()
+    cal = b.cal()
+    historia = b.google._events_insert(cal, evento_de(b.sesion(viejo, 0), start={"date": "2026-09-20"},
+                                                      end={"date": "2026-09-21"}))
+    viejo_futuro = b.google._events_insert(cal, evento_de(b.sesion(viejo, 1), start={"date": "2026-10-30"},
+                                                          end={"date": "2026-10-31"}))
+    quitada_pasada = b.google._events_insert(cal, evento_de(b.sesion(actual, 7), start={"date": "2026-10-19"},
+                                                            end={"date": "2026-10-20"}))
+
+    assert sincronizar(b.planes, b.calendario, HOY_HECHOS) == {"creados": 2, "cambiados": 0, "borrados": 2}
+    eventos = {e["id"]: e for e in b.google.de(cal)}
+    assert historia["id"] in eventos  # another plan, a past day: history
+    assert viejo_futuro["id"] not in eventos and quitada_pasada["id"] not in eventos
+    del_plan = sorted(e["start"]["date"] for e in eventos.values()
+                      if e["extendedProperties"]["private"]["tridata_sesion"].startswith(f"{actual}-"))
+    assert del_plan == ["2026-10-20", "2026-10-28"]
+    assert sincronizar(b.planes, b.calendario, HOY_HECHOS) == {"creados": 0, "cambiados": 0, "borrados": 0}
+
+
+# -- R6: planned and done the same day ---------------------------------------------------------------------------------
+
+def test_el_mismo_dia_van_el_previsto_y_el_hecho_sin_pisarse(h):  # R6
+    plan_id = h.planes.crear(plan_inventado([SERIES]), AHORA)  # the 28th
+    h.store.save_activities([TEMPO])  # the 28th, at 19:00
+    h.conectar()
+    assert h.pasada() == {"creados": 2, "cambiados": 0, "borrados": 0}
+    eventos = h.google.de(h.cal())
+    assert sorted(e["summary"] for e in eventos) == ["✅ 🏃 Carrera · 60' · 12,0 km", "🏃 Series 4×12' a 4:00"]
+    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}
+
+    # the training leaves: the session stays
+    with h.store._connect() as conn:
+        conn.execute("DELETE FROM activities")
+    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 1}
+    assert [e["summary"] for e in h.google.de(h.cal())] == ["🏃 Series 4×12' a 4:00"]
+
+    # the session leaves: the training (back in the base) stays
+    h.store.save_activities([TEMPO])
+    with h.planes._connect() as conn:
+        conn.execute("DELETE FROM plan_sesion WHERE plan_id = ?", (plan_id,))
+    assert h.pasada() == {"creados": 1, "cambiados": 0, "borrados": 1}
+    assert [e["summary"] for e in h.google.de(h.cal())] == ["✅ 🏃 Carrera · 60' · 12,0 km"]
+
+
+# -- R8: Google fails half way through the first pass ------------------------------------------------------------------
+
+class GoogleQueFalla(GoogleDoble):
+    """Fails with a network error on the n-th insert, once."""
+
+    def __init__(self, en: int) -> None:
+        super().__init__([{"id": "cal-otro", "summary": "Trabajo inventado"}])
+        self.en, self.inserts = en, 0
+
+    def _events_insert(self, calendarId: str, body: dict) -> dict:  # noqa: N803
+        self.inserts += 1
+        if self.inserts == self.en:
+            raise OSError("red inventada caída")
+        return super()._events_insert(calendarId, body)
+
+
+def test_si_google_falla_a_mitad_lo_creado_se_queda_y_la_siguiente_termina_sin_duplicar(tmp_path):  # R8
+    h = BaseHechos(tmp_path, GoogleQueFalla(en=60))
+    actividades = [hecho(f"h-{n}", (DESDE_HECHOS + timedelta(days=n % 89)).isoformat(), "running", 2400, 8000.0,
+                         hora=f"{6 + n // 89:02d}:00:00") for n in range(130)]
+    h.store.save_activities(actividades)
+    h.planes.crear(plan_inventado([SERIES, RODAJE]), AHORA)
+    h.conectar()
+    sinc = Sincronizacion(h.calendario, h.planes, lambda: HOY_HECHOS, lambda: AHORA, store=h.store)
+
+    estado = sinc.vuelta()
+    assert estado["error"] and "reintentará" in estado["error"]
+    creados = len(h.google.de(h.cal()))
+    assert creados == 59  # what was already made stays
+
+    estado = sinc.vuelta()
+    assert estado["error"] is None
+    assert len(h.hechos()) == 130  # every activity once
+    assert len(h.google.de(h.cal())) == 132
+    escrito = len(h.google.escrituras())
+    assert sinc.vuelta()["error"] is None and len(h.google.escrituras()) == escrito

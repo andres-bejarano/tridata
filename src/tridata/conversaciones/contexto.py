@@ -57,13 +57,20 @@ DIAS_DIA_A_DIA = 56  # the last 8 weeks day by day; the earlier ones by week (S-
 VE_SIEMPRE = ("comidas", "peso", "entrenos", "sueño", "pulso", "HRV")
 _DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
+
+def _dia(fecha: str) -> str:
+    """Bug 052: the weekday of an ISO date, so the model reads it instead of working it out (and getting it wrong)."""
+    return _DIAS[date.fromisoformat(fecha).weekday()]
+
 INSTRUCCIONES = """\
 Formas parte del equipo de Andrés, un triatleta aficionado que apunta lo que come y su peso en la app TriData y entrena \
 con un reloj Garmin: el entrenador, el fisio, el nutricionista y el asistente de siempre. Quién eres en esta \
 conversación y cómo miras lo dice tu papel, al final. Andrés habla con uno y, si quiere, pide opinión a otro.
 
 Ves siempre todo su contexto, que va aquí debajo: sus datos médicos (analítica y prueba de esfuerzo, transcritos de \
-sus PDF) y sus datos en JSON: "hoy" es la fecha de hoy; "dias", las últimas 8 semanas día a día (comidas con sus \
+sus PDF) y sus datos en JSON: "hoy" es la fecha de hoy y "dia_semana", qué día de la semana es; "calendario", las \
+fechas de esta semana y de la siguiente con su día; cada fecha lleva su día de la semana al lado ("dia", "desde_dia", \
+"hasta_dia"): léelo de ahí y no lo calcules nunca; "dias", las últimas 8 semanas día a día (comidas con sus \
 kcal, peso, pasos, pulso en reposo, sueño, HRV, entrenos con su id y carga); "semanas", lo anterior resumido por \
 semanas; "ajustes", sus objetivos de hoy; "carreras", sus carreras; "pulso", su frecuencia cardiaca máxima, de reposo \
 y sus zonas, y de dónde salen; "plan", su plan de entrenamiento en curso (sus carreras con su objetivo, sus semanas \
@@ -183,8 +190,10 @@ def plan_en_curso(planes: Planes | None, store: DataStore | None, hoy: date) -> 
         return None, []
     vista = semanas_del_plan.vista(plan, store, hoy)
     datos = {
-        "nombre": plan["nombre"], "carreras": vista["carreras"], "semanas": vista["semanas"],
-        "sesiones": [{"id": ident, "fecha": x["fecha"], "titulo": x["titulo"], "bloques": x["bloques"],
+        "nombre": plan["nombre"], "carreras": vista["carreras"],
+        "semanas": [{**s, "desde_dia": _dia(s["desde"]), "hasta_dia": _dia(s["hasta"])} for s in vista["semanas"]],
+        "sesiones": [{"id": ident, "fecha": x["fecha"], "dia": _dia(x["fecha"]), "titulo": x["titulo"],
+                      "bloques": x["bloques"],
                       "clave": x["clave"]} for x, ident in sorted(_con_id(planes, plan), key=lambda x: x[0]["fecha"])],
         "nutricion": [{"producto": n["producto"], "pauta": n["pauta"]} for n in plan["nutricion"]],
         "notas": [n["texto"] for n in plan["notas"] if n["tipo"] == "nota"],
@@ -264,7 +273,7 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     dias = []
     for i in range(DIAS_DIA_A_DIA):
         dia = (desde + timedelta(days=i)).isoformat()
-        dias.append(_limpio({"fecha": dia, **del_dia(dia)}))
+        dias.append(_limpio({"fecha": dia, "dia": _dia(dia), **del_dia(dia)}))
 
     # -- before the 8 weeks: by week (Monday), only sums and means ---------------------------------------------------
     antes = sorted({d for d in (*comidas, *peso_de, *stats, *noches, *hrv, *entrenos, *carga) if d < desde.isoformat()})
@@ -295,6 +304,8 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     pulso = historial.vigente(hoy)
     datos_json = {
         "hoy": hoy.isoformat(), "dia_semana": _DIAS[hoy.weekday()],
+        "calendario": [{"fecha": d.isoformat(), "dia": _DIAS[d.weekday()]}
+                       for d in (hoy - timedelta(days=hoy.weekday() - i) for i in range(14))],
         "ajustes": _limpio({"objetivo_pct": v.objetivo_pct, "motivo_objetivo": v.motivo_objetivo,
                             "basal_kcal": v.basal_kcal, "pasos_por_defecto": v.pasos_por_defecto,
                             "limite_saludable_pct": v.limite_saludable_pct, "edad": v.edad, "altura_cm": v.altura_cm,

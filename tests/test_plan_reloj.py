@@ -150,6 +150,21 @@ def test_sin_bloques_o_que_no_es_carrera_no_se_manda():  # R6, out of scope: bik
     assert "carrera" in str(exc.value)
 
 
+@pytest.mark.parametrize("guion", ["-", "–", "—", " – "])
+def test_un_rango_de_ritmo_con_guion_largo_se_lee_igual(guion):  # bug 050 · R1, R2
+    sesion = {"id": 10, "fecha": "2026-10-28", "titulo": "Tempo 2×15'",
+              "bloques": [f"15' a 5:00{guion}6:00", f"2×15' a 4:00{guion}4:15 (3' rec)"]}
+    calentar, series = a_garmin(sesion)["workoutSegments"][0]["workoutSteps"]
+    assert calentar["targetValueOne"] == pytest.approx(_rapido(360))  # 6:00, the slowest
+    assert calentar["targetValueTwo"] == pytest.approx(_rapido(300))  # 5:00, the fastest
+    trabajo, _ = series["workoutSteps"]
+    assert trabajo["targetValueOne"] == pytest.approx(_rapido(255))
+    assert trabajo["targetValueTwo"] == pytest.approx(_rapido(240))
+    assert lineas(sesion) == ["Calentamiento: 15' a 5:00-6:00 /km",
+                              "2 × 15' a 4:00-4:15 /km, con 3' de recuperación"]
+    assert fit_local(sesion)
+
+
 def test_las_lineas_de_la_tarjeta_dicen_el_margen_de_ritmo():  # R1 · C-199
     assert lineas(SERIES) == [
         "Calentamiento: 20' a 5:40-5:50 /km",

@@ -12,7 +12,7 @@ gives 1600), 0.04 kcal/step, 10,000 steps by default and no plan. «Today» is W
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pytest
 
@@ -281,6 +281,39 @@ def test_dia_incompleto_espera_y_se_cierra_cuando_llega(m, incompleto):  # R4 ·
     cierre = m.cierres.del_dia(MARTES)
     assert cierre["estado"] == "cerrado_garmin" and cierre["gasto_real"] == 2550
     assert cierre["espera_motivo"] is None
+
+
+def test_no_se_cierra_con_garmin_lo_sincronizado_antes_de_acabar_el_dia(m):  # bug 051 · R1 (R-26)
+    """The total of a day saved by a sync of that same evening is not the whole day: Garmin still adds the basal
+    of the hours left. The day waits, keeping the estimate, until a sync after the day ended brings it."""
+    m.comer(MARTES, "Comida", 2000)
+    m.garmin(MARTES, 2300)  # what Garmin had at 21:05: above the basal, above the exercise
+    m.store.marcar_sync_ok(datetime.combine(MARTES, time(21, 5)))
+
+    m.cierres.al_dia(HOY)  # the app opened at dawn, before the routine
+
+    cierre = m.cierres.del_dia(MARTES)
+    assert cierre["estado"] == "comida_cerrada" and cierre["gasto_real"] is None
+    assert "sincroniz" in cierre["espera_motivo"]
+    assert m.cierres.bloque_del_dia(MARTES, 2000, m.estimado(MARTES))["texto"] == TEXTO_ESPERA
+    assert m.filas("calibracion") == []  # nothing closed: nothing recalibrated with half a day
+
+    m.garmin(MARTES, 2560)  # the routine of the morning brings the whole day
+    m.store.marcar_sync_ok(datetime.combine(HOY, time(8, 0)))
+    m.cierres.al_dia(HOY)
+
+    cierre = m.cierres.del_dia(MARTES)
+    assert cierre["estado"] == "cerrado_garmin" and cierre["gasto_real"] == 2560
+    assert cierre["espera_motivo"] is None
+    assert m.filas("cierre_rastro") == []  # closed once, with the whole day: no correction to warn about
+
+
+def test_lo_sincronizado_justo_al_acabar_el_dia_si_cierra(m):  # bug 051 · R2: a sync from 00:00 of the next day
+    m.comer(MARTES, "Comida", 2000)
+    m.garmin(MARTES, 2560)
+    m.store.marcar_sync_ok(datetime.combine(HOY, time(0, 0)))
+    m.cierres.al_dia(HOY)
+    assert m.cierres.del_dia(MARTES)["estado"] == "cerrado_garmin"
 
 
 def test_hoy_no_se_cierra_con_garmin(m):  # R3 · R-25: today's total is never the whole day

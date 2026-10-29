@@ -7,6 +7,9 @@
                                       if Google said no
     POST /api/calendario/sincronizar  «Sincronizar ahora»: one pass, and the state (a failure is in `error`)
 
+Unit 054: the pass also puts the trainings done in Garmin since 2026-08-01 (`store`), so the new ones arrive on
+the pass after each sync with Garmin.
+
 The pass also runs when the app starts and every 10 minutes (`en_segundo_plano`, in its own thread): a failure is
 said in Ajustes and tried again on the next one, and nothing of the plan waits for Google (R4). Without a token
 nothing talks to Google (R6). Nothing here logs or answers the token or the path of the client's JSON (R5).
@@ -27,6 +30,7 @@ from starlette.routing import Route
 from ..calendario import FALTA_CLIENTE, Calendario, ErrorCalendario
 from ..calendario.sincronizar import sincronizar
 from ..plan import Planes
+from ..storage import DataStore
 
 log = logging.getLogger(__name__)
 
@@ -38,8 +42,9 @@ class Sincronizacion:
     """One pass at a time (the periodic one, «Sincronizar ahora» and the one after connecting)."""
 
     def __init__(self, calendario: Calendario, planes: Planes, hoy: Callable[[], date],
-                 ahora: Callable[[], datetime]) -> None:
+                 ahora: Callable[[], datetime], store: DataStore | None = None) -> None:
         self.calendario, self._planes, self._hoy, self._ahora = calendario, planes, hoy, ahora
+        self._store = store  # unit 054: the trainings done in Garmin go too
         self._cerrojo = threading.Lock()
         self.conectando = threading.Lock()
 
@@ -48,7 +53,7 @@ class Sincronizacion:
         if self.calendario.conectado:
             with self._cerrojo:
                 try:
-                    resumen = sincronizar(self._planes, self.calendario, self._hoy())
+                    resumen = sincronizar(self._planes, self.calendario, self._hoy(), self._store)
                 except ErrorCalendario as exc:  # its text is a fixed reason, never the library's (R5)
                     log.warning("Google Calendar not updated: %s", exc)
                     self.calendario.apuntar_fallo(f"No se pudo actualizar el calendario: {exc}. Se reintentará en "

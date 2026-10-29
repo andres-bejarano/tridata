@@ -390,7 +390,7 @@ def crear_app(
         cliente = os.environ.get("TRIDATA_GOOGLE_CLIENTE", "").strip()
         calendario = Calendario(registro.db_path, carpeta_datos / "google-token.json",
                                 str(Path(cliente).expanduser()) if cliente else None)
-    sincronizacion = Sincronizacion(calendario, planes, hoy, ahora)
+    sincronizacion = Sincronizacion(calendario, planes, hoy, ahora, store)
     asistente = ContextoAsistente(registro=registro, objetivos=objetivos, ajustes=ajustes, pesos=pesos,
                                   recetario=recetario, hoy=hoy, store=store, cierres=cierres, recientes=_recientes,
                                   planes=planes)
@@ -404,7 +404,7 @@ def crear_app(
         estado = medicos.al_dia()
         return montar_contexto(registro=registro, pesos=pesos, ajustes=ajustes, store=store,
                                transcripciones=medicos.transcripciones(), aviso_medico=estado["aviso"], hoy=hoy(),
-                               planes=planes)
+                               planes=planes, calendario_conectado=calendario.conectado)
 
     def _dia(fecha: date) -> dict:
         """The day as the screen shows it: `nutricion.dia.resumen_completo` (unit 015), the same nutricion.md uses."""

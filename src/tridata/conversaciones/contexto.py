@@ -40,6 +40,7 @@ from datetime import date, datetime, timedelta
 from statistics import mean
 from typing import Any
 
+from ..calendario import DESDE_HECHOS
 from ..fitness import texto_pulso
 from ..hoy import _deporte
 from ..metrics import compute_pmc, daily_tss, pmc_hasta
@@ -56,6 +57,12 @@ from ..sync import ALL_SPORT_TYPES, CYCLING_TYPES, RUNNING_TYPES, SWIMMING_TYPES
 DIAS_DIA_A_DIA = 56  # the last 8 weeks day by day; the earlier ones by week (S-39)
 VE_SIEMPRE = ("comidas", "peso", "entrenos", "sueño", "pulso", "HRV")
 _DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+# unit 054 (R7): what «TriData» of Google Calendar carries, so the team does not promise what does not happen
+CALENDARIO_CONECTADO = (f"las sesiones previstas del plan en curso (todas, también las de días pasados, como eventos de "
+                        f"todo el día) y los entrenos hechos según Garmin desde el {DESDE_HECHOS.isoformat()} (a su "
+                        f"hora, solo deporte, duración y distancia); la app los pone sola al arrancar y cada 10 "
+                        f"minutos, y los entrenos nuevos llegan en la vuelta siguiente a cada sincronización con Garmin")
+CALENDARIO_SIN_CONECTAR = "nada: Andrés no ha conectado Google Calendar (se conecta en Ajustes › Google Calendar)"
 
 
 def _dia(fecha: str) -> str:
@@ -77,7 +84,11 @@ y sus zonas, y de dónde salen; "plan", su plan de entrenamiento en curso (sus c
 con lo previsto en segundos y lo hecho según Garmin, sus sesiones por día con su id y sus bloques y la nutrición en carrera); \
 "incidencias", sus molestias y lesiones apuntadas en el plan: las abiertas (estado abierta) siguen ahí, tenlas en \
 cuenta antes de proponerle cualquier sesión; las cerradas de su plan en curso, con su lección; cada una con sus \
-visitas al fisio o al médico (fecha, quién y qué le dijo); las que no dicen estado vienen de su .md.
+visitas al fisio o al médico (fecha, quién y qué le dijo); las que no dicen estado vienen de su .md; \
+"google_calendar", si su Google Calendar está conectado y qué lleva su calendario «TriData». Tú no puedes poner ni \
+quitar nada allí: lo pone la app sola. Si te pregunta si algo está en el calendario, contesta con lo que dice \
+"google_calendar" y nunca que «debería aparecer»; si algo falta, puede tocar «Sincronizar ahora» en Ajustes › \
+Google Calendar.
 
 Cómo responder:
 - En español, de tú, breve y concreto, con sus números reales. En texto plano: sin Markdown (nada de asteriscos, \
@@ -229,9 +240,9 @@ def _incidencias(planes: Planes, plan_id: int) -> list[dict]:
 
 def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, store: DataStore | None,
            transcripciones: list[dict[str, Any]], aviso_medico: str | None, hoy: date,
-           planes: Planes | None = None) -> Contexto:
+           planes: Planes | None = None, calendario_conectado: bool = False) -> Contexto:
     """The fixed part of every request of every conversation, with the data up to `hoy` (R3); unit 041: with the
-    plan in course and its incidents (`planes`)."""
+    plan in course and its incidents (`planes`); unit 054: whether Google Calendar is connected and what it carries."""
     desde = hoy - timedelta(days=DIAS_DIA_A_DIA - 1)
     comidas = _comidas(registro)
     peso_de = {p["dia"]: p for p in pesos.entre(DESDE_SIEMPRE, hoy)}
@@ -319,6 +330,8 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
         "dias": dias,
         "semanas": resumen_semanas,
         "planeado_despues_de_hoy": planeado,
+        "google_calendar": {"conectado": calendario_conectado,
+                            "lleva": CALENDARIO_CONECTADO if calendario_conectado else CALENDARIO_SIN_CONECTAR},
     }
     plan, incidencias = plan_en_curso(planes, store, hoy)
     if plan is not None:

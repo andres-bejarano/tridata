@@ -338,3 +338,201 @@ def test_la_estrategia_y_el_tiempo_a_mano_van_en_el_md(tmp_path):  # R4
     estrategia = md.index("Estrategia de Maratón de ejemplo")
     assert tabla < estrategia < md.index("## Semanas")
     assert "- km 0-10 · 4:25/km\n- gel: km 10" in md[estrategia:]
+
+
+# -- unit 063: plans by hand — a new plan, renamed or deleted, and its races added, removed, moved to another plan or
+# made the main one (R1-R8 · R-127, R-133, R-134, R-135). Every plan, race and date is invented. -------------------
+
+AHORA_063 = datetime(2026, 10, 30, 9)
+
+
+def _dos_planes(tmp_path) -> tuple[Planes, int, int]:
+    """«Road to Ejemplo 26» (two races, the main one in December) and a new «Medio de ejemplo 27» with its own."""
+    planes, ejemplo = _guardado(tmp_path)
+    medio = planes.nuevo("Medio de ejemplo 27", {"nombre": "Provisional de ejemplo", "fecha": "2027-09-12",
+                                                 "objetivo": "acabar"}, AHORA_063)
+    return planes, ejemplo, medio
+
+
+def test_un_plan_nuevo_con_su_principal_se_baja_y_se_reimporta_igual(tmp_path):  # R1 · R-133, R-134
+    from test_plan_importar import OrdenadorFalso
+
+    from tridata.plan import importar
+    from tridata.plan.markdown import escribir
+
+    planes = Planes(tmp_path / "data.sqlite3")
+    ident = planes.nuevo("  Medio de ejemplo   27 ", {"nombre": "Medio de ejemplo", "fecha": "2027-09-12",
+                                                      "objetivo": "5:30"}, AHORA_063)
+    assert [(p["id"], p["nombre"], p["principal"]) for p in planes.lista()] == [
+        (ident, "Medio de ejemplo 27", "2027-09-12")]
+    plan = planes.leer(ident)
+    assert plan["carreras"] == [{"apartado": 0, "nombre": "Medio de ejemplo", "fecha": "2027-09-12",
+                                 "objetivo": "5:30", "estado": "pendiente", "principal": True}]
+    assert plan["semanas"] == [] and plan["sesiones"] == []
+    vista = semanas.vista(plan, None, HOY)
+    assert vista["semanas"] == [] and vista["carreras"][0]["principal"] is True
+
+    md = escribir(plan, None, HOY)
+    otra = importar.proponer(md, OrdenadorFalso(), None, HOY)
+    assert otra["nombre"] == plan["nombre"]
+    assert [a["titulo"] for a in otra["apartados"]] == [a["titulo"] for a in plan["apartados"]]
+    for parte in ("carreras", "semanas", "sesiones", "nutricion", "incidencias", "notas"):
+        assert otra[parte] == plan[parte], parte
+
+
+def test_un_plan_nuevo_sin_nombre_o_con_fecha_mala_no_se_guarda(tmp_path):  # R1
+    planes = Planes(tmp_path / "data.sqlite3")
+    carrera = {"nombre": "Medio de ejemplo", "fecha": "2027-09-12", "objetivo": ""}
+    with pytest.raises(ValueError, match="nombre"):
+        planes.nuevo("   ", carrera, AHORA_063)
+    with pytest.raises(ValueError, match="nombre"):
+        planes.nuevo("Medio de ejemplo 27", {**carrera, "nombre": " "}, AHORA_063)
+    for mala in ("2027-02-30", "12/9/2027", "", None):
+        with pytest.raises(ValueError, match="fecha"):
+            planes.nuevo("Medio de ejemplo 27", {**carrera, "fecha": mala}, AHORA_063)
+    assert planes.lista() == []
+
+
+def test_renombrar_un_plan(tmp_path):  # R2
+    planes, ejemplo, medio = _dos_planes(tmp_path)
+    planes.renombrar(medio, "  Medio de otro sitio 27 ")
+    assert [p["nombre"] for p in planes.lista()] == ["Road to Ejemplo 26", "Medio de otro sitio 27"]
+    with pytest.raises(ValueError, match="nombre"):
+        planes.renombrar(medio, "  ")
+    with pytest.raises(LookupError):
+        planes.renombrar(999, "Otro de ejemplo")
+    assert planes.leer(medio)["nombre"] == "Medio de otro sitio 27"
+
+
+def test_pasar_una_carrera_a_otro_plan_se_lleva_su_objetivo_resultado_y_estrategia(tmp_path):  # R5 (portante)
+    planes, ejemplo, medio = _dos_planes(tmp_path)
+    planes.guardar_estrategia(ejemplo, "Half de ejemplo", ["natación · por sensaciones", "gel: km 30 de bici"])
+    planes.editar_carrera(ejemplo, "Half de ejemplo", {"resultado": "4:58:00"})
+    planes.mover_carrera(ejemplo, "Half de ejemplo", medio)
+
+    assert [c["nombre"] for c in planes.leer(ejemplo)["carreras"]] == ["10K de ejemplo", "Maratón de ejemplo"]
+    assert planes.estrategia(ejemplo, "Half de ejemplo") == []
+    destino = planes.leer(medio)
+    assert [c["nombre"] for c in destino["carreras"]] == ["Provisional de ejemplo", "Half de ejemplo"]
+    half = destino["carreras"][1]
+    assert (half["fecha"], half["objetivo"], half["resultado"]) == ("2027-06-05", "5:00", "4:58:00")
+    assert half["estrategia"] == ["natación · por sensaciones", "gel: km 30 de bici"]
+    assert half["apartado"] == destino["carreras"][0]["apartado"]  # among the races of the destination
+    assert half["principal"] is False
+    # in the .md of the destination, with its strategy and its time
+    from tridata.plan.markdown import escribir
+
+    md = escribir(destino, None, HOY)
+    assert "| Half de ejemplo | 2027-06-05 | 5:00 | ✅ 4:58:00 | no |" in md
+    assert "Estrategia de Half de ejemplo:" in md
+
+
+def test_pasar_una_carrera_que_ya_esta_en_el_destino_no_se_hace(tmp_path):  # R5
+    planes, ejemplo, medio = _dos_planes(tmp_path)
+    planes.anadir_carrera(medio, {"nombre": "Half de ejemplo", "fecha": "2027-05-01", "objetivo": ""})
+    antes = (planes.leer(ejemplo), planes.leer(medio))
+    with pytest.raises(ValueError, match="Half de ejemplo"):
+        planes.mover_carrera(ejemplo, "Half de ejemplo", medio)
+    with pytest.raises(ValueError):
+        planes.mover_carrera(ejemplo, "Half de ejemplo", ejemplo)  # the same plan
+    with pytest.raises(LookupError):
+        planes.mover_carrera(ejemplo, "No existe de ejemplo", medio)
+    with pytest.raises(LookupError):
+        planes.mover_carrera(ejemplo, "Half de ejemplo", 999)
+    assert (planes.leer(ejemplo), planes.leer(medio)) == antes
+
+
+def test_anadir_y_quitar_una_carrera(tmp_path):  # R4, R5
+    planes, ejemplo, medio = _dos_planes(tmp_path)
+    planes.anadir_carrera(medio, {"nombre": " Sprint de ejemplo ", "fecha": "2027-04-18", "objetivo": "1:10"})
+    carreras = planes.leer(medio)["carreras"]
+    assert [(c["nombre"], c["fecha"], c["objetivo"], c["estado"], c["principal"]) for c in carreras] == [
+        ("Provisional de ejemplo", "2027-09-12", "acabar", "pendiente", True),
+        ("Sprint de ejemplo", "2027-04-18", "1:10", "pendiente", False)]
+    with pytest.raises(ValueError, match="Sprint de ejemplo"):
+        planes.anadir_carrera(medio, {"nombre": "Sprint de ejemplo", "fecha": "2027-05-01", "objetivo": ""})
+    with pytest.raises(ValueError, match="nombre"):
+        planes.anadir_carrera(medio, {"nombre": "  ", "fecha": "2027-05-01", "objetivo": ""})
+    with pytest.raises(ValueError, match="fecha"):
+        planes.anadir_carrera(medio, {"nombre": "Otra de ejemplo", "fecha": "2027-13-01", "objetivo": ""})
+    with pytest.raises(LookupError):
+        planes.anadir_carrera(999, {"nombre": "Otra de ejemplo", "fecha": "2027-05-01", "objetivo": ""})
+    # the same name in ANOTHER plan is fine
+    planes.anadir_carrera(ejemplo, {"nombre": "Sprint de ejemplo", "fecha": "2027-04-18", "objetivo": ""})
+
+    planes.quitar_carrera(medio, "Sprint de ejemplo")
+    assert [c["nombre"] for c in planes.leer(medio)["carreras"]] == ["Provisional de ejemplo"]
+    assert "Sprint de ejemplo" in [c["nombre"] for c in planes.leer(ejemplo)["carreras"]]
+    with pytest.raises(LookupError):
+        planes.quitar_carrera(medio, "Sprint de ejemplo")
+
+
+def test_hacer_principal_deja_una_sola_y_sin_principal_no_cuenta(tmp_path):  # R6, R8 · R-134
+    planes, ejemplo, medio = _dos_planes(tmp_path)
+    planes.mover_carrera(ejemplo, "Half de ejemplo", medio)
+    planes.hacer_principal(medio, "Half de ejemplo")
+    assert [(c["nombre"], c["principal"]) for c in planes.leer(medio)["carreras"]] == [
+        ("Provisional de ejemplo", False), ("Half de ejemplo", True)]
+    planes.quitar_carrera(medio, "Provisional de ejemplo")
+    assert [p["principal"] for p in planes.lista()] == ["2026-12-06", "2027-06-05"]
+    with pytest.raises(LookupError):
+        planes.hacer_principal(medio, "No existe de ejemplo")
+
+    # R8: the main race moved away leaves its plan without one; none is picked by itself
+    planes.mover_carrera(ejemplo, "Maratón de ejemplo", medio)
+    assert all(not c["principal"] for c in planes.leer(ejemplo)["carreras"])
+    assert [(c["nombre"], c["principal"]) for c in planes.leer(medio)["carreras"]] == [
+        ("Half de ejemplo", True), ("Maratón de ejemplo", False)]  # never two in the destination
+    assert planes.lista()[0]["principal"] is None
+    # a plan without a main race does not count for the current one, even if it is the only one with races to come
+    assert planes.en_curso(HOY) == medio
+    planes.quitar_carrera(medio, "Half de ejemplo")  # R8: removing the main one, the same
+    assert all(not c["principal"] for c in planes.leer(medio)["carreras"])
+
+
+def test_plan_en_curso_con_dos_planes_que_no_se_solapan(tmp_path):  # R7 · R-134
+    planes, ejemplo, medio = _dos_planes(tmp_path)
+    planes.mover_carrera(ejemplo, "Half de ejemplo", medio)
+    planes.hacer_principal(medio, "Half de ejemplo")
+    assert planes.en_curso(HOY) == ejemplo  # until its race (2026-12-06)
+    assert planes.en_curso(date(2026, 12, 6)) == ejemplo
+    assert planes.en_curso(date(2026, 12, 7)) == medio  # then the one of the half
+    assert planes.en_curso(date(2027, 10, 1)) == medio  # all over: the one whose race was last
+
+
+def test_borrar_un_plan_no_deja_ninguna_fila_suya(tmp_path):  # R3 · R-135
+    import sqlite3
+
+    planes, ejemplo, medio = _dos_planes(tmp_path)
+    datos = plan_de_prueba()
+    datos.pop("id")
+    datos["nutricion"] = [{"apartado": 1, "producto": "Gel de ejemplo", "pauta": "min 30"}]
+    datos["incidencias"] = [{"apartado": 1, "fecha": "2026-10-02", "texto": "resfriado inventado"}]
+    datos["notas"] = [{"apartado": 1, "tipo": "nota", "texto": "algo inventado"}]
+    completo = planes.crear(datos, AHORA_063)
+    incidencia = planes.abrir_incidencia(completo, "tobillo", "derecho", date(2026, 10, 20), "torcedura inventada",
+                                         AHORA_063)
+    planes.anadir_visita(incidencia, date(2026, 10, 22), "fisio", "reposo inventado", AHORA_063)
+    planes.nota_del_dia(completo, date(2026, 10, 20), "nota inventada", AHORA_063)
+    otra = planes.abrir_incidencia(medio, "rodilla", None, date(2026, 10, 21), "molestia inventada", AHORA_063)
+    planes.anadir_visita(otra, date(2026, 10, 23), "médico", "nada inventado", AHORA_063)
+    planes.nota_del_dia(medio, date(2026, 10, 21), "otra nota inventada", AHORA_063)
+    antes = {i: planes.leer(i) for i in (ejemplo, medio)}
+
+    planes.borrar(completo)
+    assert planes.leer(completo) is None
+    assert [p["id"] for p in planes.lista()] == [ejemplo, medio]
+    conn = sqlite3.connect(tmp_path / "data.sqlite3")
+    for tabla in ("plan_carrera", "plan_semana", "plan_sesion", "plan_nutricion", "plan_incidencia", "plan_nota",
+                  "plan_nota_dia"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {tabla} WHERE plan_id = ?", (completo,)).fetchone() == (0,), tabla  # noqa: S608
+    assert conn.execute("SELECT COUNT(*) FROM plan_visita WHERE incidencia = ?", (incidencia,)).fetchone() == (0,)
+    conn.close()
+    # the other plans, untouched
+    assert {i: planes.leer(i) for i in (ejemplo, medio)} == antes
+    assert [x["que_paso"] for x in planes.incidencias(medio)] == ["molestia inventada"]
+    assert planes.incidencias(medio)[0]["visitas"] == [{"fecha": "2026-10-23", "quien": "médico",
+                                                        "que_dijo": "nada inventado"}]
+    assert planes.notas_del_dia(medio) == {"2026-10-21": ["otra nota inventada"]}
+    with pytest.raises(LookupError):
+        planes.borrar(completo)

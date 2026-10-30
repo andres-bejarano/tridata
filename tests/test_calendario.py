@@ -558,27 +558,32 @@ def test_las_sesiones_pasadas_tambien_van(b):  # R5: the tempo moved to the 28th
 
 # -- R6: planned and done the same day ---------------------------------------------------------------------------------
 
-def test_el_mismo_dia_van_el_previsto_y_el_hecho_sin_pisarse(h):  # R6
-    plan_id = h.planes.crear(plan_inventado([SERIES]), AHORA)  # the 28th
-    h.store.save_activities([TEMPO])  # the 28th, at 19:00
+def test_el_mismo_dia_y_deporte_solo_queda_el_hecho(h):  # R6, changed by the 056 (R3): only the training done
+    h.planes.crear(plan_inventado([SERIES]), AHORA)  # a run, the 28th
     h.conectar()
-    assert h.pasada() == {"creados": 2, "cambiados": 0, "borrados": 0}
-    eventos = h.google.de(h.cal())
-    assert sorted(e["summary"] for e in eventos) == ["✅ 🏃 Carrera · 60' · 12,0 km", "🏃 Series 4×12' a 4:00"]
-    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}
+    assert h.pasada() == {"creados": 1, "cambiados": 0, "borrados": 0}  # not trained yet: the session
 
-    # the training leaves: the session stays
-    with h.store._connect() as conn:
-        conn.execute("DELETE FROM activities")
-    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 1}
-    assert [e["summary"] for e in h.google.de(h.cal())] == ["🏃 Series 4×12' a 4:00"]
-
-    # the session leaves: the training (back in the base) stays
-    h.store.save_activities([TEMPO])
-    with h.planes._connect() as conn:
-        conn.execute("DELETE FROM plan_sesion WHERE plan_id = ?", (plan_id,))
+    h.store.save_activities([TEMPO])  # the run of the 28th arrives: the session leaves, the training comes
     assert h.pasada() == {"creados": 1, "cambiados": 0, "borrados": 1}
     assert [e["summary"] for e in h.google.de(h.cal())] == ["✅ 🏃 Carrera · 60' · 12,0 km"]
+    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}
+
+    # the training leaves the base: the session is back
+    with h.store._connect() as conn:
+        conn.execute("DELETE FROM activities")
+    assert h.pasada() == {"creados": 1, "cambiados": 0, "borrados": 1}
+    assert [e["summary"] for e in h.google.de(h.cal())] == ["🏃 Series 4×12' a 4:00"]
+
+
+def test_la_sesion_de_un_deporte_que_ese_dia_no_se_hizo_se_queda(h):  # 056 R3
+    h.planes.crear(plan_inventado([SERIES]), AHORA)  # a run, the 28th
+    h.store.save_activities([hecho("h-nado", "2026-10-28", "lap_swimming", 1800, 1500.0, hora="07:00:00"),
+                             hecho("h-bici-corta", "2026-10-28", "cycling", 20 * 60, 6000.0, hora="08:00:00"),
+                             hecho("h-carrera-otro-dia", "2026-10-27", "running", 3000, 10000.0)])
+    h.conectar()
+    h.pasada()
+    assert sorted(e["summary"] for e in h.google.de(h.cal())) == [
+        "✅ 🏃 Carrera · 50' · 10,0 km", "✅ 🏊 Natación · 30' · 1500 m", "🏃 Series 4×12' a 4:00"]
 
 
 # -- R8: Google fails half way through the first pass ------------------------------------------------------------------

@@ -22,6 +22,12 @@
 // card of a conversation. Each day of a week shows its notes («📝 FC alta para el ritmo»).
 // Unit 059: a race that was run says its time and km from Garmin unless Andrés wrote his own, and «Editar» opens, in
 // its row, its name, date, target and time (POST /api/plan/carrera).
+// Unit 063: plans by hand. «➕ Nuevo plan» (next to «📥 Importar plan») asks the name of the plan and its main race
+// (POST /api/plan/nuevo); the header renames the plan (POST /api/plan/ID/renombrar) or deletes it after a confirm()
+// with its name (POST /api/plan/ID/borrar, then the current plan). «➕ Añadir carrera» under the races
+// (POST /api/plan/carrera/anadir); the form of a race also has «Hacer principal», «Pasar a otro plan» (a select with
+// the other plans) and «Quitar del plan» (with a confirm()): /api/plan/carrera/{principal,mover,quitar}. A plan
+// without a main race says «Sin carrera principal».
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -102,14 +108,106 @@ function botonImportar() {
     onclick: () => $("plan-fichero").click() });
 }
 
+// -- unit 063: plans by hand -----------------------------------------------------------------------------------------
+
+// a labelled input: [input, its label]
+function campo(etiqueta, props) {
+  const entrada = el("input", props);
+  return [entrada, el("label", {}, el("small", { className: "suave", textContent: etiqueta }), entrada)];
+}
+
+const cajaError = () => el("p", { className: "aviso", role: "alert", hidden: true });
+
+// a row of small actions (links as buttons), wrapping on a phone
+function filaAcciones(...hijos) {
+  const fila = el("div", { className: "acciones-carrera" }, ...hijos);
+  Object.assign(fila.style, { display: "flex", flexWrap: "wrap", gap: "8px 16px", alignItems: "center" });
+  return fila;
+}
+
+// POST `ruta` with `cuerpo`; ok: repaints with the answer (like GET /api/plan), else says why in `error`
+async function enviar(ruta, cuerpo, error, boton, alAcabar = null) {
+  if (boton) boton.disabled = true;
+  const { ok, datos } = await api(ruta, cuerpo);
+  if (boton) boton.disabled = false;
+  if (!ok) { error.hidden = false; error.textContent = datos.error ?? "No he podido guardarlo."; return; }
+  alAcabar?.(datos);
+  pintarPlan(datos);
+}
+
+// «➕ Nuevo plan»: its name and its main race (name, date, target); the plan is seen at once
+function nuevoPlan() {
+  const [nombre, lNombre] = campo("Nombre del plan", { type: "text", required: true, name: "plan-nombre", placeholder: "Medio ironman 2027" });
+  const [carrera, lCarrera] = campo("Carrera principal", { type: "text", required: true, name: "carrera-nombre" });
+  const [dia, lDia] = campo("Fecha de la carrera", { type: "date", required: true, name: "carrera-fecha" });
+  const [objetivo, lObjetivo] = campo("Objetivo", { type: "text", name: "carrera-objetivo", placeholder: "acabar" });
+  const error = cajaError();
+  const guardar = el("button", { type: "submit", className: "principal", textContent: "Crear plan" });
+  const formulario = el("form", { id: "plan-nuevo-form", className: "tarjeta cerrar-incid", hidden: true },
+    el("strong", { textContent: "Nuevo plan" }), lNombre, lCarrera, lDia, lObjetivo, error, guardar);
+  formulario.style.flexBasis = "100%";
+  formulario.addEventListener("submit", (evento) => {
+    evento.preventDefault();
+    enviar("/api/plan/nuevo", { nombre: nombre.value,
+      carrera: { nombre: carrera.value, fecha: dia.value, objetivo: objetivo.value } }, error, guardar,
+    (datos) => { planVisto = datos.plan?.id ?? null; });
+  });
+  const boton = el("button", { type: "button", id: "plan-nuevo-boton", textContent: "➕ Nuevo plan",
+    onclick: () => { formulario.hidden = !formulario.hidden; if (!formulario.hidden) nombre.focus(); } });
+  return [boton, formulario];
+}
+
+// the header of a plan: rename it and «Borrar plan»
+function gestionPlan(plan) {
+  const [nombre, lNombre] = campo("Nombre del plan", { type: "text", required: true, value: plan.nombre, name: "plan-nombre" });
+  const error = cajaError();
+  const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar nombre" });
+  const formulario = el("form", { id: "plan-renombrar-form", className: "cerrar-incid", hidden: true }, lNombre, guardar);
+  formulario.addEventListener("submit", (evento) => {
+    evento.preventDefault();
+    enviar(`/api/plan/${plan.id}/renombrar`, { nombre: nombre.value }, error, guardar);
+  });
+  const renombrar = el("button", { type: "button", className: "enlace-boton", id: "plan-renombrar", textContent: "Cambiar nombre",
+    onclick: () => { formulario.hidden = !formulario.hidden; if (!formulario.hidden) nombre.focus(); } });
+  const borrar = el("button", { type: "button", className: "enlace-boton", id: "plan-borrar", textContent: "Borrar plan" });
+  borrar.style.color = "var(--peligro)";
+  borrar.addEventListener("click", async () => {
+    const seguro = window.confirm(`¿Borrar el plan «${plan.nombre}» entero? Se borran sus carreras, semanas, sesiones, notas e incidencias, y no se puede deshacer: si quieres guardarlo, «Bajar .md» antes. Garmin y lo que ya has hecho no se tocan.`);
+    if (!seguro) return;
+    await enviar(`/api/plan/${plan.id}/borrar`, {}, error, borrar, () => { planVisto = null; });
+  });
+  const caja = el("div", { className: "gestion-plan" }, filaAcciones(renombrar, borrar), formulario, error);
+  caja.style.margin = "0 4px 10px";
+  return caja;
+}
+
+// «➕ Añadir carrera» under the races of the plan seen
+function anadirCarrera(plan) {
+  const [nombre, lNombre] = campo("Nombre", { type: "text", required: true, name: "nombre" });
+  const [dia, lDia] = campo("Fecha", { type: "date", name: "fecha" });
+  const [objetivo, lObjetivo] = campo("Objetivo", { type: "text", name: "objetivo" });
+  const error = cajaError();
+  const guardar = el("button", { type: "submit", className: "principal", textContent: "Añadir carrera" });
+  const formulario = el("form", { id: "plan-anadir-carrera-form", className: "tarjeta cerrar-incid", hidden: true },
+    lNombre, lDia, lObjetivo, error, guardar);
+  formulario.addEventListener("submit", (evento) => {
+    evento.preventDefault();
+    enviar("/api/plan/carrera/anadir", { id: plan.id, nombre: nombre.value, fecha: dia.value, objetivo: objetivo.value },
+      error, guardar);
+  });
+  const boton = el("button", { type: "button", className: "enlace-boton", id: "plan-anadir-carrera", textContent: "➕ Añadir carrera",
+    onclick: () => { formulario.hidden = !formulario.hidden; if (!formulario.hidden) nombre.focus(); } });
+  return el("div", { className: "anadir-carrera" }, boton, formulario);
+}
+
 function pintarPlan(datos) {
   ultimo = datos;
   const caja = $("plan-vista");
   const plan = datos.plan;
   if (!plan) {
     caja.replaceChildren(
-      el("p", { className: "tarjeta plan-vacio", textContent: "Importa tu plan: elige tu .md y la app lo ordena en sus partes, lo cruza con Garmin y te enseña las diferencias antes de guardar nada." }),
-      el("div", { className: "acciones-plan" }, botonImportar()));
+      el("p", { className: "tarjeta plan-vacio", textContent: "Importa tu plan: elige tu .md y la app lo ordena en sus partes, lo cruza con Garmin y te enseña las diferencias antes de guardar nada. O crea uno nuevo con su carrera principal." }),
+      el("div", { className: "acciones-plan" }, botonImportar(), ...nuevoPlan()));
     return;
   }
   const cabecera = el("div", { className: "plan-cab" }, el("h2", { id: "plan-nombre", textContent: plan.nombre }));
@@ -120,18 +218,24 @@ function pintarPlan(datos) {
     elegir.addEventListener("change", () => { planVisto = Number(elegir.value); cargarPlan(); });
     cabecera.append(elegir);
   }
-  caja.replaceChildren(
+  caja.replaceChildren(...[
     cabecera,
-    el("ul", { id: "plan-carreras", className: "tarjeta lista-plan" }, ...plan.carreras.map(filaCarrera)),
+    gestionPlan(plan),
+    plan.carreras.some((c) => c.principal) ? null
+      : el("p", { id: "plan-sin-principal", className: "tarjeta suave", textContent: "Sin carrera principal: este plan no cuenta para el plan en curso. Elige una con «Hacer principal»." }),
+    plan.carreras.length
+      ? el("ul", { id: "plan-carreras", className: "tarjeta lista-plan" }, ...plan.carreras.map(filaCarrera))
+      : null,
+    anadirCarrera(plan),
     el("h3", { className: "titulo-bloque titulo-semanas", textContent: "Semanas · previsto frente a hecho" }),
     plan.semanas.length
       ? el("ul", { id: "plan-semanas", className: "tarjeta lista-plan" }, ...plan.semanas.map(filaSemana))
       : el("p", { className: "tarjeta suave", textContent: "Este plan no tiene semanas." }),
     el("p", { className: "suave nota-plan", textContent: "Lo hecho sale de Garmin: tiempo en movimiento y km de carrera a pie. Bici, natación y gimnasio, dentro de cada semana." }),
-    el("div", { className: "acciones-plan" }, botonImportar(),
+    el("div", { className: "acciones-plan" }, botonImportar(), ...nuevoPlan(),
       el("a", { id: "plan-bajar", className: "boton", href: `/api/plan/${plan.id}.md`, download: "", textContent: "📄 Bajar .md" }),
       el("button", { type: "button", id: "plan-incidencias-boton", textContent: `⚠️ Incidencias${plan.abiertas ? ` (${plan.abiertas})` : ""}`,
-        onclick: () => abrirIncidencias(plan.id) })));
+        onclick: () => abrirIncidencias(plan.id) }))].filter(Boolean));
 }
 
 function filaCarrera(c) {
@@ -162,10 +266,6 @@ function filaCarrera(c) {
 // Unit 059 (R3): name, date, target and time of a race, from its row (POST /api/plan/carrera). An empty time: the
 // one of Garmin; the strategy stays with the race whatever its name.
 function formCarrera(c) {
-  const campo = (etiqueta, props) => {
-    const entrada = el("input", props);
-    return [entrada, el("label", {}, el("small", { className: "suave", textContent: etiqueta }), entrada)];
-  };
   const [nombre, lNombre] = campo("Nombre", { type: "text", value: c.nombre, required: true, name: "nombre" });
   const [dia, lDia] = campo("Fecha", { type: "date", value: c.fecha ?? "", name: "fecha" });
   const [objetivo, lObjetivo] = campo("Objetivo", { type: "text", value: c.objetivo ?? "", name: "objetivo" });
@@ -174,7 +274,7 @@ function formCarrera(c) {
   const error = el("p", { className: "aviso", role: "alert", hidden: true });
   const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar carrera" });
   const formulario = el("form", { className: "cerrar-incid form-carrera", hidden: true },
-    lNombre, lDia, lObjetivo, lTiempo, error, guardar);
+    lNombre, lDia, lObjetivo, lTiempo, error, guardar, accionesCarrera(c, error));
   formulario.style.flexBasis = "100%";
   formulario.addEventListener("submit", async (evento) => {
     evento.preventDefault();
@@ -186,6 +286,35 @@ function formCarrera(c) {
     pintarPlan(datos);
   });
   return formulario;
+}
+
+// Unit 063 (R5, R6): «Hacer principal», «Pasar a otro plan» and «Quitar del plan» of a race, under its form
+function accionesCarrera(c, error) {
+  const plan = ultimo.plan;
+  const cuerpo = { id: plan.id, carrera: c.nombre };
+  const acciones = filaAcciones();
+  if (!c.principal) {
+    const principal = el("button", { type: "button", className: "enlace-boton hacer-principal", textContent: "⭐ Hacer principal" });
+    principal.addEventListener("click", () => enviar("/api/plan/carrera/principal", cuerpo, error, principal));
+    acciones.append(principal);
+  }
+  const otros = ultimo.planes.filter((p) => p.id !== plan.id);
+  if (otros.length) {
+    const destino = el("select", { className: "destino-carrera", ariaLabel: `Plan al que pasar ${c.nombre}` },
+      ...otros.map((p) => el("option", { value: String(p.id), textContent: p.nombre })));
+    const mover = el("button", { type: "button", className: "enlace-boton pasar-carrera", textContent: "Pasar a otro plan" });
+    mover.addEventListener("click", () => enviar("/api/plan/carrera/mover", { ...cuerpo, destino: Number(destino.value) }, error, mover));
+    acciones.append(el("span", { className: "pasar-a" }, mover, destino));
+  }
+  const quitar = el("button", { type: "button", className: "enlace-boton quitar-carrera", textContent: "Quitar del plan" });
+  quitar.style.color = "var(--peligro)";
+  quitar.addEventListener("click", () => {
+    if (window.confirm(`¿Quitar «${c.nombre}» del plan «${plan.nombre}»? Se va con su objetivo, su tiempo y su estrategia.`)) {
+      enviar("/api/plan/carrera/quitar", cuerpo, error, quitar);
+    }
+  });
+  acciones.append(quitar);
+  return acciones;
 }
 
 function hechoCorto(h) {

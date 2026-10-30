@@ -277,3 +277,117 @@ def test_la_semana_lleva_el_aviso_de_cada_sesion(web):  # 061 · R2, R5
     reloj = {d["fecha"]: d["reloj"] for d in r.json()["dias"]}
     assert reloj["2026-10-22"] == [{"id": rodaje["id"], "estado": None, "enviada": None, "aviso": None}]
     assert reloj["2026-10-24"][0]["aviso"] == YA_NO_ESTA
+
+
+# -- unit 063: plans by hand from Fitness › Plan (R1-R8). Every plan, race and date is invented. ------------------------
+
+def _post(web: Web, ruta: str, **cuerpo) -> object:
+    return web.cliente.post(ruta, json=cuerpo)
+
+
+def _nuevo(web: Web, nombre: str = "Medio de ejemplo 27", **carrera) -> object:
+    return _post(web, "/api/plan/nuevo", nombre=nombre,
+                 carrera={"nombre": "Provisional de ejemplo", "fecha": "2027-09-12", "objetivo": "acabar", **carrera})
+
+
+def test_nuevo_plan_desde_la_web(web):  # R1
+    ejemplo = web.confirmar(web.importar(), {"4": "plan"})["plan"]["id"]
+    r = _nuevo(web)
+    assert r.status_code == 200, r.text
+    datos = r.json()
+    plan = datos["plan"]  # answered like GET /api/plan, with the new plan
+    assert plan["nombre"] == "Medio de ejemplo 27" and plan["semanas"] == []
+    assert [(c["nombre"], c["principal"], c["objetivo"]) for c in plan["carreras"]] == [
+        ("Provisional de ejemplo", True, "acabar")]
+    assert [(p["id"], p["en_curso"]) for p in datos["planes"]] == [(ejemplo, True), (plan["id"], False)]
+    md = web.cliente.get(f"/api/plan/{plan['id']}.md")
+    assert md.status_code == 200 and md.text.startswith("# Medio de ejemplo 27\n")
+    otra = web.importar(md.text)
+    assert otra["nombre"] == "Medio de ejemplo 27"
+    assert otra["carreras"] == Planes(web.db).leer(plan["id"])["carreras"]
+
+
+def test_nuevo_plan_dice_por_que_no_se_guarda(web):  # R1
+    r = _nuevo(web, nombre="  ")
+    assert r.status_code == 400 and "nombre" in r.json()["error"]
+    r = _nuevo(web, fecha="2027-02-30")
+    assert r.status_code == 400 and "fecha" in r.json()["error"]
+    r = _post(web, "/api/plan/nuevo", nombre="Medio de ejemplo 27",
+              carrera={"nombre": " ", "fecha": "2027-09-12", "objetivo": ""})
+    assert r.status_code == 400 and "nombre" in r.json()["error"]
+    assert web.cliente.post("/api/plan/nuevo", content=b"no es json").status_code == 400
+    assert _post(web, "/api/plan/nuevo", nombre="Medio de ejemplo 27", carrera="no").status_code == 400
+    assert web.cliente.get("/api/plan").json()["planes"] == []
+
+
+def test_renombrar_y_borrar_un_plan_desde_la_web(web):  # R2, R3
+    ejemplo = web.confirmar(web.importar(), {"4": "plan"})["plan"]["id"]
+    medio = _nuevo(web).json()["plan"]["id"]
+    r = _post(web, f"/api/plan/{medio}/renombrar", nombre="Medio de otro sitio 27")
+    assert r.status_code == 200, r.text
+    assert r.json()["plan"]["nombre"] == "Medio de otro sitio 27"
+    assert [p["nombre"] for p in r.json()["planes"]] == ["Road to Ejemplo 26", "Medio de otro sitio 27"]
+    r = _post(web, f"/api/plan/{medio}/renombrar", nombre=" ")
+    assert r.status_code == 400 and "nombre" in r.json()["error"]
+    assert _post(web, "/api/plan/999/renombrar", nombre="Otro").status_code == 404
+
+    r = _post(web, f"/api/plan/{medio}/borrar")
+    assert r.status_code == 200, r.text
+    assert r.json()["plan"]["id"] == ejemplo  # back to the current plan
+    assert [p["id"] for p in r.json()["planes"]] == [ejemplo]
+    assert web.cliente.get(f"/api/plan?id={medio}").status_code == 404
+    assert _post(web, f"/api/plan/{medio}/borrar").status_code == 404
+    r = _post(web, f"/api/plan/{ejemplo}/borrar")
+    assert r.status_code == 200 and r.json() == {"hoy": HOY.isoformat(), "plan": None, "planes": []}
+
+
+def test_anadir_quitar_pasar_y_hacer_principal_desde_la_web(web):  # R4, R5, R6, R7, R8
+    ejemplo = web.confirmar(web.importar(), {"4": "plan"})["plan"]["id"]
+    medio = _nuevo(web).json()["plan"]["id"]
+    Planes(web.db).guardar_estrategia(ejemplo, "Media de ejemplo", ["km 0-10 · 4:00/km", "gel: km 10"])
+
+    r = _post(web, "/api/plan/carrera/anadir", id=medio, nombre="Sprint de ejemplo", fecha="2027-04-18",
+              objetivo="1:10")
+    assert r.status_code == 200, r.text
+    assert [(c["nombre"], c["principal"]) for c in r.json()["plan"]["carreras"]] == [
+        ("Provisional de ejemplo", True), ("Sprint de ejemplo", False)]
+    r = _post(web, "/api/plan/carrera/anadir", id=medio, nombre="Sprint de ejemplo", fecha="2027-05-01", objetivo="")
+    assert r.status_code == 400 and "Sprint de ejemplo" in r.json()["error"]
+    r = _post(web, "/api/plan/carrera/anadir", id=medio, nombre="Otra de ejemplo", fecha="mañana", objetivo="")
+    assert r.status_code == 400 and "fecha" in r.json()["error"]
+    assert _post(web, "/api/plan/carrera/anadir", id=999, nombre="X", fecha="", objetivo="").status_code == 404
+
+    r = _post(web, "/api/plan/carrera/mover", id=ejemplo, carrera="Media de ejemplo", destino=medio)
+    assert r.status_code == 200, r.text
+    assert r.json()["plan"]["id"] == ejemplo
+    assert "Media de ejemplo" not in [c["nombre"] for c in r.json()["plan"]["carreras"]]
+    destino = web.cliente.get(f"/api/plan?id={medio}").json()["plan"]["carreras"]
+    media = next(c for c in destino if c["nombre"] == "Media de ejemplo")
+    assert media["objetivo"] == "~1:24" and media["estrategia"] == ["km 0-10 · 4:00/km", "gel: km 10"]
+    r = _post(web, "/api/plan/carrera/mover", id=medio, carrera="Media de ejemplo", destino=medio)
+    assert r.status_code == 400
+    _post(web, "/api/plan/carrera/anadir", id=ejemplo, nombre="Sprint de ejemplo", fecha="2027-04-18", objetivo="")
+    r = _post(web, "/api/plan/carrera/mover", id=ejemplo, carrera="Sprint de ejemplo", destino=medio)
+    assert r.status_code == 400 and "Sprint de ejemplo" in r.json()["error"]
+    assert _post(web, "/api/plan/carrera/mover", id=ejemplo, carrera="No existe", destino=medio).status_code == 404
+    assert _post(web, "/api/plan/carrera/mover", id=ejemplo, carrera="Sprint de ejemplo",
+                 destino=999).status_code == 404
+
+    r = _post(web, "/api/plan/carrera/principal", id=medio, carrera="Media de ejemplo")
+    assert r.status_code == 200, r.text
+    assert [c["nombre"] for c in r.json()["plan"]["carreras"] if c["principal"]] == ["Media de ejemplo"]
+    r = _post(web, "/api/plan/carrera/quitar", id=medio, carrera="Provisional de ejemplo")
+    assert r.status_code == 200, r.text
+    assert [c["nombre"] for c in r.json()["plan"]["carreras"]] == ["Sprint de ejemplo", "Media de ejemplo"]
+    assert _post(web, "/api/plan/carrera/quitar", id=medio, carrera="Provisional de ejemplo").status_code == 404
+    assert _post(web, "/api/plan/carrera/principal", id=999, carrera="Media de ejemplo").status_code == 404
+    assert _post(web, "/api/plan/carrera", id=medio, carrera="Media de ejemplo", fecha="2027-09-19").status_code == 200
+    # R7: the main race of Ejemplo is still to come: Ejemplo is the current one
+    assert [(p["id"], p["en_curso"]) for p in web.cliente.get("/api/plan").json()["planes"]] == [
+        (ejemplo, True), (medio, False)]
+    # R8: its main race moved away, Ejemplo has none and does not count
+    r = _post(web, "/api/plan/carrera/mover", id=ejemplo, carrera="Maratón de ejemplo", destino=medio)
+    assert r.status_code == 200, r.text
+    assert not any(c["principal"] for c in r.json()["plan"]["carreras"])
+    assert [(p["id"], p["en_curso"]) for p in r.json()["planes"]] == [(ejemplo, False), (medio, True)]
+    assert web.cliente.post("/api/plan/carrera/quitar", content=b"no es json").status_code == 400

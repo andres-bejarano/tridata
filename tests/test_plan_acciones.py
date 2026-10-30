@@ -587,3 +587,12 @@ def test_otra_estrategia_dice_la_de_antes_y_la_sustituye(b):  # R6 · G-41
 def test_lo_que_no_se_puede_de_la_estrategia_lo_dice(b, campos, dice):  # G-40
     t = b.uno(**campos)
     assert t["tipo"] == "no" and dice in t["texto"].lower(), t
+
+
+# -- bug 055: the session travels as the watch reads it, with the pace inside its block ------------------------------
+
+def test_la_sesion_se_describe_como_la_lee_el_reloj():  # bug 055 · R3
+    texto = texto_acciones()
+    for ident in ("plan_cambiar_sesion", "plan_anadir_sesion"):
+        linea = next(x for x in texto.splitlines() if x.startswith(f"- {ident}:"))
+        assert "dos puntos" in linea and "«rec»" in linea and "nunca en valor" in linea, ident

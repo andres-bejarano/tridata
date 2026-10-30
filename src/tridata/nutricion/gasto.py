@@ -11,6 +11,11 @@ lower than what the running alone estimates (the «⚠ incompleto» rule of the 
 are not used and it is said. Garmin's own total kcal of the day is never used here (that is the
 close of the day, unit 007 of the roadmap).
 
+Unit 060: the kcal of a training (done or planned) count WITHOUT its BMR (`kcal_sin_basal`): Garmin's
+`calories` of an activity already carry the basal of that hour, which the basal of the day adds again. An
+activity saved without `bmr_calories` counts its whole kcal, as before. The breakdown carries the mark
+`entreno_sin_basal` so the calibration knows which closed days follow this rule.
+
 Unit 047: the planned training may be several (a list); every one adds. The breakdown keeps `previsto` (the
 first or None) and `previsto_kcal` (the sum) as before, and adds `previstos` (the list).
 """
@@ -34,8 +39,16 @@ def _minutos(actividad: Mapping[str, Any]) -> float:
     return round(float(actividad.get("duration_seconds") or 0) / 60, 1)
 
 
+def kcal_sin_basal(actividad: Mapping[str, Any]) -> float | None:
+    """Unit 060 (R3): Garmin's kcal of an activity minus its BMR (never below 0); None if it has no kcal."""
+    kcal = actividad.get("calories")
+    if kcal is None:
+        return None
+    return max(0.0, float(kcal) - float(actividad.get("bmr_calories") or 0))
+
+
 def kcal_previstas(actividad: Mapping[str, Any], minutos: Any) -> float:
-    """Kcal of `minutos` of a training like `actividad`, scaled by duration (R-15, C-15)."""
+    """Kcal of `minutos` of a training like `actividad`, scaled by duration (R-15, C-15), without its BMR (unit 060)."""
     if minutos is None or isinstance(minutos, bool):
         raise ValueError("faltan los minutos del entreno previsto")
     try:
@@ -48,7 +61,7 @@ def kcal_previstas(actividad: Mapping[str, Any], minutos: Any) -> float:
     duracion = float(actividad.get("duration_seconds") or 0) / 60
     if duracion <= 0:
         raise ValueError("esa actividad no tiene duración en Garmin: no se puede escalar")
-    return round(float(actividad.get("calories") or 0) * n / duracion, 1)
+    return round((kcal_sin_basal(actividad) or 0) * n / duracion, 1)
 
 
 def _previstos(previsto: Mapping[str, Any] | Iterable[Mapping[str, Any]] | None) -> list[dict]:
@@ -94,13 +107,14 @@ def estimar_gasto(
 
     hechos: list[dict[str, Any]] = []
     for a in lista:
-        sin_kcal = a.get("calories") is None
+        neto = kcal_sin_basal(a)
+        sin_kcal = neto is None
         nombre = a.get("name") or a.get("activity_type") or "actividad"
         if sin_kcal:
             avisos.append(f"«{nombre}» no trae kcal en Garmin: suma 0.")
         hechos.append({"actividad_id": a.get("activity_id"), "nombre": nombre, "tipo": a.get("activity_type"),
-                       "minutos": _minutos(a), "kcal": 0.0 if sin_kcal else round(float(a["calories"]), 1),
-                       "sin_kcal": sin_kcal})
+                       "minutos": _minutos(a), "kcal": 0.0 if neto is None else round(neto, 1),
+                       "sin_kcal": sin_kcal, "bmr_kcal": a.get("bmr_calories")})
     hecho_kcal = round(sum(float(h["kcal"]) for h in hechos), 1)
     previsto_kcal = round(sum(float(p["kcal"]) for p in previstos), 1)
     pasos_kcal = round(pasos * config.kcal_por_paso, 1)
@@ -133,6 +147,7 @@ def estimar_gasto(
             "previsto": previstos[0] if previstos else None,
             "previstos": previstos,
             "previsto_kcal": previsto_kcal,
+            "entreno_sin_basal": True,  # unit 060: the mark of the new rule (the calibration reads it)
         },
         "avisos": avisos,
         "garmin": {"hay_datos": hay_datos, "texto": texto},

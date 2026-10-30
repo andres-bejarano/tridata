@@ -663,7 +663,8 @@ function pintarDesglose(dia) {
   const g = dia.gasto;
   const d = g.desglose;
   if (!d) { $("desglose").replaceChildren(); return; }
-  const deBasal = dia.peso && dia.peso.basal && dia.peso.basal.origen === "peso" ? "Basal (con tu peso)" : "Basal";
+  const origenBasal = dia.peso && dia.peso.basal && dia.peso.basal.origen; // unit 060: Garmin's BMR, or the reserve
+  const deBasal = origenBasal === "garmin" ? "Basal (de tu Garmin)" : origenBasal === "peso" ? "Basal (con tu peso)" : "Basal";
   const lineas = [linea(deBasal, kcalEnteras(d.basal_kcal))];
   const pasos = d.pasos_hechos === null
     ? `${numero.format(g.pasos)} pasos supuestos`

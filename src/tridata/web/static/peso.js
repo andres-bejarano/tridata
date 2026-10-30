@@ -71,7 +71,8 @@ function datos(p) {
     el("span", { textContent: titulo }), el("strong", { className: "num", textContent: valor }), el("span", { textContent: nota }));
   const dias = media ? `${media.dias_con_peso} ${media.dias_con_peso === 1 ? "día" : "días"} con peso` : "sin pesos en 7 días";
   const basal = b && b.kcal !== null ? numero.format(b.kcal) : "—";
-  const deBasal = !b || b.kcal === null ? "sin dato" : b.origen === "peso" ? "kcal, con tu peso" : "kcal, el de Ajustes";
+  const deBasal = !b || b.kcal === null ? "sin dato" : b.origen === "garmin" ? "kcal, de tu Garmin" // unit 060
+    : b.origen === "peso" ? "kcal, con tu peso" : "kcal, el de Ajustes";
   return el("div", { className: "datos" },
     caja("peso-media", "Media de 7 días", media ? `${kilos.format(media.kg)} kg` : "—", dias),
     caja("peso-basal", "Basal", basal, deBasal));

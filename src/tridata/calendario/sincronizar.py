@@ -39,11 +39,12 @@ from ..sync import CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES
 from . import DESDE_HECHOS, SIN_CONECTAR, Calendario, ErrorCalendario
 
 CLAVE = "tridata_sesion"
-CLAVE_HECHO = "tridata_actividad"  # unit 054: the `activity_id` of a training done
+CLAVE_HECHO = "tridata_actividad"  # unit 054; since 057, `<day>/<sport>`: what was done of one sport that day
 MINIMO_BICI_S = 50 * 60  # unit 056: a shorter ride is a commute, not a training: it does not go to the calendar
 HECHO = "Hecho según Garmin"
-_DEPORTES = ((RUNNING_TYPES, "🏃", "Carrera"), (CYCLING_TYPES, "🚴", "Bici"), (SWIMMING_TYPES, "🏊", "Natación"),
-             (GYM_TYPES, "🏋️", "Fuerza"))
+_DEPORTES = ((RUNNING_TYPES, "🏃", "carrera"), (CYCLING_TYPES, "🚴", "bici"), (SWIMMING_TYPES, "🏊", "natacion"),
+             (GYM_TYPES, "🏋️", "fuerza"))
+_ENTRE_PARENTESIS = re.compile(r"\s*\([^()]*\)\s*$")
 _ICONOS = (
     (re.compile(r"\b(bici|rodillo|ciclismo|btt|mtb|carretera en bici)\b"), "🚴"),
     (re.compile(r"\b(natacion|nadar|piscina|aguas abiertas|crol)\b"), "🏊"),
@@ -117,45 +118,75 @@ def _distancia(metros: float, natacion: bool) -> str:
     return f"{metros / 1000:.1f}".replace(".", ",") + " km"
 
 
-def cuerpo_del_hecho(actividad: dict[str, Any], zona: str | None) -> dict[str, Any]:
-    """The event of one training done: «✅ 🏃 Carrera · 52' · 10,2 km» at its hour and lasting what it lasted, in
-    `zona` (the one of this PC); all day while it has no hour. Nothing else of the activity (R1, R2)."""
+def _deporte(actividad: dict[str, Any]) -> tuple[str, str] | None:
+    """Its icon and its key (`carrera`, `bici`, `natacion`, `fuerza`), or None if it is none of them (057 R3)."""
     tipo = actividad.get("activity_type")
-    icono, deporte = next(((i, d) for tipos, i, d in _DEPORTES if tipo in tipos), ("🏃", "Entreno"))
-    segundos = float(actividad.get("duration_seconds") or 0)
-    metros = float(actividad.get("distance_meters") or 0)
-    partes = [f"✅ {icono} {deporte}", f"{round(segundos / 60)}'"]
+    return next(((icono, clave) for tipos, icono, clave in _DEPORTES if tipo in tipos), None)
+
+
+def cuerpo_del_hecho(actividades: list[dict[str, Any]], zona: str | None, carrera: str | None = None) -> dict[str, Any]:
+    """The event of what was done of one sport in a day (unit 057): «🏃 80' · 17,0 km (Salto 15K)», the minutes and the
+    distance summed, from the start of the first one to the end of the last one in `zona` (the one of this PC); all
+    day if one has no hour. Nothing else of the activities (054 R1, R2); `carrera`, the race of the plan that day."""
+    icono, clave = _deporte(actividades[0]) or ("🏃", "otro")
+    segundos = sum(float(a.get("duration_seconds") or 0) for a in actividades)
+    metros = sum(float(a.get("distance_meters") or 0) for a in actividades)
+    partes = [f"{icono} {round(segundos / 60)}'"]
     if metros > 0:
-        partes.append(_distancia(metros, tipo in SWIMMING_TYPES))
-    cuerpo: dict[str, Any] = {"summary": " · ".join(partes), "description": HECHO}
-    hora = actividad.get("start_time_local")
-    if hora:
-        inicio = datetime.fromisoformat(str(hora))
-        inicio = inicio.replace(tzinfo=ZoneInfo(zona)) if zona else inicio.astimezone()
-        fin = inicio + timedelta(seconds=round(segundos))
+        partes.append(_distancia(metros, clave == "natacion"))
+    titulo = " · ".join(partes) + (f" ({carrera})" if carrera else "")
+    cuerpo: dict[str, Any] = {"summary": titulo, "description": HECHO}
+    dia = date.fromisoformat(str(actividades[0]["activity_date"]))
+    if all(a.get("start_time_local") for a in actividades):
+        tramos = []
+        for a in actividades:
+            inicio = datetime.fromisoformat(str(a["start_time_local"]))
+            inicio = inicio.replace(tzinfo=ZoneInfo(zona)) if zona else inicio.astimezone()
+            tramos.append((inicio, inicio + timedelta(seconds=round(float(a.get("duration_seconds") or 0)))))
         extra = {"timeZone": zona} if zona else {}
-        cuerpo["start"] = {"dateTime": inicio.isoformat(), **extra}
-        cuerpo["end"] = {"dateTime": fin.isoformat(), **extra}
+        cuerpo["start"] = {"dateTime": min(t[0] for t in tramos).isoformat(), **extra}
+        cuerpo["end"] = {"dateTime": max(t[1] for t in tramos).isoformat(), **extra}
     else:
-        dia = date.fromisoformat(str(actividad["activity_date"]))
         cuerpo["start"] = {"date": dia.isoformat()}
         cuerpo["end"] = {"date": (dia + timedelta(days=1)).isoformat()}
-    cuerpo["extendedProperties"] = {"private": {CLAVE_HECHO: str(actividad["activity_id"])}}
+    cuerpo["extendedProperties"] = {"private": {CLAVE_HECHO: f"{dia.isoformat()}/{clave}"}}
     return cuerpo
 
 
-def _hechos(store: DataStore, hoy: date, zona: str | None) -> dict[str, dict[str, Any]]:
-    """`{activity id: its event}` of every activity since `DESDE_HECHOS` (R1, R3), but the commutes: a ride of less
-    than `MINIMO_BICI_S` (unit 056). One already sent leaves the calendar like any activity no longer wanted."""
-    return {str(a["activity_id"]): cuerpo_del_hecho(a, zona) for a in store.activities_between(DESDE_HECHOS, hoy)
-            if not _desplazamiento(a)}
+def _carreras(planes: Planes, ident: int | None) -> dict[str, str]:
+    """`{day: the name of the race of the plan in course}`, without what goes in brackets at its end (057 R2)."""
+    if ident is None:
+        return {}
+    with planes._connect() as conn:
+        filas = conn.execute("SELECT fecha, nombre FROM plan_carrera WHERE plan_id = ? AND fecha IS NOT NULL "
+                             "ORDER BY orden", (ident,)).fetchall()
+    dias: dict[str, str] = {}
+    for f in filas:
+        dias.setdefault(f["fecha"], _ENTRE_PARENTESIS.sub("", f["nombre"]).strip() or f["nombre"])
+    return dias
+
+
+def _hechos(store: DataStore, hoy: date, zona: str | None,
+            carreras: dict[str, str] | None = None) -> dict[str, dict[str, Any]]:
+    """`{<day>/<sport>: its event}` of what was done since `DESDE_HECHOS` (054 R1, R3), one per day and sport (057),
+    but the commutes, a ride of less than `MINIMO_BICI_S` (056), and what is not a sport (057 R3). An event no longer
+    wanted (the per-activity ones of the 054 too) leaves the calendar."""
+    grupos: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for a in store.activities_between(DESDE_HECHOS, hoy):
+        deporte = _deporte(a)
+        if deporte is None or _desplazamiento(a):
+            continue
+        grupos.setdefault((str(a["activity_date"]), deporte[1]), []).append(a)
+    carreras = carreras or {}
+    return {f"{dia}/{clave}": cuerpo_del_hecho(sorted(grupo, key=lambda a: str(a.get("start_time_local") or "")),
+                                               zona, carreras.get(dia))
+            for (dia, clave), grupo in grupos.items()}
 
 
 def _dia_y_deporte(cuerpo: dict[str, Any]) -> tuple[str, str]:
-    """The day and the sport (its icon, the second word of «✅ 🏃 …», the first of «🏃 Series …») of an event."""
+    """The day and the sport (its icon, the first word of «🏃 80' …» and of «🏃 Series …», 057) of an event."""
     inicio = cuerpo["start"]
-    palabras = cuerpo["summary"].split()
-    return (inicio.get("date") or inicio["dateTime"][:10]), palabras[1 if palabras[0] == "✅" else 0]
+    return (inicio.get("date") or inicio["dateTime"][:10]), cuerpo["summary"].split()[0]
 
 
 def _sin_las_entrenadas(deseadas: dict[str, dict], hechos: dict[str, dict]) -> dict[str, dict]:
@@ -234,7 +265,7 @@ def sincronizar(planes: Planes, calendario: Calendario, hoy: date, store: DataSt
         raise ErrorCalendario(SIN_CONECTAR)
     ident = planes.en_curso(hoy)
     deseadas = _previstas(planes, ident)
-    hechos = _hechos(store, hoy, zona or zona_local()) if store is not None else None
+    hechos = _hechos(store, hoy, zona or zona_local(), _carreras(planes, ident)) if store is not None else None
     if hechos:
         deseadas = _sin_las_entrenadas(deseadas, hechos)
     calendario.asegurar()  # «TriData» is still there (Andrés may have deleted it: then a new one)

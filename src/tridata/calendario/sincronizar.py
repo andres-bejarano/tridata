@@ -40,6 +40,7 @@ from . import DESDE_HECHOS, SIN_CONECTAR, Calendario, ErrorCalendario
 
 CLAVE = "tridata_sesion"
 CLAVE_HECHO = "tridata_actividad"  # unit 054: the `activity_id` of a training done
+MINIMO_BICI_S = 50 * 60  # unit 056: a shorter ride is a commute, not a training: it does not go to the calendar
 HECHO = "Hecho según Garmin"
 _DEPORTES = ((RUNNING_TYPES, "🏃", "Carrera"), (CYCLING_TYPES, "🚴", "Bici"), (SWIMMING_TYPES, "🏊", "Natación"),
              (GYM_TYPES, "🏋️", "Fuerza"))
@@ -144,8 +145,15 @@ def cuerpo_del_hecho(actividad: dict[str, Any], zona: str | None) -> dict[str, A
 
 
 def _hechos(store: DataStore, hoy: date, zona: str | None) -> dict[str, dict[str, Any]]:
-    """`{activity id: its event}` of every activity since `DESDE_HECHOS` (R1, R3)."""
-    return {str(a["activity_id"]): cuerpo_del_hecho(a, zona) for a in store.activities_between(DESDE_HECHOS, hoy)}
+    """`{activity id: its event}` of every activity since `DESDE_HECHOS` (R1, R3), but the commutes: a ride of less
+    than `MINIMO_BICI_S` (unit 056). One already sent leaves the calendar like any activity no longer wanted."""
+    return {str(a["activity_id"]): cuerpo_del_hecho(a, zona) for a in store.activities_between(DESDE_HECHOS, hoy)
+            if not _desplazamiento(a)}
+
+
+def _desplazamiento(actividad: dict[str, Any]) -> bool:
+    return (actividad.get("activity_type") in CYCLING_TYPES
+            and float(actividad.get("duration_seconds") or 0) < MINIMO_BICI_S)
 
 
 def _mismo_momento(actual: dict, deseado: dict) -> bool:

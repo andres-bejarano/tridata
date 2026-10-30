@@ -201,3 +201,50 @@ def test_la_estrategia_de_una_carrera_se_ve_en_fitness_plan(web):  # unit 045 ·
     carreras = web.cliente.get("/api/plan").json()["plan"]["carreras"]
     assert carreras[-1]["estrategia"] == ["km 0-4 · llano · 4:15/km · paso 17:00", "gel: km 6,5"]
     assert all(c["estrategia"] == [] for c in carreras[:-1])
+
+
+# -- unit 059 · R3, R4: a race is edited from its row, and its strategy goes in «Bajar .md» -------------------------
+
+def _editar(web: Web, **cuerpo) -> object:
+    return web.cliente.post("/api/plan/carrera", json=cuerpo)
+
+
+def test_editar_una_carrera_desde_su_fila(web):  # R3
+    vista = web.confirmar(web.importar(), {"4": "plan"})
+    plan_id = vista["plan"]["id"]
+    Planes(web.db).guardar_estrategia(plan_id, "Media de ejemplo", ["km 0-10 · 4:00/km", "gel: km 10"])
+    r = _editar(web, id=plan_id, carrera="Media de ejemplo", nombre="Media de otro sitio", fecha="2026-11-15",
+                objetivo="~1:23", tiempo="")
+    assert r.status_code == 200, r.text
+    carreras = r.json()["plan"]["carreras"]  # answered like GET /api/plan: seen at once
+    media = next(c for c in carreras if c["nombre"] == "Media de otro sitio")
+    assert (media["fecha"], media["objetivo"]) == ("2026-11-15", "~1:23")
+    assert media["estrategia"] == ["km 0-10 · 4:00/km", "gel: km 10"]  # the strategy goes with the race
+    assert "Media de ejemplo" not in [c["nombre"] for c in carreras]
+    assert web.cliente.get("/api/plan").json()["plan"]["carreras"] == carreras
+
+    r = _editar(web, id=plan_id, carrera="10K de ejemplo", tiempo="38:05")
+    assert r.status_code == 200, r.text
+    diez = r.json()["plan"]["carreras"][0]
+    assert diez["estado"] == "✅ 38:05" and diez["resultado"]["origen"] == "a mano"
+
+
+def test_editar_una_carrera_dice_por_que_no_guarda(web):  # R3
+    plan_id = web.confirmar(web.importar(), {"4": "plan"})["plan"]["id"]
+    antes = web.cliente.get("/api/plan").json()
+    r = _editar(web, id=plan_id, carrera="Media de ejemplo", nombre="Maratón de ejemplo")
+    assert r.status_code == 400 and "Maratón de ejemplo" in r.json()["error"]
+    r = _editar(web, id=plan_id, carrera="Media de ejemplo", fecha="2026-13-01")
+    assert r.status_code == 400 and "fecha" in r.json()["error"]
+    assert _editar(web, id=plan_id, carrera="No existe de ejemplo", objetivo="x").status_code == 404
+    assert _editar(web, id=999, carrera="Media de ejemplo", objetivo="x").status_code == 404
+    assert web.cliente.post("/api/plan/carrera", content=b"no es json").status_code == 400
+    assert web.cliente.get("/api/plan").json() == antes  # nothing changed
+
+
+def test_la_estrategia_sale_en_el_md_bajo_su_carrera(web):  # R4
+    plan_id = web.confirmar(web.importar(), {"4": "plan"})["plan"]["id"]
+    Planes(web.db).guardar_estrategia(plan_id, "Maratón de ejemplo", ["km 0-10 · 4:25/km", "gel: km 10"])
+    md = web.cliente.get(f"/api/plan/{plan_id}.md").text
+    assert "Estrategia de Maratón de ejemplo" in md and "- km 0-10 · 4:25/km\n- gel: km 10" in md
+    assert md.index("| Maratón de ejemplo |") < md.index("Estrategia de Maratón de ejemplo") < md.index("## Semanas")

@@ -365,3 +365,30 @@ def test_la_app_le_pasa_al_equipo_el_estado_del_calendario(web):  # R7: through 
     (peticion,) = web.claude.peticiones
     fija = "\n".join(b["text"] for b in peticion["system"])
     assert '"google_calendar":{"conectado":false' in fija
+
+
+# -- unit 059 · R4: the strategy of a race and its result reach the team, with no need to paste them ----------------
+
+ESTRATEGIA = ["km 0-10 · 4:25/km · paso 44:10", "gel: km 10 y km 20"]
+
+
+def test_el_equipo_ve_la_estrategia_y_el_resultado_de_sus_carreras(tmp_path):  # R4 · R1
+    mundo = Mundo(tmp_path)
+    planes = mundo.plan()
+    planes.guardar_estrategia(1, "Maratón de ejemplo", ESTRATEGIA)
+    ctx = mundo.contexto(planes=planes)
+    diez, maraton = _datos(ctx)["plan"]["carreras"]
+    assert maraton["estrategia"] == ESTRATEGIA
+    assert "estrategia" not in diez  # what is not there is not sent
+    assert diez["resultado"] == {"tiempo": "38:10", "origen": "a mano"}
+    assert "estrategia" in ctx.bloques[0]  # the instructions say it is there
+
+
+def test_el_entrenador_tiene_la_estrategia_sin_pegarla(web):  # R4, through the routes
+    web.plan().guardar_estrategia(1, "Maratón de ejemplo", ESTRATEGIA)
+    web.claude.responder("Respuesta de prueba del entrenador.")
+    fin = web.nueva("¿qué estrategia tengo para la maratón?", papel="entrenador")
+    assert fin["tipo"] == "fin", fin
+    fija = "\n".join(b["text"] for b in web.claude.peticiones[-1]["system"][:-1])
+    for tramo in ESTRATEGIA:
+        assert tramo in fija, tramo

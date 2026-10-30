@@ -32,7 +32,13 @@ what was done that day (`plan/semanas.py`). `leer` gives the incidents as before
 
 Unit 045 (REC-25, R-156): a race keeps its strategy by stretches (`plan_carrera.estrategia`, its lines as JSON:
 «km 4-6,5 · subida · por esfuerzo · paso 28:40», «gel: km 6,5»), saved only from a confirmed card (`plan.acciones`,
-`guardar_estrategia`) and read with `estrategia` (`leer` gives the races as before, so a plan reads the same).
+`guardar_estrategia`) and read with `estrategia`.
+
+Unit 059 (R1-R4): a race keeps the result Andrés wrote by hand (`plan_carrera.resultado`, «1:12:30»), which an
+import never writes; without one, the result of a race that was run comes from Garmin when the plan is read
+(`plan/semanas.py`). `editar_carrera` changes its name, date, target and time in one `UPDATE` of its row, so its
+strategy goes with it. `leer` gives each race its `estrategia` and its `resultado` only when it has them, so a plan
+without them reads as before.
 """
 from __future__ import annotations
 
@@ -137,6 +143,9 @@ _VIVA = (("zona", "TEXT"), ("lado", "TEXT"), ("que_paso", "TEXT"), ("estado", "T
          ("cerrada", "TEXT"), ("abierta", "TEXT"))
 # unit 045: the strategy of a race, added to an older base without it
 _ESTRATEGIA = (("estrategia", "TEXT"),)
+# unit 059: the result of a race written by hand, added to an older base without it
+_RESULTADO = (("resultado", "TEXT"),)
+HECHA = "✅"
 ABIERTA, CERRADA = "abierta", "cerrada"
 
 
@@ -168,7 +177,8 @@ class Planes:
         self._db_path = Path(db_path)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
-            for tabla, columnas in (("plan_sesion", _RELOJ), ("plan_incidencia", _VIVA), ("plan_carrera", _ESTRATEGIA)):
+            for tabla, columnas in (("plan_sesion", _RELOJ), ("plan_incidencia", _VIVA), ("plan_carrera", _ESTRATEGIA),
+                                    ("plan_carrera", _RESULTADO)):
                 tiene = {f["name"] for f in conn.execute(f"PRAGMA table_info({tabla})")}
                 for columna, tipo in columnas:
                     if columna not in tiene:
@@ -211,6 +221,13 @@ class Planes:
                 filas = conn.execute(f"SELECT {', '.join(columnas)} FROM {tabla} WHERE plan_id = ? "  # noqa: S608
                                      "ORDER BY orden", (ident,)).fetchall()
                 plan[clave] = [{c: _de_la_base(tabla, c, f[c]) for c in columnas} for f in filas]
+            extra = conn.execute("SELECT estrategia, resultado FROM plan_carrera WHERE plan_id = ? ORDER BY orden",
+                                 (ident,)).fetchall()
+        for carrera, f in zip(plan["carreras"], extra, strict=True):  # unit 059: only when it has them
+            if f["estrategia"] and json.loads(f["estrategia"]):
+                carrera["estrategia"] = json.loads(f["estrategia"])
+            if f["resultado"]:
+                carrera["resultado"] = f["resultado"]
         return plan
 
     def lista(self) -> list[dict[str, Any]]:
@@ -290,6 +307,41 @@ class Planes:
         with self._connect() as conn:
             conn.execute("UPDATE plan_carrera SET estrategia = ? WHERE plan_id = ? AND nombre = ?",
                          (json.dumps(list(lineas), ensure_ascii=False), plan_id, carrera))
+
+    # -- unit 059: a race edited from its row of Fitness › Plan ------------------------------------------------------
+
+    def editar_carrera(self, plan_id: int, carrera: str, cambios: dict[str, Any]) -> None:
+        """Changes `nombre`, `fecha` (ISO or empty), `objetivo` and `resultado` (the time by hand; empty: none, and a
+        «✅ …» of the .md goes too, so Garmin's is seen) of that race of the plan, only the ones in `cambios`, in one
+        `UPDATE` of its row (its strategy stays with it). ValueError, with why, for an empty or repeated name or a bad
+        date, and nothing is saved; LookupError without that race."""
+        with self._connect() as conn:
+            fila = conn.execute("SELECT rowid AS id, estado FROM plan_carrera WHERE plan_id = ? AND nombre = ? "
+                                "ORDER BY orden LIMIT 1", (plan_id, carrera)).fetchone()
+            if fila is None:
+                raise LookupError(carrera)
+            valores: dict[str, Any] = {}
+            if "nombre" in cambios:
+                nombre = " ".join(str(cambios["nombre"] or "").split())
+                if not nombre:
+                    raise ValueError("Ponle un nombre a la carrera")
+                otra = conn.execute("SELECT 1 FROM plan_carrera WHERE plan_id = ? AND nombre = ? AND rowid != ?",
+                                    (plan_id, nombre, fila["id"])).fetchone()
+                if otra is not None:
+                    raise ValueError(f"Ya hay otra carrera en el plan que se llama «{nombre}»")
+                valores["nombre"] = nombre
+            if "fecha" in cambios:
+                valores["fecha"] = _fecha(cambios["fecha"])
+            if "objetivo" in cambios:
+                valores["objetivo"] = " ".join(str(cambios["objetivo"] or "").split())
+            if "resultado" in cambios:
+                resultado = " ".join(str(cambios["resultado"] or "").split())
+                valores["resultado"] = resultado or None
+                if not resultado and str(fila["estado"] or "").startswith(HECHA):
+                    valores["estado"] = "pendiente"
+            if valores:
+                conn.execute(f"UPDATE plan_carrera SET {', '.join(f'{c} = ?' for c in valores)} "  # noqa: S608
+                             "WHERE rowid = ?", (*valores.values(), fila["id"]))
 
     # -- unit 044: the live incidents and the notes of a day ---------------------------------------------------------
 
@@ -375,9 +427,22 @@ class Planes:
         return notas
 
 
+def _fecha(valor: Any) -> str | None:
+    """An ISO date (YYYY-MM-DD) that exists, or None if empty; else ValueError saying why."""
+    texto = str(valor or "").strip()
+    if not texto:
+        return None
+    try:
+        if len(texto) != 10:
+            raise ValueError(texto)
+        return date.fromisoformat(texto).isoformat()
+    except ValueError:
+        raise ValueError(f"La fecha «{texto}» no es una fecha válida (año-mes-día)") from None
+
+
 def titulo_incidencia(zona: str | None, lado: str | None) -> str:
     """«tobillo derecho, lateral»: how an incident is named."""
     return " ".join(x for x in (zona, lado) if x)
 
 
-__all__ = ["ABIERTA", "CERRADA", "Planes", "texto_sesion", "titulo_incidencia"]
+__all__ = ["ABIERTA", "CERRADA", "HECHA", "Planes", "texto_sesion", "titulo_incidencia"]

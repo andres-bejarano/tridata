@@ -19,11 +19,17 @@
     GET  /api/plan/sesion/ID.fit      unit 042: the session as a FIT workout file, made here (R-159); 422, 404 as above
     GET  /api/plan/incidencias        unit 044: {plan: {id, nombre} | None, incidencias}: the incidents of that plan
                                       (?id= too), the open ones first, with their visits and lesson (R-147)
+    POST /api/plan/carrera            unit 059: {id, carrera, nombre?, fecha?, objetivo?, tiempo?}: changes those of
+                                      that race (`Planes.editar_carrera`; its strategy stays with it, R3) and answers
+                                      like GET /api/plan with that plan; 400 with why (a name of another race, a bad
+                                      date), 404 without that plan or race
     POST /api/plan/incidencia/ID/cerrar  unit 044: {leccion}: closes it by hand with its lesson (R-148) and answers
                                       like GET /api/plan/incidencias; 400 without a lesson, 404 without it, 409 closed
 
 Unit 042: each day of GET /api/plan/semana/N also brings `reloj`, one per session of `sesiones` and in its order:
 {id, estado: "al_dia" | "cambiada" | None, enviada}, whether it is in the watch as it is now.
+Unit 059: each race of GET /api/plan brings its `resultado` ({tiempo, km, origen: "garmin" | "a mano"} or None)
+and its `estrategia` (unit 045), both from `plan.semanas.vista`.
 Unit 044: each day also brings its `notas` (how it went, R-150), and GET /api/plan its `abiertas`, how many incidents
 are open («⚠️ Incidencias (1)»).
 
@@ -99,8 +105,6 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         vista = semanas.vista(plan, store, dia) if plan is not None else None
         if plan is not None and vista is not None:
             vista["abiertas"] = len([i for i in planes.incidencias(plan["id"]) if i["estado"] == ABIERTA])
-            for carrera in vista["carreras"]:  # unit 045: the strategy by stretches saved with a card (R-156)
-                carrera["estrategia"] = planes.estrategia(plan["id"], carrera["nombre"])
         return {"hoy": dia.isoformat(), "plan": vista,
                 "planes": [{"id": p["id"], "nombre": p["nombre"], "en_curso": p["id"] == en_curso}
                            for p in planes.lista()]}
@@ -126,6 +130,25 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         if vista is None:
             return _error("Esa semana no está en el plan.", 404)
         return JSONResponse(vista)
+
+    _CAMPOS = {"nombre": "nombre", "fecha": "fecha", "objetivo": "objetivo", "tiempo": "resultado"}
+
+    async def editar_carrera(request: Request) -> Response:
+        cuerpo = await _cuerpo(request)
+        if cuerpo is None or not isinstance(cuerpo.get("carrera"), str):
+            return _error("Lo enviado no se entiende: no se ha guardado nada.", 400)
+        ident = cuerpo.get("id")
+        if not isinstance(ident, int) or isinstance(ident, bool) or await run_in_threadpool(planes.leer, ident) is None:
+            return _error(NO_ESTA, 404)
+        cambios = {campo: cuerpo[clave] for clave, campo in _CAMPOS.items()
+                   if clave in cuerpo and (cuerpo[clave] is None or isinstance(cuerpo[clave], str))}
+        try:
+            await run_in_threadpool(planes.editar_carrera, ident, cuerpo["carrera"], cambios)
+        except LookupError:
+            return _error("Esa carrera ya no está en el plan.", 404)
+        except ValueError as exc:
+            return _error(f"{exc}: no se ha guardado nada.", 400)
+        return JSONResponse(await run_in_threadpool(lambda: _vista(planes.leer(ident))))
 
     def _incidencias(plan: dict | None) -> dict[str, Any]:
         if plan is None:
@@ -250,6 +273,7 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         Route("/api/plan/{id:int}.md", bajar),
         Route("/api/plan/sesion/{id:int}/garmin", tarjeta_reloj, methods=["POST"]),
         Route("/api/plan/sesion/{id:int}.fit", bajar_fit),
+        Route("/api/plan/carrera", editar_carrera, methods=["POST"]),
         Route("/api/plan/incidencias", ver_incidencias),
         Route("/api/plan/incidencia/{id:int}/cerrar", cerrar_incidencia, methods=["POST"]),
     ]

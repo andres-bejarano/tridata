@@ -22,6 +22,9 @@ the plan in course, each one with its state, its visits to the physio or the doc
 Unit 048: each session of the plan carries its id (`Planes.sesiones_reloj`), so a role can name one of two with the
 same title the same day in the cards that change or remove it.
 
+Unit 059 (R4): each race of the plan carries its result (by hand or from Garmin, `plan/semanas.py`) and the strategy
+by stretches it has saved, so the team knows it without Andrés pasting it.
+
 Unit 045 (REC-25, R-154): a route attached to a conversation is NOT here: its profile goes in the message
 (`web/conversaciones.py`, `plan.rutas.perfil_para_modelo`), so the fixed part, and its cache, stay the same; only the
 line says «ruta adjunta: …».
@@ -80,7 +83,8 @@ fechas de esta semana y de la siguiente con su día; cada fecha lleva su día de
 "hasta_dia"): léelo de ahí y no lo calcules nunca; "dias", las últimas 8 semanas día a día (comidas con sus \
 kcal, peso, pasos, pulso en reposo, sueño, HRV, entrenos con su id y carga); "semanas", lo anterior resumido por \
 semanas; "ajustes", sus objetivos de hoy; "carreras", sus carreras; "pulso", su frecuencia cardiaca máxima, de reposo \
-y sus zonas, y de dónde salen; "plan", su plan de entrenamiento en curso (sus carreras con su objetivo, sus semanas \
+y sus zonas, y de dónde salen; "plan", su plan de entrenamiento en curso (sus carreras con su objetivo, su resultado —"a mano" si lo escribió él, \
+"garmin" si sale de su actividad de ese día— y la estrategia por tramos que guardó, tal cual; sus semanas \
 con lo previsto en segundos y lo hecho según Garmin, sus sesiones por día con su id y sus bloques y la nutrición en carrera); \
 "incidencias", sus molestias y lesiones apuntadas en el plan: las abiertas (estado abierta) siguen ahí, tenlas en \
 cuenta antes de proponerle cualquier sesión; las cerradas de su plan en curso, con su lección; cada una con sus \
@@ -201,7 +205,9 @@ def plan_en_curso(planes: Planes | None, store: DataStore | None, hoy: date) -> 
         return None, []
     vista = semanas_del_plan.vista(plan, store, hoy)
     datos = {
-        "nombre": plan["nombre"], "carreras": vista["carreras"],
+        "nombre": plan["nombre"],
+        "carreras": [_limpio({**c, "resultado": _limpio(c["resultado"]) if c["resultado"] else None})
+                     for c in vista["carreras"]],
         "semanas": [{**s, "desde_dia": _dia(s["desde"]), "hasta_dia": _dia(s["hasta"])} for s in vista["semanas"]],
         "sesiones": [{"id": ident, "fecha": x["fecha"], "dia": _dia(x["fecha"]), "titulo": x["titulo"],
                       "bloques": x["bloques"],

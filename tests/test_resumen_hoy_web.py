@@ -181,3 +181,26 @@ def test_el_cascaron_lleva_hoy_js_con_otra_version():  # R1 (sw.js)
     sw = (ESTATICOS / "sw.js").read_text(encoding="utf-8")
     assert '"/static/hoy.js"' in re.search(r"const CASCARON = \[(.*?)\];", sw, re.S).group(1)
     assert re.search(r'const VERSION = "([^"]+)"', sw).group(1) not in {f"tridata-cascaron-v{n}" for n in range(1, 8)}
+
+
+# -- unit 060 · R2: Hoy and Peso say where the basal comes from (Garmin's BMR of the last complete day) -------------
+
+def test_hoy_y_peso_dicen_basal_de_tu_garmin(entorno):  # R2
+    ayer = HOY - timedelta(days=1)
+    entorno.store.save_daily_stats(DailyStats(stat_date=ayer, steps=9000, total_calories=2600, bmr_calories=1850))
+    entorno.store.save_daily_stats(DailyStats(stat_date=HOY, steps=4000, total_calories=900, bmr_calories=1990))
+    entorno.store.marcar_sync_ok(datetime(2026, 10, 21, 9, 5))
+    dia = entorno.cliente.get("/api/dia").json()
+    assert dia["peso"]["basal"]["origen"] == "garmin" and dia["peso"]["basal"]["kcal"] == 1850
+    assert dia["peso"]["basal"]["dia_garmin"] == ayer.isoformat()
+    assert dia["gasto"]["desglose"]["basal_kcal"] == 1850  # the basal seen and the one added are the same
+    assert "Garmin" in dia["gasto"]["explicacion"]
+    app = (ESTATICOS / "app.js").read_text(encoding="utf-8")
+    peso = (ESTATICOS / "peso.js").read_text(encoding="utf-8")
+    assert "Basal (de tu Garmin)" in app and "Basal (con tu peso)" in app  # the reserve keeps its text
+    assert "de tu Garmin" in peso and "con tu peso" in peso
+
+
+def test_sin_bmr_hoy_dice_el_basal_de_siempre(entorno):  # R2, R6
+    dia = entorno.cliente.get("/api/dia").json()
+    assert dia["peso"]["basal"]["origen"] == "ajustes" and dia["peso"]["basal"]["kcal"] == 1600

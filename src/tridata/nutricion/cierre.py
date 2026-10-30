@@ -16,6 +16,11 @@ until «Entendido». A total that is incomplete again is ignored.
 After every close or correction with Garmin, the kcal per step are recalibrated with the last 14 days
 closed with Garmin that are valid (R-28) and saved in `Ajustes` from today: the days before keep theirs.
 
+Unit 060: the basal of a day is Garmin's BMR of the last complete day before it (within 7; «complete» is the
+rule of bug 051, `sincronizado_antes_de_acabar`), and a training counts without its BMR (`gasto.kcal_sin_basal`).
+A day already closed with Garmin keeps what it saved: a breakdown without the mark `entreno_sin_basal` was closed
+with the old rule and is shown with it, and the calibration only uses the days closed with the new one.
+
 Tables of their own in the same SQLite: `cierre_dia` (no row = open), `cierre_rastro`, `calibracion`.
 The eaten total and the balance are never stored: they are always computed from the rows (G-18), so a
 forgotten food added to a closed day recomputes by itself.
@@ -26,6 +31,7 @@ import json
 import sqlite3
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -33,7 +39,7 @@ from typing import Any
 from ..exporters import MarkdownExporter
 from ..storage import DEFAULT_DB_PATH
 from .ajustes import Ajustes, AjustesDelDia
-from .gasto import estimar_gasto
+from .gasto import estimar_gasto, kcal_sin_basal
 from .margen import PASOS_POR_DEFECTO, ConfigGasto, config_del_dia, kcal_enteras, total_del_dia
 from .objetivo_dia import ObjetivosDia
 from .peso import BasalDelDia, RegistroPeso, basal_del_dia
@@ -47,6 +53,7 @@ MIN_PASOS_CALIBRACION = 1000
 RANGO_KCAL_POR_PASO = (0.01, 0.2)  # the same range Ajustes accepts
 TEXTO_ESPERA = "Garmin aún no tiene el día completo: sigue con el gasto estimado"
 FUERA_DE_RANGO = "fuera de rango (0,01…0,2 kcal/paso)"
+DIAS_BMR = 7  # unit 060: Garmin's BMR of a complete day is looked for in the 7 days before
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS cierre_dia (
@@ -119,16 +126,57 @@ def _ahora() -> str:
 
 # -- the expenditure of a day ----------------------------------------------------------------------
 
-def config_gasto_del_dia(dia: date, ajustes: Ajustes, pesos: RegistroPeso) -> tuple[AjustesDelDia, BasalDelDia,
-                                                                                      ConfigGasto]:
-    """Settings in force, basal (Mifflin-St Jeor with the last weight, or by hand) and expenditure config.
+def regla_nueva(desglose: Mapping[str, Any] | None) -> bool:
+    """Unit 060: whether a saved breakdown follows the new rule (Garmin's basal, trainings without their BMR)."""
+    return bool(desglose and desglose.get("entreno_sin_basal"))
 
-    Without a hand-written basal a day with a weight still uses its Mifflin-St Jeor one; without either,
-    or without kcal per step, `ValueError` says what is missing (the web answers 409).
+
+def _regla_vieja(cerrado: Mapping[str, Any] | None) -> bool:
+    return cerrado is not None and not regla_nueva(cerrado.get("desglose"))
+
+
+def bmr_ultimo_dia_completo(dia: date, store: Any) -> tuple[date, float] | None:
+    """Unit 060 (R2): (day, Garmin's BMR) of the last complete day before `dia`, within `DIAS_BMR`; or None.
+
+    Never `dia` itself (Garmin gives it by halves until midnight). Complete = synced after it ended (bug 051).
+    """
+    if store is None:
+        return None
+    desde, hasta = dia - timedelta(days=DIAS_BMR), dia - timedelta(days=1)
+    sin_fila = set(store.missing_dates("daily_stats", "stat_date", desde, hasta))  # one query, not seven
+    ok_en = (store.estado_sync() or {}).get("ok_en")
+    for atras in range(1, DIAS_BMR + 1):
+        anterior = dia - timedelta(days=atras)
+        if anterior in sin_fila or sincronizado_antes_de_acabar(anterior, ok_en) is not None:
+            continue
+        stats = store.daily_stats_on(anterior)
+        bmr = stats.get("bmr_calories") if stats else None
+        if bmr:
+            return anterior, float(bmr)
+    return None
+
+
+def basal_con_garmin(dia: date, ajustes: Ajustes, pesos: RegistroPeso, store: Any = None, *,
+                     vigentes: AjustesDelDia | None = None) -> BasalDelDia:
+    """The basal of `dia` (`basal_del_dia`) with Garmin's BMR of the last complete day if `store` has one.
+
+    `vigentes` are the settings of `dia` if the caller already has them."""
+    ultimo = pesos.ultimo_hasta(dia)
+    return basal_del_dia(vigentes or ajustes.vigentes(dia), [ultimo] if ultimo else [], dia,
+                         bmr_garmin=bmr_ultimo_dia_completo(dia, store))
+
+
+def config_gasto_del_dia(dia: date, ajustes: Ajustes, pesos: RegistroPeso, store: Any = None, *,
+                         cerrado: Mapping[str, Any] | None = None) -> tuple[AjustesDelDia, BasalDelDia, ConfigGasto]:
+    """Settings in force, basal and expenditure config.
+
+    Unit 060: with `store`, the basal is Garmin's BMR of the last complete day; without it (or a day `cerrado`
+    with Garmin by the old rule), Mifflin-St Jeor with the last weight, or by hand. Without a hand-written basal
+    a day with a weight still uses its Mifflin-St Jeor one; without either, or without kcal per step,
+    `ValueError` says what is missing (the web answers 409).
     """
     vigentes = ajustes.vigentes(dia)
-    ultimo = pesos.ultimo_hasta(dia)
-    basal = basal_del_dia(vigentes, [ultimo] if ultimo else [], dia)
+    basal = basal_con_garmin(dia, ajustes, pesos, None if _regla_vieja(cerrado) else store, vigentes=vigentes)
     try:
         config = vigentes.config_gasto()
     except ValueError:
@@ -136,24 +184,40 @@ def config_gasto_del_dia(dia: date, ajustes: Ajustes, pesos: RegistroPeso) -> tu
             raise
         pasos = PASOS_POR_DEFECTO if vigentes.pasos_por_defecto is None else vigentes.pasos_por_defecto
         config = ConfigGasto(basal_kcal=basal.kcal, kcal_por_paso=vigentes.kcal_por_paso, pasos=pasos)
+    if basal.kcal is not None:  # unit 060: the config carries the basal of the day, not only the hand-written one
+        config = replace(config, basal_kcal=basal.kcal)
     return vigentes, basal, config
 
 
 def gasto_estimado_del_dia(dia: date, ajustes: Ajustes, pesos: RegistroPeso, objetivos: ObjetivosDia,
-                           store: Any, *, cuando: str = "de ese día") -> dict:
+                           store: Any, *, cuando: str = "de ese día", cerrado: Mapping[str, Any] | None = None,
+                           calculado: tuple[BasalDelDia, ConfigGasto] | None = None) -> dict:
     """The estimated expenditure of `dia` as `estimar_gasto` gives it (`kcal`, `pasos`, `desglose`,
     `avisos`, `garmin`), with the settings, weight, objective and Garmin rows of THAT day.
 
     `store` is the `DataStore` (or None: no Garmin data). `ValueError` without basal or kcal per step.
+    Unit 060 (R4): `cerrado` is the row of a day closed with Garmin: its saved estimate and breakdown are the
+    ones shown, and a day closed by the old rule is computed with it (no Garmin basal, whole kcal of trainings).
+    `calculado` is the (basal, config) the caller already has from `config_gasto_del_dia` with the same
+    arguments, so the BMR is not looked for twice.
     """
-    _, basal, config = config_gasto_del_dia(dia, ajustes, pesos)
+    if calculado is None:
+        _, basal, config = config_gasto_del_dia(dia, ajustes, pesos, store, cerrado=cerrado)
+    else:
+        basal, config = calculado
     objetivo_dia = objetivos.del_dia(dia)
     stats = store.daily_stats_on(dia) if store is not None else None
     actividades = store.activities_between(dia, dia) if store is not None else []
+    if _regla_vieja(cerrado):
+        actividades = [{**a, "bmr_calories": None} for a in actividades]
     previstos = None
     if objetivo_dia:  # unit 047: every planned training (a day simulated with only `previsto` too)
         previstos = objetivo_dia["previstos"] if "previstos" in objetivo_dia else objetivo_dia.get("previsto")
-    return estimar_gasto(config_del_dia(config, basal, objetivo_dia), stats, actividades, previstos, cuando=cuando)
+    estimado = estimar_gasto(config_del_dia(config, basal, objetivo_dia), stats, actividades, previstos,
+                             cuando=cuando)
+    if cerrado is not None and cerrado.get("gasto_estimado") is not None and cerrado.get("desglose"):
+        estimado = {**estimado, "kcal": cerrado["gasto_estimado"], "desglose": cerrado["desglose"]}
+    return estimado
 
 
 # -- pure rules -------------------------------------------------------------------------------------
@@ -487,7 +551,7 @@ class Cierres:
         estimado: dict | None = None
         if motivo is None:
             try:
-                _, basal, _ = config_gasto_del_dia(dia, self._ajustes, self._pesos)
+                _, basal, _ = config_gasto_del_dia(dia, self._ajustes, self._pesos, self._store)
                 motivo = garmin_incompleto(stats, actividades, basal.kcal)
                 if motivo is None:
                     estimado = gasto_estimado_del_dia(dia, self._ajustes, self._pesos, self._objetivos, self._store)
@@ -520,7 +584,7 @@ class Cierres:
             if total is None or float(total) == real:
                 continue
             try:
-                vigentes, basal, _ = config_gasto_del_dia(dia, self._ajustes, self._pesos)
+                vigentes, basal, _ = config_gasto_del_dia(dia, self._ajustes, self._pesos, self._store)
             except ValueError:
                 continue
             if garmin_incompleto(stats, self._store.activities_between(dia, dia), basal.kcal) is not None:
@@ -544,23 +608,26 @@ class Cierres:
         return hechas
 
     def _dias_cerrados_para_calibrar(self) -> list[dict]:
-        """The most recent days closed with Garmin, newest first, until 14 valid ones are found."""
+        """The most recent days closed with Garmin by the new rule (unit 060), newest first, until 14 valid ones.
+
+        Each with the basal its estimate used (saved in its breakdown) and the kcal of its trainings without BMR.
+        """
         with self._connect() as conn:
-            filas = conn.execute("SELECT dia, gasto_real, gasto_estimado FROM cierre_dia "
+            filas = conn.execute("SELECT dia, gasto_real, gasto_estimado, desglose FROM cierre_dia "
                                  "WHERE estado = 'cerrado_garmin' ORDER BY dia DESC").fetchall()
         dias: list[dict] = []
         for f in filas:
+            desglose = json.loads(f["desglose"]) if f["desglose"] else None
+            if desglose is None or not regla_nueva(desglose):
+                continue  # closed before unit 060: another rule, it is not mixed in (R4)
             dia = date.fromisoformat(f["dia"])
             stats, actividades = self._garmin_del_dia(dia)
-            try:
-                _, basal, _ = config_gasto_del_dia(dia, self._ajustes, self._pesos)
-            except ValueError:
-                continue
-            ejercicio, carrera = _agregados(actividades)
+            _, carrera = _agregados(actividades)
+            ejercicio = sum(kcal_sin_basal(a) or 0 for a in actividades)
             pasos = stats.get("steps") if stats else None
             carrera = round(carrera)
             sin_carrera = None if pasos is None or carrera > pasos else int(pasos) - carrera
-            datos = {"dia": dia, "real": f["gasto_real"], "basal": basal.kcal, "actividades_kcal": ejercicio,
+            datos = {"dia": dia, "real": f["gasto_real"], "basal": desglose["basal_kcal"], "actividades_kcal": ejercicio,
                      "pasos_sin_carrera": sin_carrera, "estimado": f["gasto_estimado"]}
             dias.append(datos)
             if len(dias_para_calibrar(dias)) >= DIAS_CALIBRACION:

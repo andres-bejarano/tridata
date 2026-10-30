@@ -55,16 +55,19 @@ def resumen_completo(fecha: date, *, registro: RegistroComidas, pesos: RegistroP
     """
     vigentes = ajustes.vigentes(fecha)
     cuando = "de hoy" if fecha == hoy else "de ese día"
-    try:
-        _, basal, config = config_gasto_del_dia(fecha, ajustes, pesos)
-        estimado = gasto_estimado_del_dia(fecha, ajustes, pesos, objetivos, store, cuando=cuando)
+    # unit 014: a day closed with Garmin computes its margins, objective and bar with the real expenditure;
+    # unit 060 (R4): and shows the estimate and breakdown it saved, with the rule it was closed with
+    fila = cierres.del_dia(fecha)
+    cerrado = fila if fila and fila["estado"] == "cerrado_garmin" else None
+    try:  # unit 060 (R2): with the store, the basal seen and the one added are Garmin's BMR of the last complete day
+        _, basal, config = config_gasto_del_dia(fecha, ajustes, pesos, store, cerrado=cerrado)
+        estimado = gasto_estimado_del_dia(fecha, ajustes, pesos, objetivos, store, cuando=cuando, cerrado=cerrado,
+                                          calculado=(basal, config))
     except ValueError as exc:
         raise FaltanAjustes(str(exc)) from None
     ventana = pesos.entre(fecha - timedelta(days=6), fecha)
     objetivo_dia = objetivos.del_dia(fecha)
-    # unit 014: a day closed with Garmin computes its margins, objective and bar with the real expenditure
-    fila = cierres.del_dia(fecha)
-    real = fila["gasto_real"] if fila and fila["estado"] == "cerrado_garmin" else None
+    real = cerrado["gasto_real"] if cerrado else None
     gasto = estimado if real is None else {**estimado, "kcal": real}
     plan = plan_del_dia(vigentes)
     resumen = resumen_del_dia(registro.apuntes_del_dia(fecha), fecha, config, objetivo_dia=objetivo_dia,

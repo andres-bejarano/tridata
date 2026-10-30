@@ -392,3 +392,33 @@ def test_el_entrenador_tiene_la_estrategia_sin_pegarla(web):  # R4, through the 
     fija = "\n".join(b["text"] for b in web.claude.peticiones[-1]["system"][:-1])
     for tramo in ESTRATEGIA:
         assert tramo in fija, tramo
+
+
+# -- unit 060 · R5: the team knows where the basal comes from and that trainings count without their BMR -------------
+
+def test_el_contexto_dice_de_donde_sale_el_basal(tmp_path):  # R5
+    mundo = Mundo(tmp_path)
+    ayer = HOY - timedelta(days=1)
+    mundo.store.save_daily_stats(DailyStats(stat_date=ayer, steps=9100, total_calories=2600, bmr_calories=1862))
+    mundo.store.save_activities([Activity(activity_id="a2", activity_date=ayer, activity_type="cycling",
+                                          name="Bici de prueba", duration_seconds=3600, calories=700,
+                                          bmr_calories=77)])
+    mundo.store.marcar_sync_ok(datetime(2026, 10, 24, 8, 0))
+    d = _datos(mundo.contexto())
+    assert d["basal"]["kcal"] == 1862
+    assert d["basal"]["origen"] == f"de tu Garmin, BMR del {ayer.isoformat()}"
+    assert "sin su BMR" in d["basal"]["entrenos"]
+    (bici,) = {x["fecha"]: x for x in d["dias"]}[ayer.isoformat()]["entrenos"]
+    assert bici["kcal"] == 700 and bici["kcal_sin_basal"] == 623
+    instrucciones = mundo.contexto().bloques[0]
+    assert '"basal"' in instrucciones and "estimado" in instrucciones and "real" in instrucciones
+
+
+def test_sin_bmr_el_contexto_dice_formula_o_a_mano(tmp_path):  # R5, R6
+    mundo = Mundo(tmp_path)
+    d = _datos(mundo.contexto())
+    assert (d["basal"]["kcal"], d["basal"]["origen"]) == (1700, "escrito a mano en Ajustes")  # no age or height
+    mundo.ajustes.cambiar({"edad": 40, "altura_cm": 178}, desde=DESDE_SIEMPRE)
+    d = _datos(mundo.contexto())
+    assert d["basal"]["origen"].startswith("fórmula") and "Mifflin" in d["basal"]["origen"]
+    assert d["basal"]["kcal"] == round(10 * 71.9 + 6.25 * 178 - 5 * 40 + 5)

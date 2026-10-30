@@ -3,9 +3,11 @@
 Its own table `peso_dia` in the TriData SQLite store, and pure functions over the saved rows:
 the 7-day mean, the Mifflin-St Jeor basal and the projection towards the weight target.
 
-`basal_del_dia` is the ONE place where the basal of a day is decided: Mifflin-St Jeor (man,
-+5) with the last weight up to that day and the age and height in force (`Ajustes.vigentes`);
-without a weight, age or height, the hand-written basal of the settings. Nobody else computes it.
+`basal_del_dia` is the ONE place where the basal of a day is decided. Unit 060: Garmin's BMR of the last
+complete day before it (found by `cierre.config_gasto_del_dia`, which has the store); only without one, the
+reserve: Mifflin-St Jeor (man, +5) with the last weight up to that day and the age and height in force
+(`Ajustes.vigentes`); without a weight, age or height, the hand-written basal of the settings. Nobody else
+computes it.
 """
 from __future__ import annotations
 
@@ -165,19 +167,28 @@ def _numero(n: float) -> str:
 @dataclass(frozen=True)
 class BasalDelDia:
     kcal: float | None  # None only when the settings have no hand-written basal either
-    origen: str  # "peso" (Mifflin-St Jeor) or "ajustes" (hand-written)
+    origen: str  # "garmin" (unit 060: Garmin's BMR), "peso" (Mifflin-St Jeor) or "ajustes" (hand-written)
     kg: float | None  # the weight used, if any
     dia_del_peso: date | None
     explicacion: str
+    dia_garmin: date | None = None  # unit 060: the complete day whose Garmin BMR it is
 
     def como_dict(self) -> dict:
         return {"kcal": self.kcal, "origen": self.origen, "kg": self.kg,
                 "dia_del_peso": self.dia_del_peso.isoformat() if self.dia_del_peso else None,
+                "dia_garmin": self.dia_garmin.isoformat() if self.dia_garmin else None,
                 "explicacion": self.explicacion}
 
 
-def basal_del_dia(vigentes: AjustesDelDia, pesos: Iterable[Mapping], dia: date) -> BasalDelDia:
-    """The basal of `dia`: Mifflin-St Jeor with the last weight up to `dia`, else the hand-written one."""
+def basal_del_dia(vigentes: AjustesDelDia, pesos: Iterable[Mapping], dia: date, *,
+                  bmr_garmin: tuple[date, float] | None = None) -> BasalDelDia:
+    """The basal of `dia`: Garmin's BMR of the last complete day (`bmr_garmin`, unit 060) if there is one; else
+    Mifflin-St Jeor with the last weight up to `dia`, else the hand-written one."""
+    if bmr_garmin is not None:
+        dia_bmr, bmr = bmr_garmin
+        return BasalDelDia(kcal=round(float(bmr)), origen="garmin", kg=None, dia_del_peso=None,
+                           explicacion=f"el BMR de tu Garmin del {dia_bmr.isoformat()}, el último día completo",
+                           dia_garmin=dia_bmr)
     previos = [p for p in pesos if _dia_de(p) <= dia]
     ultimo = max(previos, key=_dia_de) if previos else None
     a_mano, edad, altura = vigentes.basal_kcal, vigentes.edad, vigentes.altura_cm

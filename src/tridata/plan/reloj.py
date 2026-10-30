@@ -7,7 +7,11 @@ The blocks are lines of text with a fixed shape (unit 040), read here without AI
   («20'», «12'30"», «90"», «1h30») or a distance («10 km», «2,5 km», «400 m»; a bare number after «N×» is metres);
 - the pace, «a 4:00» (the target is that pace ±5" per km) or «a 3:55-4:05» (that range), as a range of speed in
   m/s; «suave», «fácil», «trote», «rodaje» or «por esfuerzo»: no target;
-- after «N×», the recovery between parentheses: «(2' rec)», «(200 m rec trote)».
+- after «N×», the recovery between parentheses: «(2' rec)», «(200 m rec trote)», or with its pace and no «rec»:
+  «(5' a 4:50)»; written with «con» it is the same: «con 3' de recuperación suave» (bug 053);
+- a block that is only a recovery, «3' rec», is a recovery step without target (bug 053);
+- what does not change the step is read and left out: «por km» or «el km» after the pace, «continuos»,
+  «esfuerzo cómodo» and a note of the pulse, «pulso por debajo de 150» (bug 053).
 
 Anything else in a block (a word it does not know, a recovery without how much, a line without time or distance)
 makes the whole session not translatable, saying which block (R6): nothing is sent half done. Without a label, the
@@ -38,7 +42,9 @@ _NO_CARRERA = re.compile(r"\b(bici\w*|rodillo|ciclismo|natacion|nadar|piscina|gi
 _ETIQUETAS = {"calentamiento": "warmup", "calentar": "warmup", "enfriar": "cooldown", "enfriamiento": "cooldown",
               "calma": "cooldown"}
 _PALABRAS = {"suave", "suaves", "facil", "faciles", "trote", "rodaje", "por", "esfuerzo", "calentamiento", "calentar",
-             "enfriar", "enfriamiento", "vuelta", "a", "la", "calma", "de", "en"}
+             "enfriar", "enfriamiento", "vuelta", "a", "la", "calma", "de", "en", "continuo", "continuos", "seguido",
+             "seguidos", "comodo", "comoda"}
+_RECUPERA = {"rec", "recuperacion", "recuperar"}  # a block that is only a recovery (bug 053)
 _CANTIDAD = re.compile(
     r"\s*(?:(?P<h>\d+)\s*h\s*(?P<hm>\d{1,2})?\s*'?"
     r"|(?P<m>\d+)\s*'(?:\s*(?P<ms>\d{1,2})\s*\")?"
@@ -46,7 +52,9 @@ _CANTIDAD = re.compile(
     r"|(?P<km>\d+(?:[.,]\d+)?)\s*(?:km|k)\b"
     r"|(?P<metros>\d+)\s*m\b"
     r"|(?P<desnudo>\d+)\b)")
-_RITMO = re.compile(r"\ba\s*(\d{1,2}):([0-5]\d)(?:\s*-\s*(\d{1,2}):([0-5]\d))?\s*(?:min\s*)?(?:/\s*km)?")
+_RITMO = re.compile(r"\ba\s*(\d{1,2}):([0-5]\d)(?:\s*-\s*(\d{1,2}):([0-5]\d))?\s*(?:min\s*)?(?:(?:/|por|el)\s*km\b)?")
+_CON_REC = re.compile(r"\bcon\s+([^(),]*\brec\w*[^(),]*)")  # «con 3' de recuperación suave» = «(3' rec suave)»
+_PULSO = re.compile(r"\b(?:pulso|fc)\s+(?:por debajo de|menos de|bajo|<)\s*\d{2,3}(?:\s*ppm)?")
 _PARENTESIS = re.compile(r"\(([^)]*)\)")
 
 _PASO = {"warmup": (1, "Calentamiento"), "cooldown": (2, "Vuelta a la calma"), "interval": (3, "Bloque"),
@@ -100,7 +108,8 @@ class _Bloque:
     cuanto: _Cuanto
     ritmo: tuple[int, int] | None  # (fastest, slowest) in seconds per km
     recuperacion: _Cuanto | None
-    tipo: str | None  # a label: "warmup" | "cooldown"
+    tipo: str | None  # a label: "warmup" | "cooldown" | "recovery"
+    ritmo_rec: tuple[int, int] | None = None  # the pace of the recovery, «(5' a 4:50)» (bug 053)
 
 
 # -- reading the blocks -------------------------------------------------------------------------------------------
@@ -155,36 +164,52 @@ def _bloque(texto: str) -> _Bloque:
         raise raro
     cuanto, s = leido
 
-    recuperacion = None
+    con = _CON_REC.search(s) if veces is not None else None
+    if con:
+        s = f"{s[:con.start()]}({con.group(1)}){s[con.end():]}"
+    recuperacion = ritmo_rec = None
     for dentro in _PARENTESIS.findall(s):
-        if "rec" not in dentro or veces is None or recuperacion is not None:
+        marcado = _RITMO.search(dentro)
+        if ("rec" not in dentro and marcado is None) or veces is None or recuperacion is not None:
             raise raro
+        if marcado:
+            ritmo_rec = _rango(marcado)
+            dentro = dentro[:marcado.start()] + " " + dentro[marcado.end():]
         resto = re.sub(r"\b(rec\w*|de|trote|suave|andando|al)\b", " ", dentro)
         leida = _cantidad(resto.strip(), desnudo=True)
         if leida is None or leida[1].strip():
             raise raro
         recuperacion = leida[0]
     s = _PARENTESIS.sub(" ", s)
+    s = _PULSO.sub(" ", s)
 
     ritmo = None
     marcado = _RITMO.search(s)
     if marcado:
-        uno = _ritmo_s(marcado.group(1), marcado.group(2))
-        if marcado.group(3):
-            otro = _ritmo_s(marcado.group(3), marcado.group(4))
-            ritmo = (min(uno, otro), max(uno, otro))
-        else:
-            ritmo = (uno - MARGEN_S_KM, uno + MARGEN_S_KM)
-        if ritmo[0] <= 0:
-            raise raro
+        ritmo = _rango(marcado)
         s = s[:marcado.start()] + " " + s[marcado.end():]
-    for palabra in re.split(r"[\s,.;:+]+", normalizar(s)):
-        if not palabra:
-            continue
+    if (ritmo is not None and ritmo[0] <= 0) or (ritmo_rec is not None and ritmo_rec[0] <= 0):
+        raise raro
+    palabras = [p for p in re.split(r"[\s,.;:+]+", normalizar(s)) if p]
+    if veces is None and palabras and palabras[0] in _RECUPERA:  # «3' rec»: only a recovery, without target
+        if ritmo is not None or tipo is not None or any(p not in _RECUPERA | {"de", "trote", "suave", "andando"}
+                                                        for p in palabras):
+            raise raro
+        return _Bloque(veces=None, cuanto=cuanto, ritmo=None, recuperacion=None, tipo="recovery")
+    for palabra in palabras:
         if palabra not in _PALABRAS:
             raise raro
         tipo = tipo or _ETIQUETAS.get(palabra)
-    return _Bloque(veces=veces, cuanto=cuanto, ritmo=ritmo, recuperacion=recuperacion, tipo=tipo)
+    return _Bloque(veces=veces, cuanto=cuanto, ritmo=ritmo, recuperacion=recuperacion, tipo=tipo, ritmo_rec=ritmo_rec)
+
+
+def _rango(marcado: re.Match[str]) -> tuple[int, int]:
+    """(fastest, slowest) of a pace «a 4:00» (±5") or «a 3:55-4:05»."""
+    uno = _ritmo_s(marcado.group(1), marcado.group(2))
+    if marcado.group(3):
+        otro = _ritmo_s(marcado.group(3), marcado.group(4))
+        return min(uno, otro), max(uno, otro)
+    return uno - MARGEN_S_KM, uno + MARGEN_S_KM
 
 
 def _bloques(sesion: Mapping[str, Any]) -> list[tuple[str, _Bloque]]:
@@ -230,6 +255,8 @@ def lineas(sesion: Mapping[str, Any]) -> list[str]:
             linea = f"{b.veces} × {b.cuanto.texto()} {_ritmo_texto(b)}"
             if b.recuperacion:
                 linea += f", con {b.recuperacion.texto()} de recuperación"
+                if b.ritmo_rec:
+                    linea += f" a {_mmss(b.ritmo_rec[0])}-{_mmss(b.ritmo_rec[1])} /km"
         else:
             linea = f"{_PASO[tipo][1]}: {b.cuanto.texto()} {_ritmo_texto(b)}"
         salida.append(linea)
@@ -283,8 +310,8 @@ def a_garmin(sesion: Mapping[str, Any]) -> dict[str, Any]:
         vuelta = _segundos(b.cuanto, b.ritmo)
         if b.recuperacion:
             orden += 1
-            grupo["workoutSteps"].append(_paso(orden, "recovery", b.recuperacion, None, grupos))
-            vuelta += _segundos(b.recuperacion, None)
+            grupo["workoutSteps"].append(_paso(orden, "recovery", b.recuperacion, b.ritmo_rec, grupos))
+            vuelta += _segundos(b.recuperacion, b.ritmo_rec)
         total += veces * vuelta
         pasos.append(grupo)
     return {"workoutName": str(sesion["titulo"]), "description": "Desde TriData", "sportType": dict(_CARRERA),
@@ -338,7 +365,7 @@ def fit_local(sesion: Mapping[str, Any]) -> bytes:
         desde = len(pasos)
         pasos.append(_paso_fit(len(pasos), "interval", b.cuanto, b.ritmo))
         if b.recuperacion:
-            pasos.append(_paso_fit(len(pasos), "recovery", b.recuperacion, None))
+            pasos.append(_paso_fit(len(pasos), "recovery", b.recuperacion, b.ritmo_rec))
         # repeat_until_steps_cmplt: from step `desde`, `veces` times
         pasos.append(b"\x01" + struct.pack("<HBIBIIIB", len(pasos), 6, desde, 2, b.veces or 1, _NADA32, _NADA32, 0))
     dia = date.fromisoformat(str(sesion["fecha"]))

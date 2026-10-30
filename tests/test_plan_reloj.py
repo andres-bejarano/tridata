@@ -165,6 +165,60 @@ def test_un_rango_de_ritmo_con_guion_largo_se_lee_igual(guion):  # bug 050 · R1
     assert fit_local(sesion)
 
 
+# -- bug 053: the blocks as the coach writes them -------------------------------------------------------------------
+
+@pytest.mark.parametrize("bloque", ["40' a 5:00-6:00 por km", "40' a 5:00-6:00 min/km", "40' a 5:00-6:00 el km",
+                                    "40' continuos a 5:00–6:00 por km, esfuerzo cómodo",
+                                    "40' seguidos a 5:00-6:00, esfuerzo cómodo, pulso por debajo de 150"])
+def test_el_ritmo_por_km_y_lo_que_no_cambia_el_paso_se_leen(bloque):  # bug 053 · R1, R2
+    sesion = {"id": 11, "fecha": "2026-10-29", "titulo": "Rodaje de prueba", "bloques": [bloque]}
+    (paso,) = a_garmin(sesion)["workoutSegments"][0]["workoutSteps"]
+    assert paso["stepType"]["stepTypeKey"] == "interval" and paso["endConditionValue"] == 2400
+    assert paso["targetValueOne"] == pytest.approx(_rapido(360))
+    assert paso["targetValueTwo"] == pytest.approx(_rapido(300))
+    assert lineas(sesion) == ["Bloque: 40' a 5:00-6:00 /km"]
+    assert fit_local(sesion)
+
+
+def test_la_recuperacion_sin_parentesis_es_la_misma():  # bug 053 · R3
+    escrita = {"id": 12, "fecha": "2026-10-28", "titulo": "Tempo de prueba",
+               "bloques": ["20' a 5:00–6:00", "2×15' a 4:00–4:15 con 3' de recuperación suave", "20' suave"]}
+    entre_parentesis = {**escrita, "bloques": ["20' a 5:00-6:00", "2×15' a 4:00-4:15 (3' rec)", "20' suave"]}
+    assert a_garmin(escrita) == a_garmin(entre_parentesis)
+    assert lineas(escrita)[1] == "2 × 15' a 4:00-4:15 /km, con 3' de recuperación"
+
+
+def test_una_recuperacion_suelta_es_un_paso_de_recuperacion():  # bug 053 · R4
+    sesion = {"id": 13, "fecha": "2026-11-01", "titulo": "Tirada de prueba",
+              "bloques": ["15' a 5:30", "20' a 4:45", "3' rec", "20' a 4:45", "20' a 5:45"]}
+    pasos = a_garmin(sesion)["workoutSegments"][0]["workoutSteps"]
+    assert [p["stepType"]["stepTypeKey"] for p in pasos] == ["warmup", "interval", "recovery", "interval", "cooldown"]
+    assert pasos[2]["endConditionValue"] == 180 and pasos[2]["targetType"]["workoutTargetTypeKey"] == "no.target"
+    assert lineas(sesion)[2] == "Recuperación: 3' sin ritmo"
+    assert fit_local(sesion)
+
+
+def test_una_recuperacion_con_ritmo_lleva_su_ritmo():  # bug 053 · R5
+    sesion = {"id": 14, "fecha": "2026-11-15", "titulo": "Tirada clave de prueba",
+              "bloques": ["30' a 5:30", "2×30' a 4:05–4:10 (5' a 4:50)", "30' a 5:15"]}
+    _, series, _ = a_garmin(sesion)["workoutSegments"][0]["workoutSteps"]
+    trabajo, recuperacion = series["workoutSteps"]
+    assert recuperacion["stepType"]["stepTypeKey"] == "recovery" and recuperacion["endConditionValue"] == 300
+    assert recuperacion["targetType"]["workoutTargetTypeKey"] == "pace.zone"
+    assert recuperacion["targetValueOne"] == pytest.approx(_rapido(295))  # 4:55
+    assert recuperacion["targetValueTwo"] == pytest.approx(_rapido(285))  # 4:45
+    assert lineas(sesion)[1] == "2 × 30' a 4:05-4:10 /km, con 5' de recuperación a 4:45-4:55 /km"
+    assert fit_local(sesion)
+
+
+@pytest.mark.parametrize("raro", ["40' a 5:30 por la playa", "40' a 5:30, pulso alto", "2×15' a 4:00 con 3' rápidos",
+                                  "3' rec a tope"])
+def test_lo_que_sigue_sin_entenderse_no_se_manda(raro):  # bug 053 · R6 (R6 of 042: nothing half sent)
+    with pytest.raises(NoTraducible) as exc:
+        a_garmin({**SERIES, "bloques": ["20' a 5:45", raro, "10' suave"]})
+    assert f"«{raro}»" in str(exc.value)
+
+
 def test_las_lineas_de_la_tarjeta_dicen_el_margen_de_ritmo():  # R1 · C-199
     assert lineas(SERIES) == [
         "Calentamiento: 20' a 5:40-5:50 /km",

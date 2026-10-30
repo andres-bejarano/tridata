@@ -632,9 +632,11 @@ def _aplicar_estrategia(parametros: dict, ctx: Contexto) -> str:
 
 
 # no figure in a line for Claude (G-38): the example goes in words
-_SESION = ("texto: «título | bloque | bloque…», cada bloque en números redondos con su tiempo o distancia, su ritmo o "
-           "esfuerzo y su recuperación (p. ej. «Series | calentamiento suave | series a ritmo de diez mil con "
-           "recuperación al trote | vuelta a la calma»)")
+# bug 055: the blocks as the watch reads them (`plan.reloj`), told in words because the list carries no figure (G-38)
+_SESION = ("texto: «título | bloque | bloque…», cada bloque como lo lee su reloj: su tiempo en minutos con apóstrofo "
+           "o su distancia, «a» y su ritmo en minutos y segundos por kilómetro separados por dos puntos (un rango, "
+           "con guion), o su esfuerzo, y en las series su recuperación entre paréntesis con «rec»; el ritmo va "
+           "siempre dentro de su bloque, nunca en valor")
 
 # unit 048: two sessions the same day can have the same title, so the one meant goes by its id
 _OBJETO = ("objeto: si ese día hay varias sesiones, su id tal como viene en esa sesión de \"plan\" (con # delante) o "

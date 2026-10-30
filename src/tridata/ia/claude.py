@@ -213,6 +213,9 @@ class CambioInterpretado(BaseModel):
         datos = {k: (None if v == "" or v == [] else v) for k, v in datos.items()}
         if isinstance(datos.get("lineas"), list):
             datos["lineas"] = [_linea_enviada(x) if isinstance(x, str) else x for x in datos["lineas"]]
+        for campo in ("valor", "cantidad", "kcal_estimadas"):  # bug 055: a number given as text, or not a number at all
+            if isinstance(datos.get(campo), str):
+                datos[campo] = _numero_enviado(datos[campo])
         if isinstance(datos.get("valores"), str):
             numeros = (_numero_enviado(v) for v in datos["valores"].split(";"))
             datos["valores"] = [n for n in numeros if n is not None] or None

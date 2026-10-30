@@ -65,7 +65,9 @@
                                   current objective, its weeks, importing the .md and downloading it)
     GET  /api/calendario*         unit 043 (REC-27): Ajustes › Google Calendar, the routes of `web/calendario.py`
                                   (connect once; every planned session of the plan in course, an all-day event of
-                                  «TriData»); the pass also runs at start and every 10 minutes, in its own thread
+                                  «TriData»); the pass also runs at start and every 10 minutes, in its own thread,
+                                  and (unit 062) right after a good answer of what changes the plan or «Actualizar
+                                  Garmin»; POST /api/calendario/desconectar withdraws the permission
     GET  /ajustes                 the settings page
     GET  /api/ajustes             settings in force (?fecha=, default today), changes to come, races
     POST /api/ajustes             {"datos": {...}, "desde": "AAAA-MM-DD"} save one or more settings
@@ -166,6 +168,7 @@ from typing import Any
 
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
@@ -203,7 +206,7 @@ from .plan import rutas as rutas_plan
 from ..ia.plan import OrdenadorPlan
 from ..plan import Planes
 from ..calendario import Calendario
-from .calendario import Sincronizacion, rutas as rutas_calendario
+from .calendario import Despertar, Sincronizacion, rutas as rutas_calendario
 
 log = logging.getLogger(__name__)
 
@@ -1114,8 +1117,11 @@ def crear_app(
                          daemon=True).start()
         yield
         parar_calendario.set()
+        sincronizacion.pronto()  # unit 062: wakes the thread so it sees `parar`
 
-    return Starlette(exception_handlers={FaltanAjustes: faltan_ajustes}, lifespan=ciclo, routes=[
+    # unit 062 (R1): what changes the plan wakes the calendar's thread (`web/calendario.py::Despertar`)
+    return Starlette(exception_handlers={FaltanAjustes: faltan_ajustes}, lifespan=ciclo,
+                     middleware=[Middleware(Despertar, sinc=sincronizacion)], routes=[
         Route("/", pagina),
         Route("/sw.js", service_worker),
         Route("/ajustes", pagina_ajustes),

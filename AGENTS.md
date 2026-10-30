@@ -61,13 +61,34 @@ PR, al entrar en `master` y cada lunes). Dependabot propone las actualizaciones.
   va a `.runtime/` del meta-repo, nunca a este repo.
 - `gitleaks` 8.30.1 en `~/.local/bin` (que está en el `PATH`). Sin él, `scripts/ci/security`
   sale en rojo y dice qué instalar.
+- **Google Calendar (opcional)**: las sesiones del plan y los entrenos hechos van al calendario
+  «TriData» de la cuenta de Google del usuario (`calendario/`). Sin configurarlo, Ajustes dice
+  «sin conectar» y nada habla con Google. Para montarlo en una máquina nueva:
+  1. En Google Cloud Console, un proyecto propio; en la **Biblioteca**, activar «Google Calendar
+     API» (un proyecto nuevo no la trae habilitada).
+  2. Pantalla de consentimiento **Externa**, con el propio usuario como usuario de prueba. El
+     permiso (`calendar.app.created`: solo los calendarios que crea la app) no se declara a mano:
+     la app lo pide al conectar.
+  3. **Publicar la app** («En producción») sin pedir verificación: en «Prueba» el permiso caduca
+     a los 7 días. Pide página principal y política de privacidad; sin logo no hay verificación
+     que esperar, y al conectar Google avisa de «app no verificada» (se acepta, es la propia).
+  4. Credenciales → cliente OAuth de tipo **App de escritorio** → descargar su JSON a un sitio
+     fuera de este repo y poner su ruta en `TRIDATA_GOOGLE_CLIENTE` del `.env` que encuentra
+     `load_dotenv()`.
+  5. Reiniciar `tridata web` (la variable se lee al arrancar) y, **desde el PC que corre la app**,
+     Ajustes › Google Calendar › «Conectar Google Calendar»: la página de permiso se abre en el
+     navegador de esa máquina. El permiso se guarda en `~/.tridata/google-token.json` (600).
+  «Desconectar» en Ajustes retira el permiso en Google y lo borra del PC; el calendario «TriData»
+  se queda en Google y al volver a conectar se reutiliza. Los tests doblan Google siempre.
 
 ## Estructura
 
 - `src/tridata/`: un módulo por pieza — `cli.py` (comando `tridata`), `garmin_client.py` y
   `sync.py` (Garmin Connect → SQLite), `storage.py` (`~/.tridata/data.sqlite3`),
   `metrics.py` (TSS/CTL/ATL/TSB), `exporters.py` (Markdown/JSON), `mcp_server.py`
-  (`tridata-mcp`, solo lectura).
+  (`tridata-mcp`, solo lectura), `calendario/` (Google Calendar: `__init__.py` el permiso y la
+  API, `sincronizar.py` qué se crea, cambia o borra) y `web/` (`tridata web`; `web/calendario.py`
+  Ajustes › Google Calendar y el hilo que lo actualiza).
 - `tests/` con `tests/fixtures/` (datos inventados); `scripts/ci/` las comprobaciones;
   `daily_update.sh` y `.config/systemd/user/` la rutina diaria.
 

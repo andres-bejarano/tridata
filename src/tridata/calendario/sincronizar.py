@@ -124,10 +124,21 @@ def _deporte(actividad: dict[str, Any]) -> tuple[str, str] | None:
     return next(((icono, clave) for tipos, icono, clave in _DEPORTES if tipo in tipos), None)
 
 
+def _hora(valor: Any) -> datetime | None:
+    """The start of an activity, or None if it has none or it cannot be read (062 R2: then the event is all day)."""
+    if not valor:
+        return None
+    try:
+        return datetime.fromisoformat(str(valor))
+    except ValueError:
+        return None
+
+
 def cuerpo_del_hecho(actividades: list[dict[str, Any]], zona: str | None, carrera: str | None = None) -> dict[str, Any]:
     """The event of what was done of one sport in a day (unit 057): «🏃 80' · 17,0 km (Salto 15K)», the minutes and the
     distance summed, from the start of the first one to the end of the last one in `zona` (the one of this PC); all
-    day if one has no hour. Nothing else of the activities (054 R1, R2); `carrera`, the race of the plan that day."""
+    day if one has no hour or one that cannot be read (062 R2). Nothing else of the activities (054 R1, R2);
+    `carrera`, the race of the plan that day."""
     icono, clave = _deporte(actividades[0]) or ("🏃", "otro")
     segundos = sum(float(a.get("duration_seconds") or 0) for a in actividades)
     metros = sum(float(a.get("distance_meters") or 0) for a in actividades)
@@ -137,11 +148,11 @@ def cuerpo_del_hecho(actividades: list[dict[str, Any]], zona: str | None, carrer
     titulo = " · ".join(partes) + (f" ({carrera})" if carrera else "")
     cuerpo: dict[str, Any] = {"summary": titulo, "description": HECHO}
     dia = date.fromisoformat(str(actividades[0]["activity_date"]))
-    if all(a.get("start_time_local") for a in actividades):
+    leidas = [i for i in (_hora(a.get("start_time_local")) for a in actividades) if i is not None]
+    if len(leidas) == len(actividades):
         tramos = []
-        for a in actividades:
-            inicio = datetime.fromisoformat(str(a["start_time_local"]))
-            inicio = inicio.replace(tzinfo=ZoneInfo(zona)) if zona else inicio.astimezone()
+        for a, leida in zip(actividades, leidas, strict=True):
+            inicio = leida.replace(tzinfo=ZoneInfo(zona)) if zona else leida.astimezone()
             tramos.append((inicio, inicio + timedelta(seconds=round(float(a.get("duration_seconds") or 0)))))
         extra = {"timeZone": zona} if zona else {}
         cuerpo["start"] = {"dateTime": min(t[0] for t in tramos).isoformat(), **extra}

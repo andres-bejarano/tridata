@@ -6,7 +6,10 @@ R2, R3, R5 · C-207, C-208, C-209, C-211, G-59. Google is ALWAYS doubled (`Googl
 from __future__ import annotations
 
 import json
+import logging
 import stat
+import threading
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -16,12 +19,13 @@ import pytest
 from googleapiclient.errors import HttpError
 from test_sync import _StubClient
 
-from tridata.calendario import ALCANCE, DESDE_HECHOS, NOMBRE, Calendario, ErrorCalendario
+from tridata.calendario import ALCANCE, DESDE_HECHOS, NOMBRE, RED, Calendario, ErrorCalendario
 from tridata.calendario.sincronizar import CLAVE_HECHO, cuerpo_del_evento, cuerpo_del_hecho, sincronizar
 from tridata.models import Activity
 from tridata.plan import Planes
 from tridata.storage import DataStore
 from tridata.sync import SyncService
+from tridata.web import calendario as web_calendario
 from tridata.web.calendario import Sincronizacion
 
 HOY = date(2026, 10, 26)  # Monday
@@ -55,6 +59,8 @@ class _Llamada:
         self._doble, self._f = doble, f
 
     def execute(self) -> Any:
+        if self._doble.puerta is not None:  # unit 062: a slow Google, held until the test opens the door
+            self._doble.puerta.wait(10)
         if self._doble.fallo is not None:
             raise self._doble.fallo
         return self._f()
@@ -79,6 +85,7 @@ class GoogleDoble:
         self.eventos: dict[str, dict[str, dict]] = {c["id"]: {} for c in self.calendarios}
         self.llamadas: list[tuple[str, str, dict]] = []
         self.fallo: Exception | None = None
+        self.puerta: threading.Event | None = None
         self._n = 0
 
     def _nuevo_id(self, prefijo: str) -> str:
@@ -737,3 +744,147 @@ def test_lo_cambiado_en_garmin_cambia_su_evento_sin_duplicarlo(b):  # 061 · R1 
     assert evento["summary"] == "🏃 Tirada 1h45"
     assert evento["description"] == "1h45 a 5:20"
     assert evento["start"] == {"date": "2026-10-31"} and evento["end"] == {"date": "2026-11-01"}
+
+
+# -- unit 062: a more solid Google Calendar ---------------------------------------------------------------------------
+
+def test_una_hora_ilegible_va_todo_el_dia():  # 062 R2: a ValueError of `fromisoformat` killed the thread
+    rara = {**CARRERA.to_dict(), "start_time_local": "por la tarde, hora inventada"}
+    cuerpo = cuerpo_del_hecho([rara], ZONA)
+    assert cuerpo["start"] == {"date": "2026-10-27"} and cuerpo["end"] == {"date": "2026-10-28"}
+    assert cuerpo["summary"] == "🏃 52' · 10,2 km"
+
+
+def test_una_hora_ilegible_en_el_grupo_lo_lleva_todo_el_dia_y_la_pasada_sigue(h):  # 062 R2
+    h.store.save_activities([CROSS, hecho("h-rara", "2026-09-13", "running", 600, 2000.0, hora="25:99:00")])
+    h.conectar()
+    assert h.pasada()["creados"] >= 1
+    (evento,) = h.hechos().values()
+    assert evento["start"] == {"date": "2026-09-13"} and evento["summary"] == "🏃 50' · 11,0 km"
+
+
+def test_varios_pronto_durante_una_vuelta_dan_una_vuelta_mas_no_n(b, monkeypatch):  # 062 R1
+    b.conectar()
+    vueltas: list[int] = []
+    soltar = threading.Event()
+
+    def lenta(*_: Any, **__: Any) -> dict[str, int]:
+        vueltas.append(1)
+        if len(vueltas) == 1:
+            soltar.wait(10)
+        return {"creados": 0, "cambiados": 0, "borrados": 0}
+
+    monkeypatch.setattr(web_calendario, "sincronizar", lenta)
+    sinc = Sincronizacion(b.calendario, b.planes, lambda: HOY, lambda: AHORA)
+    parar = threading.Event()
+    hilo = threading.Thread(target=sinc.en_segundo_plano, args=(parar,), kwargs={"cada": 3600}, daemon=True)
+    hilo.start()
+    _esperar(lambda: len(vueltas) == 1)
+    for _ in range(5):  # five changes of the plan while Google is slow
+        sinc.pronto()
+    soltar.set()
+    _esperar(lambda: len(vueltas) == 2)
+    time.sleep(0.3)
+    assert len(vueltas) == 2  # one in course and one more, not five
+    sinc.pronto()  # with the thread asleep, it wakes at once (not in an hour)
+    _esperar(lambda: len(vueltas) == 3)
+    parar.set()
+    sinc.pronto()
+    hilo.join(5)
+    assert not hilo.is_alive()
+
+
+def _esperar(condicion: Any, segundos: float = 5) -> None:
+    limite = time.monotonic() + segundos
+    while not condicion():
+        assert time.monotonic() < limite, "it did not happen in time"
+        time.sleep(0.02)
+
+
+def test_un_error_no_previsto_se_dice_fijo_y_el_hilo_sigue(b, monkeypatch, caplog):  # 062 R3
+    caplog.set_level(logging.DEBUG)
+    b.conectar()
+    fallos = [RuntimeError("TEXTO-INTERNO-INVENTADO")]
+    vueltas: list[int] = []
+
+    def rara(*_: Any, **__: Any) -> dict[str, int]:
+        vueltas.append(1)
+        if fallos:
+            raise fallos.pop()
+        return {"creados": 0, "cambiados": 0, "borrados": 0}
+
+    monkeypatch.setattr(web_calendario, "sincronizar", rara)
+    sinc = Sincronizacion(b.calendario, b.planes, lambda: HOY, lambda: AHORA)
+    parar = threading.Event()
+    hilo = threading.Thread(target=sinc.en_segundo_plano, args=(parar,), kwargs={"cada": 3600}, daemon=True)
+    hilo.start()
+    _esperar(lambda: b.calendario.estado()["error"] is not None)
+    assert b.calendario.estado()["error"] == ("No se pudo actualizar el calendario: error inesperado. Se reintentará "
+                                              "en la próxima vuelta.")
+    assert "RuntimeError" in caplog.text and "TEXTO-INTERNO-INVENTADO" not in caplog.text
+    assert hilo.is_alive()  # the thread did not die
+    sinc.pronto()
+    _esperar(lambda: len(vueltas) == 2 and b.calendario.estado()["error"] is None)
+    parar.set()
+    sinc.pronto()
+    hilo.join(5)
+
+
+class _Revocar:
+    def __init__(self, fallo: Exception | None = None) -> None:
+        self.tokens: list[str] = []
+        self.fallo = fallo
+
+    def __call__(self, token: Path) -> None:
+        self.tokens.append(token.read_text(encoding="utf-8"))
+        if self.fallo is not None:
+            raise self.fallo
+
+
+@pytest.mark.parametrize("fallo", [None, OSError("red inventada caída")], ids=["google-responde", "google-no"])
+def test_desconectar_retira_el_permiso_borra_el_token_y_reconectar_reutiliza_tridata(tmp_path, fallo):  # 062 R4, R5
+    b = Base(tmp_path)
+    revocar = _Revocar(fallo)
+    b.calendario = Calendario(b.db, b.token, str(b.cliente), flujo=b._flujo, servicio=lambda token: b.google,
+                              revocar=revocar)
+    b.planes.crear(plan_inventado([SERIES, RODAJE]), AHORA)
+    b.conectar()
+    sincronizar(b.planes, b.calendario, HOY)
+    creado = b.cal()
+    eventos = [e["id"] for e in b.google.de(creado)]
+
+    aviso = b.calendario.desconectar()
+    assert revocar.tokens == [TOKEN]  # Google is asked to withdraw that permission
+    assert (aviso is None) == (fallo is None)
+    if fallo is not None:
+        assert aviso == RED  # said, never the text of the exception
+    assert not b.token.exists() and not b.calendario.conectado
+    assert b.calendario.estado()["texto"] == "sin conectar"
+    assert [c["summary"] for c in b.google.calendarios].count(NOMBRE) == 1  # «TriData» stays in Google
+    llamadas = len(b.google.llamadas)
+    with pytest.raises(ErrorCalendario):
+        sincronizar(b.planes, b.calendario, HOY)
+    assert len(b.google.llamadas) == llamadas  # disconnected: nothing talks to Google
+
+    b.conectar()  # connecting again reuses «TriData» and its events
+    sincronizar(b.planes, b.calendario, HOY)
+    assert [c["summary"] for c in b.google.calendarios].count(NOMBRE) == 1 and b.cal() == creado
+    assert [e["id"] for e in b.google.de(creado)] == eventos
+
+
+def test_desconectar_sin_token_no_habla_con_google(b):  # 062 R4
+    revocar = _Revocar()
+    b.calendario = Calendario(b.db, b.token, str(b.cliente), flujo=b._flujo, servicio=lambda token: b.google,
+                              revocar=revocar)
+    assert b.calendario.desconectar() is None
+    assert revocar.tokens == [] and b.google.llamadas == []
+
+
+def test_el_logger_de_la_libreria_de_google_no_escribe_la_url_de_vuelta(caplog):  # 062 R6
+    import tridata.calendario  # noqa: F401 - importing it is what quiets the library
+
+    caplog.set_level(logging.DEBUG)
+    for nombre in ("google_auth_oauthlib.flow", "requests_oauthlib", "oauthlib"):
+        logging.getLogger(nombre).info('"GET /?state=ESTADO-INVENTADO&code=CODIGO-INVENTADO HTTP/1.1" 200 -')
+        logging.getLogger(nombre).debug("token body code=CODIGO-INVENTADO")
+    assert "CODIGO-INVENTADO" not in caplog.text and "ESTADO-INVENTADO" not in caplog.text

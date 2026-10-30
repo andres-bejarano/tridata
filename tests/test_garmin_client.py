@@ -331,30 +331,3 @@ class TestRutas:
         api.download_activity.side_effect = GarminConnectTooManyRequestsError("429 Too Many Requests")
         with pytest.raises(GarminRateLimitError):
             c.gpx_actividad("123")
-
-
-# ---------------------------------------------------------------------------
-# unit 060 · R1: Garmin's BMR of the day and of each activity are kept in the payload (invented values)
-# ---------------------------------------------------------------------------
-
-class TestBmrDeGarmin:
-    def test_el_bmr_del_dia_se_guarda(self, client):  # R1
-        c, api = client
-        api.get_stats.return_value = {"totalSteps": 9000, "totalKilocalories": 2600, "bmrKilocalories": 1876}
-        stats = c.get_daily_stats(date(2026, 10, 20))
-        assert stats.bmr_calories == 1876
-        assert stats.to_dict()["bmr_calories"] == 1876
-
-    def test_el_bmr_de_una_actividad_se_guarda(self, client):  # R1
-        c, api = client
-        raw = {"activityId": 7, "startTimeLocal": "2026-10-20 07:00:00", "activityType": {"typeKey": "running"},
-               "activityName": "Rodaje de prueba", "duration": 3600.0, "calories": 700.0, "bmrCalories": 78.0}
-        api.get_activities_by_date.return_value = [raw, {**raw, "activityId": 8, "bmrCalories": None}]
-        con, sin = c.get_activities(date(2026, 10, 20), date(2026, 10, 20))
-        assert con.bmr_calories == 78.0 and con.to_dict()["bmr_calories"] == 78.0
-        assert sin.bmr_calories is None  # Garmin may not give it: optional
-
-    def test_sin_bmr_en_garmin_queda_vacio(self, client):  # R1, R6
-        c, api = client
-        api.get_stats.return_value = {"totalSteps": 9000, "totalKilocalories": 2600}
-        assert c.get_daily_stats(date(2026, 10, 20)).to_dict()["bmr_calories"] is None

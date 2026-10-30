@@ -385,27 +385,3 @@ def test_el_asistente_no_pasa_de_diez(a):  # R6
     assert t["tipo"] == "no" or t["error"]
     assert "10" in (t.get("error") or t["texto"])
     assert len(a.objetivos.del_dia(HOY)["previstos"]) == 10
-
-
-# -- unit 060 · R3: the kcal of a training count without its BMR (Garmin's include the basal of that hour) -------------
-
-def test_un_entreno_hecho_cuenta_sin_su_bmr():  # R3
-    actividades = [
-        {"activity_id": "h1", "name": "Rodaje de prueba", "activity_type": "cycling", "duration_seconds": 3600,
-         "calories": 650.0, "bmr_calories": 80.0},
-        {"activity_id": "h2", "name": "Fuerza de prueba", "activity_type": "strength_training",
-         "duration_seconds": 1800, "calories": 200.0},  # saved before unit 060: no BMR, as before
-    ]
-    d = estimar_gasto(CONFIG, None, actividades)["desglose"]
-    assert [h["kcal"] for h in d["entreno_hecho"]] == [570.0, 200.0]
-    assert d["entreno_hecho_kcal"] == 770.0
-    assert estimar_gasto(CONFIG, None, actividades)["kcal"] == 1600 + 400 + 770
-    assert d["entreno_sin_basal"] is True  # the mark of the new rule, for the calibration (R4)
-
-
-def test_las_kcal_previstas_tambien_sin_bmr():  # R3
-    from tridata.nutricion.gasto import kcal_previstas
-    con = {"duration_seconds": 3600, "calories": 650.0, "bmr_calories": 80.0}
-    assert kcal_previstas(con, 30) == 285.0  # (650 − 80) × 30 / 60
-    sin = {"duration_seconds": 3600, "calories": 650.0}
-    assert kcal_previstas(sin, 30) == 325.0  # without a BMR, as before

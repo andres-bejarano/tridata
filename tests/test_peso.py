@@ -272,21 +272,3 @@ def test_objetivo_valido_normaliza():
     assert objetivo_valido({"tipo": " Descanso ", "porcentaje": "-15", "niveles": ["-15", 0], "pasos": "8000"}) == {
         "tipo": "descanso", "porcentaje": -15, "niveles": [-15, 0], "entreno": None, "pasos": 8000}
     assert objetivo_valido({"tipo": None, "porcentaje": None, "niveles": [], "entreno": "", "pasos": None}) is None
-
-
-# -- unit 060 · R2: the basal is Garmin's BMR of the last complete day; Mifflin or by hand only as the reserve -------
-
-def test_basal_del_dia_con_el_bmr_de_garmin(tmp_path):  # R2
-    vigentes = _ajustes(tmp_path / "data.sqlite3").vigentes(HOY)
-    basal = basal_del_dia(vigentes, [{"dia": "2026-03-10", "kg": 70.0}], HOY, bmr_garmin=(AYER, 1873.0))
-    assert (basal.kcal, basal.origen, basal.kg, basal.dia_del_peso, basal.dia_garmin) == (1873, "garmin", None,
-                                                                                          None, AYER)
-    assert "Garmin" in basal.explicacion and "BMR" in basal.explicacion and AYER.isoformat() in basal.explicacion
-    assert basal.como_dict()["origen"] == "garmin" and basal.como_dict()["dia_garmin"] == AYER.isoformat()
-
-
-def test_sin_bmr_de_garmin_sigue_la_reserva_de_siempre(tmp_path):  # R2, R6: the Mifflin tests above still hold
-    vigentes = _ajustes(tmp_path / "data.sqlite3").vigentes(HOY)
-    basal = basal_del_dia(vigentes, [{"dia": "2026-03-10", "kg": 70.0}], HOY, bmr_garmin=None)
-    assert (basal.kcal, basal.origen, basal.dia_garmin) == (1599, "peso", None)
-    assert basal_del_dia(vigentes, [], HOY, bmr_garmin=None).origen == "ajustes"

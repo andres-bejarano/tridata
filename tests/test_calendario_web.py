@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -21,7 +22,11 @@ from starlette.testclient import TestClient
 from test_calendario import AHORA, HOY, MARCADOR, SERIES, TOKEN, GoogleDoble, plan_inventado
 
 from tridata.calendario import NOMBRE, Calendario
-from tridata.nutricion import DESDE_SIEMPRE, Ajustes, ObjetivosDia, RegistroComidas
+from tridata.ia import CambioInterpretado
+from tridata.nutricion import DESDE_SIEMPRE, Ajustes, ObjetivosDia, RegistroComidas, RegistroPeso
+from tridata.nutricion.asistente import Contexto, Peticion, proponer
+from tridata.nutricion.recetas import Recetario
+from tridata.web import calendario as web_calendario
 from tridata.plan import Planes
 from tridata.web import crear_app
 
@@ -43,8 +48,11 @@ class Web:
         self.google = GoogleDoble()
         self.construidos = 0
         self.flujos = 0
+        self.revocados: list[str] = []
+        self.fallo_al_revocar: Exception | None = None
         self.calendario = Calendario(self.db, self.token, str(cliente) if configurado else None, flujo=self._flujo,
-                                     servicio=self._servicio)
+                                     servicio=self._servicio, revocar=self._revocar)
+        self.ajustes = ajustes
         self.app = crear_app(RegistroComidas(self.db), MagicMock(), ajustes, hoy=lambda: HOY,
                              objetivos=ObjetivosDia(self.db), actualizar_garmin=MagicMock(), ahora=lambda: AHORA,
                              ordenador_plan=MagicMock(), conversador=MagicMock(), calendario=self.calendario)
@@ -57,6 +65,26 @@ class Web:
     def _servicio(self, token):
         self.construidos += 1
         return self.google
+
+    def _revocar(self, token) -> None:
+        self.revocados.append(token.read_text(encoding="utf-8"))
+        if self.fallo_al_revocar is not None:
+            raise self.fallo_al_revocar
+
+    def listados(self) -> int:
+        """How many passes have started: each one begins asking Google if «TriData» is still there."""
+        return len([ll for ll in self.google.llamadas if ll[:2] == ("calendars", "get")])
+
+    def tarjeta_cambiar_series(self) -> dict:
+        """The card of the coach that changes the Wednesday's series, as /api/asistente/confirmar receives it."""
+        ctx = Contexto(registro=RegistroComidas(self.db), objetivos=ObjetivosDia(self.db), ajustes=self.ajustes,
+                       pesos=RegistroPeso(self.db), recetario=Recetario(self.db), hoy=lambda: HOY,
+                       planes=self.planes)
+        (tarjeta,) = proponer([CambioInterpretado(accion="plan_cambiar_sesion", dia=HOY.replace(day=28),
+                                                  texto="Series 3×10' | 20' suave | 3×10' a 4:00 | 10' suave")],
+                              ctx, Peticion(texto="texto de prueba", fecha=HOY))
+        assert tarjeta["tipo"] == "propuesta", tarjeta
+        return tarjeta
 
     def eventos(self) -> list[dict]:
         """The events of «TriData» in the doubled Google (none while it does not exist)."""
@@ -157,3 +185,139 @@ def test_el_token_no_sale_en_registros_ni_en_respuestas(tmp_path, caplog):  # R5
     for texto in [*respuestas, caplog.text]:
         assert MARCADOR not in texto
         assert "cliente-inventado.json" not in texto  # nor the path of the client's JSON
+
+
+# -- unit 062: a more solid Google Calendar ---------------------------------------------------------------------------
+
+def _esperar(condicion, segundos: float = 5) -> None:
+    limite = time.monotonic() + segundos
+    while not condicion():
+        assert time.monotonic() < limite, "it did not happen in time"
+        time.sleep(0.02)
+
+
+ACCIONES = {
+    "tarjeta": lambda web, plan_id: web.cliente.post("/api/asistente/confirmar",
+                                                     json={"tarjeta": web.tarjeta_cambiar_series()}),
+    "carrera": lambda web, plan_id: web.cliente.post("/api/plan/carrera", json={
+        "id": plan_id, "carrera": "Maratón inventado", "objetivo": "3:00"}),
+    "garmin": lambda web, plan_id: web.cliente.post("/api/garmin/actualizar"),
+}
+
+
+@pytest.mark.parametrize("accion", list(ACCIONES))
+def test_tras_cambiar_el_plan_el_calendario_se_actualiza_enseguida(tmp_path, accion):  # 062 R1 (criterio portante)
+    web = Web(tmp_path, conectado=True)
+    plan_id = web.planes.crear(plan_inventado([SERIES]), AHORA)
+    with TestClient(web.app) as cliente:  # the thread of the calendar runs, asleep for 10 minutes after its first pass
+        web.cliente = cliente
+        _esperar(lambda: web.calendario.estado()["ultima"] is not None)
+        antes = web.listados()
+        web.google.puerta = threading.Event()  # Google is slow from now on
+        inicio = time.monotonic()
+        r = ACCIONES[accion](web, plan_id)
+        assert r.status_code == 200, r.text
+        assert time.monotonic() - inicio < 3  # the answer does not wait for Google
+        _esperar(lambda: web.listados() > antes, segundos=5)  # a pass started, not in 10 minutes
+        web.google.puerta.set()
+        web.google.puerta = None
+        if accion == "tarjeta":
+            _esperar(lambda: [e["summary"] for e in web.eventos()] == ["🏃 Series 3×10'"])
+
+
+def test_lo_que_no_cambia_nada_no_despierta_el_calendario(tmp_path):  # 062 R1: only a 2xx of those actions
+    web = Web(tmp_path, conectado=True)
+    plan_id = web.planes.crear(plan_inventado([SERIES]), AHORA)
+    with TestClient(web.app) as cliente:
+        web.cliente = cliente
+        _esperar(lambda: web.calendario.estado()["ultima"] is not None)
+        antes = web.listados()
+        r = cliente.post("/api/plan/carrera", json={"id": plan_id, "carrera": "No existe inventada", "objetivo": "x"})
+        assert r.status_code == 404
+        assert cliente.get("/api/plan").status_code == 200
+        time.sleep(0.5)
+        assert web.listados() == antes
+
+
+def test_un_error_no_previsto_se_dice_en_ajustes_y_la_siguiente_vuelta_se_hace(tmp_path, monkeypatch,
+                                                                               caplog):  # 062 R3
+    caplog.set_level(logging.DEBUG)
+    web = Web(tmp_path, conectado=True)
+    web.planes.crear(plan_inventado([SERIES]), AHORA)
+    real = web_calendario.sincronizar
+
+    def rota(*_, **__):
+        raise RuntimeError("TEXTO-INTERNO-INVENTADO")
+
+    monkeypatch.setattr(web_calendario, "sincronizar", rota)
+    r = web.cliente.post("/api/calendario/sincronizar")
+    assert r.status_code == 200
+    assert web.estado()["error"] == ("No se pudo actualizar el calendario: error inesperado. Se reintentará en la "
+                                     "próxima vuelta.")
+    assert "RuntimeError" in caplog.text and "TEXTO-INTERNO-INVENTADO" not in caplog.text
+    assert "TEXTO-INTERNO-INVENTADO" not in r.text
+    monkeypatch.setattr(web_calendario, "sincronizar", real)
+    web.cliente.post("/api/calendario/sincronizar")
+    assert web.estado()["error"] is None and len(web.eventos()) == 1
+
+
+@pytest.mark.parametrize("fallo", [None, OSError("red inventada caída")], ids=["google-responde", "google-no"])
+def test_desconectar_y_volver_a_conectar_sin_duplicar(tmp_path, fallo):  # 062 R4, R5 · REC-27
+    web = Web(tmp_path, conectado=True)
+    web.planes.crear(plan_inventado([SERIES]), AHORA)
+    web.cliente.post("/api/calendario/sincronizar")
+    (evento,) = web.eventos()
+    web.fallo_al_revocar = fallo
+
+    r = web.cliente.post("/api/calendario/desconectar")
+    assert r.status_code == 200, r.text
+    estado = r.json()
+    assert estado["conectado"] is False and estado["texto"] == SIN_CONECTAR
+    assert web.revocados == [TOKEN] and not web.token.exists()
+    if fallo is None:
+        assert not estado.get("aviso")
+    else:  # disconnected all the same, and said
+        assert "Google no responde" in estado["aviso"] and "red inventada" not in r.text
+    assert web.estado()["conectado"] is False
+    assert [c["summary"] for c in web.google.calendarios] == [NOMBRE]  # «TriData» stays in Google
+    llamadas = len(web.google.llamadas)
+    assert web.cliente.post("/api/calendario/sincronizar").json()["texto"] == SIN_CONECTAR
+    assert len(web.google.llamadas) == llamadas
+
+    r = web.cliente.post("/api/calendario/conectar")
+    assert r.status_code == 200, r.text
+    assert r.json()["conectado"] is True and r.json()["error"] is None
+    assert [c["summary"] for c in web.google.calendarios] == [NOMBRE]  # not a second «TriData»
+    assert [e["id"] for e in web.eventos()] == [evento["id"]]  # nor repeated events
+    assert MARCADOR not in r.text
+
+
+def test_desconectar_con_una_vuelta_en_curso_espera_a_que_acabe(tmp_path):  # 062 R4
+    web = Web(tmp_path, conectado=True)
+    web.planes.crear(plan_inventado([SERIES]), AHORA)
+    web.google.puerta = threading.Event()
+    respuestas: dict[str, object] = {}
+    vuelta = threading.Thread(target=lambda: respuestas.setdefault(
+        "vuelta", web.cliente.post("/api/calendario/sincronizar")), daemon=True)
+    vuelta.start()
+    _esperar(lambda: web.google.llamadas)  # the pass is talking to Google
+    desconectar = threading.Thread(target=lambda: respuestas.setdefault(
+        "desconectar", web.cliente.post("/api/calendario/desconectar")), daemon=True)
+    desconectar.start()
+    time.sleep(0.3)
+    assert web.token.exists() and "desconectar" not in respuestas  # it waits for the pass
+    web.google.puerta.set()
+    vuelta.join(10)
+    desconectar.join(10)
+    assert respuestas["vuelta"].status_code == 200 and respuestas["desconectar"].status_code == 200
+    assert not web.token.exists()
+    llamadas, construidos = len(web.google.llamadas), web.construidos
+    web.cliente.post("/api/calendario/sincronizar")
+    assert len(web.google.llamadas) == llamadas and web.construidos == construidos  # no pass talks to Google
+
+
+def test_desconectar_sin_conectar_no_habla_con_google(tmp_path):  # 062 R4
+    web = Web(tmp_path)
+    r = web.cliente.post("/api/calendario/desconectar")
+    assert r.status_code == 200 and r.json()["texto"] == SIN_CONECTAR
+    assert web.revocados == [] and web.google.llamadas == []

@@ -13,10 +13,20 @@ hour, with only its sport, duration and distance.
 
 Without a token nothing here talks to Google (R6). `calendario/sincronizar.py` decides what to create, change or
 delete.
+
+Unit 062: `desconectar` withdraws the permission in Google (injectable `revocar(token_path)`), deletes the token of
+this PC and keeps the id of «TriData», so connecting again reuses it. The loggers of the OAuth libraries are quieted
+on import: `google_auth_oauthlib.flow` logs at INFO every request of its local server, the URL back with `code=` and
+`state=` included, and `requests_oauthlib`/`oauthlib` log the token at DEBUG.
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
+import urllib.error
+import urllib.parse
+import urllib.request
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -34,12 +44,18 @@ FALTA_CLIENTE = ("Falta TRIDATA_GOOGLE_CLIENTE en .env: la ruta del JSON del cli
                  "en este PC.")
 LISTO = "Listo: ya puedes cerrar esta pestaña y volver a TriData."
 ESPERA_PERMISO_S = 300  # the browser waits this long for Andrés to say yes
+REVOCAR = "https://oauth2.googleapis.com/revoke"
+ESPERA_REVOCAR_S = 15
 DESDE_HECHOS = date(2026, 8, 1)  # unit 054: the trainings done in Garmin go to «TriData» from this day on
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS calendario_estado (clave TEXT PRIMARY KEY, valor TEXT);
 CREATE TABLE IF NOT EXISTS calendario_evento (sesion TEXT PRIMARY KEY, event_id TEXT NOT NULL);
 """
+
+
+for _ruidoso in ("google_auth_oauthlib.flow", "requests_oauthlib", "oauthlib"):  # unit 062 R6
+    logging.getLogger(_ruidoso).setLevel(logging.WARNING)
 
 
 class ErrorCalendario(Exception):
@@ -79,6 +95,22 @@ def _servicio_google(token: Path) -> Any:
     return build("calendar", "v3", credentials=credenciales, cache_discovery=False)
 
 
+def _revocar_google(token: Path) -> None:
+    """Asks Google to withdraw the permission of the saved token (its refresh token revokes the whole grant)."""
+    datos = json.loads(token.read_text(encoding="utf-8"))
+    valor = datos.get("refresh_token") or datos.get("token")
+    if not valor:
+        return
+    peticion = urllib.request.Request(REVOCAR, data=urllib.parse.urlencode({"token": valor}).encode(),
+                                      headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+    try:
+        with urllib.request.urlopen(peticion, timeout=ESPERA_REVOCAR_S):  # noqa: S310 - a fixed https URL
+            pass
+    except urllib.error.HTTPError as exc:
+        if exc.code != 400:  # 400 `invalid_token`: Google had already withdrawn it, which is what was wanted
+            raise
+
+
 def _estado_http(exc: BaseException) -> int | None:
     estado = getattr(getattr(exc, "resp", None), "status", None)
     try:
@@ -102,12 +134,14 @@ class Calendario:
     """The calendar «TriData» of Andrés's Google account, and what this PC remembers of it."""
 
     def __init__(self, db_path: Path | str, token: Path | str, cliente: str | None, *,
-                 flujo: Callable[[str], str] | None = None, servicio: Callable[[Path], Any] | None = None) -> None:
+                 flujo: Callable[[str], str] | None = None, servicio: Callable[[Path], Any] | None = None,
+                 revocar: Callable[[Path], None] | None = None) -> None:
         self._db_path = Path(db_path)
         self._token = Path(token)
         self._cliente = cliente
         self._flujo = flujo or _flujo_google
         self._construir = servicio or _servicio_google
+        self._revocar = revocar or _revocar_google
         self._servicio: Any = None
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
@@ -196,6 +230,24 @@ class Calendario:
         self._servicio = None
         return self.asegurar()
 
+    def desconectar(self) -> str | None:
+        """The permission withdrawn in Google and deleted from this PC (062 R4); «TriData» and its id stay (R5).
+
+        Disconnected also when Google does not answer: then the fixed reason is returned, to be said; else None.
+        """
+        if not self.conectado:
+            return None
+        aviso: str | None = None
+        try:
+            with self._google():
+                self._revocar(self._token)
+        except ErrorCalendario as exc:
+            aviso = str(exc)
+        self._token.unlink(missing_ok=True)
+        self._servicio = None
+        self._poner("error", None)
+        return aviso
+
     def asegurar(self) -> str:
         """The id of «TriData»: the one kept here if it is still in Google, else a new one (R1).
 
@@ -254,4 +306,4 @@ class Calendario:
                     raise
 
 
-__all__ = ["ALCANCE", "DESDE_HECHOS", "NOMBRE", "SIN_CONECTAR", "Calendario", "ErrorCalendario"]
+__all__ = ["ALCANCE", "DESDE_HECHOS", "NOMBRE", "RED", "SIN_CONECTAR", "Calendario", "ErrorCalendario"]

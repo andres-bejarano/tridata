@@ -461,7 +461,7 @@ async function cargarEquipo() {
   pintarEquipo();
 }
 
-// -- unit 043: Ajustes › Google Calendar (R1, R4, R6) ---------------------------------------------------------------
+// -- unit 043: Ajustes › Google Calendar (R1, R4, R6); unit 062: «Desconectar» ---------------------------------
 
 const hora = new Intl.DateTimeFormat("es-ES", { hour: "2-digit", minute: "2-digit" });
 let calendarioOcupado = ""; // the text of the button while a request is on its way
@@ -473,19 +473,28 @@ function actualizado(iso) {
   return `actualizado ${dia} a las ${hora.format(cuando)}`;
 }
 
-function botonCalendario(texto, ruta, espera) {
+const HECHO_CALENDARIO = {
+  conectar: "Conectado: tus sesiones van al calendario TriData.",
+  sincronizar: "Calendario al día.",
+  desconectar: "Desconectado: el calendario TriData se queda en tu Google, pero ya no se actualiza.",
+};
+
+// unit 062 (R4): «Desconectar» asks first (`pregunta`); its `aviso` says if Google did not withdraw the permission
+function botonCalendario(texto, ruta, espera, pregunta = "") {
   const boton = el("button", { type: "button", className: "ajuste accion" },
     el("span", { className: "que", textContent: calendarioOcupado === texto ? espera : texto }));
   boton.dataset.calendario = ruta;
   boton.disabled = Boolean(calendarioOcupado);
   boton.addEventListener("click", async () => {
+    if (pregunta && !confirm(pregunta)) return;
     calendarioOcupado = texto;
     mensaje("");
     pintarCalendario(null);
     const { ok, datos } = await api(`/api/calendario/${ruta}`, {});
     calendarioOcupado = "";
     if (!ok) mensaje(datos.error ?? "No se ha podido hablar con Google Calendar.", "error");
-    else if (!datos.error) mensaje(ruta === "conectar" ? "Conectado: tus sesiones van al calendario TriData." : "Calendario al día.", "bien");
+    else if (datos.aviso) mensaje(datos.aviso, "error");
+    else if (!datos.error) mensaje(HECHO_CALENDARIO[ruta], "bien");
     cargarCalendario();
   });
   return boton;
@@ -510,7 +519,11 @@ function pintarCalendario(nuevo) {
     filas.push(botonCalendario(c.conectado ? "Volver a conectar" : "Conectar Google Calendar", "conectar",
       "Entra con tu cuenta en el navegador del PC…"));
   }
-  if (c.conectado) filas.push(botonCalendario("Sincronizar ahora", "sincronizar", "Sincronizando…"));
+  if (c.conectado) {
+    filas.push(botonCalendario("Sincronizar ahora", "sincronizar", "Sincronizando…"));
+    filas.push(botonCalendario("Desconectar", "desconectar", "Desconectando…",
+      "El calendario TriData se queda en tu Google, pero dejará de actualizarse. ¿Desconectar Google Calendar?"));
+  }
   $("calendario").replaceChildren(...filas);
 }
 

@@ -656,46 +656,46 @@ def test_la_bici_de_50_minutos_y_lo_corto_de_otros_deportes_siguen(h):  # 056 R2
 
 # -- unit 057: one event per day and sport, only icon, time and distance, and the race of the plan -------------------
 
-CROSS = hecho("h-cross", "2026-10-11", "running", 36 * 60, 10000.0, hora="09:59:00")
-CALENTAR = hecho("h-calentar", "2026-10-11", "running", 25 * 60, 4000.0, hora="09:29:00")
-SOLTAR = hecho("h-soltar", "2026-10-11", "running", 19 * 60, 3000.0, hora="10:58:00")
+CROSS = hecho("h-cross", "2026-09-13", "running", 40 * 60, 9000.0, hora="10:10:00")
+CALENTAR = hecho("h-calentar", "2026-09-13", "running", 22 * 60, 3500.0, hora="09:40:00")
+SOLTAR = hecho("h-soltar", "2026-09-13", "running", 15 * 60, 2500.0, hora="11:05:00")
 
 
 def test_lo_de_un_dia_y_deporte_es_un_evento_con_la_suma_y_la_carrera_del_plan(h):  # 057 R1, R2 (portante)
-    carreras = [{"apartado": 0, "nombre": "10K Inventado de las Tres Calas (asfalto)", "fecha": "2026-10-11",
+    carreras = [{"apartado": 0, "nombre": "10K Inventado de las Tres Calas (asfalto)", "fecha": "2026-09-13",
                  "objetivo": "PR", "estado": "pendiente", "principal": False}]
     h.planes.crear(plan_inventado([SERIES], carreras=carreras), AHORA)
-    h.store.save_activities([CROSS, CALENTAR, SOLTAR, hecho("h-nado-11", "2026-10-11", "lap_swimming", 1200, 800.0,
+    h.store.save_activities([CROSS, CALENTAR, SOLTAR, hecho("h-nado-11", "2026-09-13", "lap_swimming", 1200, 800.0,
                                                             hora="18:00:00")])
     h.conectar()
     h.pasada()
     hechos = h.hechos()
-    assert set(hechos) == {"2026-10-11/carrera", "2026-10-11/natacion"}
-    carrera = hechos["2026-10-11/carrera"]
-    assert carrera["summary"] == "🏃 80' · 17,0 km (10K Inventado de las Tres Calas)"
-    assert carrera["start"]["dateTime"] == "2026-10-11T09:29:00+02:00"  # the first one starts
-    assert carrera["end"]["dateTime"] == "2026-10-11T11:17:00+02:00"  # the last one ends
-    assert hechos["2026-10-11/natacion"]["summary"] == "🏊 20' · 800 m (10K Inventado de las Tres Calas)"
+    assert set(hechos) == {"2026-09-13/carrera", "2026-09-13/natacion"}
+    carrera = hechos["2026-09-13/carrera"]
+    assert carrera["summary"] == "🏃 77' · 15,0 km (10K Inventado de las Tres Calas)"
+    assert carrera["start"]["dateTime"] == "2026-09-13T09:40:00+02:00"  # the first one starts
+    assert carrera["end"]["dateTime"] == "2026-09-13T11:20:00+02:00"  # the last one ends
+    assert hechos["2026-09-13/natacion"]["summary"] == "🏊 20' · 800 m (10K Inventado de las Tres Calas)"
     assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}
 
 
 def test_si_a_una_le_falta_la_hora_el_grupo_va_todo_el_dia(h):  # 057 R1
-    h.store.save_activities([CROSS, hecho("h-sin-hora", "2026-10-11", "running", 600, 2000.0, hora=None)])
+    h.store.save_activities([CROSS, hecho("h-sin-hora", "2026-09-13", "running", 600, 2000.0, hora=None)])
     h.conectar()
     h.pasada()
     (evento,) = h.hechos().values()
-    assert evento["start"] == {"date": "2026-10-11"} and evento["summary"] == "🏃 46' · 12,0 km"
+    assert evento["start"] == {"date": "2026-09-13"} and evento["summary"] == "🏃 50' · 11,0 km"
 
 
 def test_los_eventos_de_una_actividad_se_sustituyen_por_el_del_grupo(h):  # 057 R1: the events of the 054 go
     h.store.save_activities([CROSS, CALENTAR])
     h.conectar()
     for viejo in (CROSS, CALENTAR):  # as the 054 sent them: one per activity, keyed by its id
-        h.calendario.crear({"summary": "✅ 🏃 Carrera · 36' · 10,0 km", "start": {"date": "2026-10-11"},
+        h.calendario.crear({"summary": "✅ 🏃 Carrera · 40' · 9,0 km", "start": {"date": "2026-09-13"},
                             "end": {"date": "2026-10-12"},
                             "extendedProperties": {"private": {CLAVE_HECHO: viejo.activity_id}}})
     assert h.pasada() == {"creados": 1, "cambiados": 0, "borrados": 2}
-    assert [e["summary"] for e in h.google.de(h.cal())] == ["🏃 61' · 14,0 km"]
+    assert [e["summary"] for e in h.google.de(h.cal())] == ["🏃 62' · 12,5 km"]
     assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}
 
 

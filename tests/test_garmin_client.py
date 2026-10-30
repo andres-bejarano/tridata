@@ -243,6 +243,17 @@ class TestEntrenos:
         assert c.bajar_fit(123) == b".FIT de prueba"
         api.download_workout.assert_called_once_with(123)
 
+    def test_el_programado_que_sale_en_dos_meses_se_da_una_vez(self, client):  # bug 064
+        c, api = client
+        item = {"itemType": "workout", "id": 701, "workoutId": 801, "date": "2026-11-01", "title": "Tirada",
+                "sportTypeKey": "running"}
+        otro = {"itemType": "workout", "id": 702, "workoutId": 802, "date": "2026-10-30", "title": "Rodaje",
+                "sportTypeKey": "running"}
+        # the view of each month brings the days of the neighbour one: both scheduled come in both months
+        api.get_scheduled_workouts.side_effect = lambda y, m: {"calendarItems": [dict(otro), dict(item)]}
+        salida = c.entrenos_programados(date(2026, 10, 27), date(2026, 11, 5))
+        assert [e["programado"] for e in salida] == [702, 701]
+
     def test_un_429_es_el_error_de_siempre(self, client):  # R3
         from garminconnect import GarminConnectTooManyRequestsError
 

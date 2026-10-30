@@ -483,6 +483,7 @@ class GarminClient:
         deporte}]` (the id of the scheduling, the `workoutId`, the ISO day, its title and Garmin's `sportTypeKey`).
         The other items of the calendar (activities, events…) are left out. A 429 is `GarminRateLimitError`."""
         salida: list[dict[str, Any]] = []
+        vistos: set[int] = set()  # bug 064: the view of a month brings days of the next one, so it comes twice
         mes = date(desde.year, desde.month, 1)
         while mes <= hasta:
             raw = self._workout_call("read the calendar", lambda api, y, m: api.get_scheduled_workouts(y, m),
@@ -493,6 +494,9 @@ class GarminClient:
                 if (item.get("itemType") != "workout" or item.get("workoutId") is None or item.get("id") is None
                         or not desde.isoformat() <= dia <= hasta.isoformat()):
                     continue
+                if int(item["id"]) in vistos:
+                    continue
+                vistos.add(int(item["id"]))
                 salida.append({"programado": int(item["id"]), "entreno": int(item["workoutId"]), "fecha": dia,
                                "titulo": str(item.get("title") or ""), "deporte": str(item.get("sportTypeKey") or "")})
             mes = date(mes.year + mes.month // 12, mes.month % 12 + 1, 1)

@@ -237,3 +237,11 @@ def test_una_base_vieja_gana_las_columnas_nuevas(tmp_path):
     with Planes(db)._connect() as conn:
         columnas = {f["name"] for f in conn.execute("PRAGMA table_info(plan_sesion)")}
     assert {"garmin_actualizado", "garmin_aviso"} <= columnas
+
+
+def test_el_mismo_programado_dos_veces_no_anade_otra_sesion():  # bug 064: the month views overlap
+    s = sesion(1, "2026-11-01", "Tirada", workout=501, schedule=601, actualizado="2026-10-29T18:00:00.0")
+    p = prog(601, 501, "2026-11-01", "Tirada")
+    c = cambios([s], [p, p])
+    assert c.anadir == []
+    assert c.avisos[1] is None

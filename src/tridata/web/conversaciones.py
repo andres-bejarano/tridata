@@ -90,6 +90,18 @@ from ..sync import RUNNING_TYPES
 
 log = logging.getLogger(__name__)
 
+_FORMA = {"dia": "una fecha AAAA-MM-DD", "desde": "una fecha AAAA-MM-DD", "fecha": "una fecha AAAA-MM-DD",
+          "accion": "un id de la lista de cambios, u «otra»"}
+
+
+def cambio_no_entendido(campos: list[str]) -> str:
+    """Bug 055: the answer of `proponer_cambio` when its input does not validate, naming the fields to mend."""
+    if not campos:
+        return "No he entendido ese cambio: no se ha preparado ninguna tarjeta."
+    malos = "; ".join(f"{c}: tiene que ser {_FORMA[c]}" if c in _FORMA else f"{c}: no tiene la forma que pide"
+                      for c in campos)
+    return f"No he entendido ese cambio: no se ha preparado ninguna tarjeta. Corrige y vuelve a proponerlo ({malos})."
+
 AUDIO_MAX_BYTES = 10 * 1024 * 1024
 NO_DICTADO = "El dictado no está disponible en el PC ahora mismo. Escribe la pregunta."
 SIN_TEXTO = "Te he dejado el cambio aquí abajo."
@@ -244,8 +256,10 @@ def rutas(conversaciones: Conversaciones, conversador: Any, medicos: Medicos, mo
             if nombre == "proponer_cambio":
                 try:
                     cambio = CambioInterpretado.model_validate(entrada)
-                except ValidationError:
-                    return "No he entendido ese cambio: no se ha preparado ninguna tarjeta."
+                except ValidationError as exc:  # bug 055: which fields, so Claude can mend it; never what was sent
+                    campos = sorted({str(e["loc"][0]) for e in exc.errors() if e["loc"]})
+                    log.warning("conversation %d: change not understood, fields %s", ident, ", ".join(campos) or "-")
+                    return cambio_no_entendido(campos)
                 nuevas = proponer([cambio], asistente, Peticion(texto=mensaje, fecha=hoy()))
                 tarjetas.extend(nuevas)
                 return " ".join(_resultado_herramienta(t) for t in nuevas)

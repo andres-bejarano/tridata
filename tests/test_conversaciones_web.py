@@ -725,3 +725,43 @@ def test_la_estrategia_por_tramos_se_pide_y_se_guarda_en_la_carrera_al_confirmar
     assert planes.estrategia(plan_id, "Maratón de ejemplo") == [
         "km 0-4 · llano · 4:15/km · paso 17:00", "km 4-6,5 · subida · por esfuerzo · paso 28:40",
         "km 6,5-20 · bajada y llano · 4:10/km · paso 1:24:55", "gel: km 6,5"]
+
+
+# -- bug 055: «cambiar sesión» gives its card the first time; what is wrong is told by name ---------------------------
+
+CAMBIO_SESION = {"accion": "plan_cambiar_sesion", "dia": "2026-10-28", "texto": "Rodaje 40' | 40' a 5:00-6:00"}
+
+
+def _con_plan(web: Web) -> None:
+    from test_plan import plan_de_prueba
+
+    from tridata.plan import Planes
+
+    series = {"apartado": 1, "fecha": "2026-10-28", "titulo": "Series de prueba 3×2000",
+              "bloques": ["15' suave", "3×2000 a 4:10 (3' rec)", "10' suave"], "clave": True}
+    Planes(web.db).crear(plan_de_prueba(sesiones=[*plan_de_prueba()["sesiones"], series]), AHORA)
+
+
+@pytest.mark.parametrize("sobra", [{"valor": "5:00-6:00"}, {"cantidad": "40'"}, {"kcal_estimadas": "pocas"}])
+def test_un_numero_mal_escrito_que_el_cambio_no_usa_no_quita_la_tarjeta(tmp_path, sobra):  # bug 055 · R1
+    web = _web(tmp_path)
+    _con_plan(web)
+    web.claude.responder("Te lo cambio.", ("proponer_cambio", {**CAMBIO_SESION, **sobra}))
+    web.claude.responder(" Confírmalo si te cuadra.")
+    fin = web.nueva("cámbiame las series del miércoles por un rodaje", papel="entrenador")
+    (tarjeta,) = fin["mensaje"]["tarjetas"]
+    assert tarjeta["tipo"] == "propuesta" and tarjeta["accion"] == "plan_cambiar_sesion"
+
+
+def test_un_cambio_con_un_campo_mal_dice_cual_y_lo_apunta_sin_el_valor(tmp_path, caplog):  # bug 055 · R2
+    caplog.set_level(logging.DEBUG)
+    web = _web(tmp_path)
+    _con_plan(web)
+    web.claude.responder("Te lo cambio.", ("proponer_cambio", {**CAMBIO_SESION, "dia": "miércoles de prueba"}))
+    web.claude.responder("")
+    fin = web.nueva("cámbiame las series del miércoles", papel="entrenador")
+    assert fin["mensaje"]["tarjetas"] == []  # nothing half understood becomes a card
+    resultado = web.claude.peticiones[1]["messages"][-1]["content"][0]["content"]
+    assert "dia" in resultado and "AAAA-MM-DD" in resultado  # Claude is told which field and how it goes
+    assert any("not understood" in r.getMessage() and "dia" in r.getMessage() for r in caplog.records)
+    assert "miércoles de prueba" not in caplog.text  # the name of the field, never what was sent

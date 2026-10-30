@@ -40,6 +40,7 @@ from . import DESDE_HECHOS, SIN_CONECTAR, Calendario, ErrorCalendario
 
 CLAVE = "tridata_sesion"
 CLAVE_HECHO = "tridata_actividad"  # unit 054: the `activity_id` of a training done
+MINIMO_BICI_S = 50 * 60  # unit 056: a shorter ride is a commute, not a training: it does not go to the calendar
 HECHO = "Hecho según Garmin"
 _DEPORTES = ((RUNNING_TYPES, "🏃", "Carrera"), (CYCLING_TYPES, "🚴", "Bici"), (SWIMMING_TYPES, "🏊", "Natación"),
              (GYM_TYPES, "🏋️", "Fuerza"))
@@ -144,8 +145,29 @@ def cuerpo_del_hecho(actividad: dict[str, Any], zona: str | None) -> dict[str, A
 
 
 def _hechos(store: DataStore, hoy: date, zona: str | None) -> dict[str, dict[str, Any]]:
-    """`{activity id: its event}` of every activity since `DESDE_HECHOS` (R1, R3)."""
-    return {str(a["activity_id"]): cuerpo_del_hecho(a, zona) for a in store.activities_between(DESDE_HECHOS, hoy)}
+    """`{activity id: its event}` of every activity since `DESDE_HECHOS` (R1, R3), but the commutes: a ride of less
+    than `MINIMO_BICI_S` (unit 056). One already sent leaves the calendar like any activity no longer wanted."""
+    return {str(a["activity_id"]): cuerpo_del_hecho(a, zona) for a in store.activities_between(DESDE_HECHOS, hoy)
+            if not _desplazamiento(a)}
+
+
+def _dia_y_deporte(cuerpo: dict[str, Any]) -> tuple[str, str]:
+    """The day and the sport (its icon, the second word of «✅ 🏃 …», the first of «🏃 Series …») of an event."""
+    inicio = cuerpo["start"]
+    palabras = cuerpo["summary"].split()
+    return (inicio.get("date") or inicio["dateTime"][:10]), palabras[1 if palabras[0] == "✅" else 0]
+
+
+def _sin_las_entrenadas(deseadas: dict[str, dict], hechos: dict[str, dict]) -> dict[str, dict]:
+    """Unit 056 (R3): a session of a day that already has a training done of its sport is not wanted: that day
+    shows only the training. A session of a sport not done that day stays."""
+    entrenado = {_dia_y_deporte(c) for c in hechos.values()}
+    return {sesion: c for sesion, c in deseadas.items() if _dia_y_deporte(c) not in entrenado}
+
+
+def _desplazamiento(actividad: dict[str, Any]) -> bool:
+    return (actividad.get("activity_type") in CYCLING_TYPES
+            and float(actividad.get("duration_seconds") or 0) < MINIMO_BICI_S)
 
 
 def _mismo_momento(actual: dict, deseado: dict) -> bool:
@@ -213,6 +235,8 @@ def sincronizar(planes: Planes, calendario: Calendario, hoy: date, store: DataSt
     ident = planes.en_curso(hoy)
     deseadas = _previstas(planes, ident)
     hechos = _hechos(store, hoy, zona or zona_local()) if store is not None else None
+    if hechos:
+        deseadas = _sin_las_entrenadas(deseadas, hechos)
     calendario.asegurar()  # «TriData» is still there (Andrés may have deleted it: then a new one)
     por_sesion: dict[str, list[dict]] = {}
     por_actividad: dict[str, list[dict]] = {}

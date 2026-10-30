@@ -20,6 +20,8 @@
 // ones first, with since when, what happened, the visits to the physio or the doctor and the lesson; an open one is
 // closed by hand with «Cerrar con lección…» (POST /api/plan/incidencia/ID/cerrar). Opening one or adding a visit is a
 // card of a conversation. Each day of a week shows its notes («📝 FC alta para el ritmo»).
+// Unit 059: a race that was run says its time and km from Garmin unless Andrés wrote his own, and «Editar» opens, in
+// its row, its name, date, target and time (POST /api/plan/carrera).
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -135,15 +137,55 @@ function pintarPlan(datos) {
 function filaCarrera(c) {
   const hecho = c.estado.startsWith("✅");
   const estado = c.principal && c.estado === "pendiente" ? "⭐" : c.estado;
+  const deGarmin = c.resultado?.origen === "garmin";
+  const editar = el("button", { type: "button", className: "enlace-boton editar-carrera", textContent: "Editar",
+    ariaLabel: `Editar ${c.nombre}` });
+  const formulario = formCarrera(c);
+  editar.addEventListener("click", () => {
+    formulario.hidden = !formulario.hidden;
+    if (!formulario.hidden) formulario.querySelector("input").focus();
+  });
   return el("li", { className: "carrera-plan" },
     el("div", {},
       el("strong", { textContent: c.fecha ? `${c.nombre} · ${diaMes(c.fecha)}` : c.nombre }),
-      c.objetivo ? el("small", { className: "suave", textContent: `${c.principal ? "objetivo principal" : "objetivo"} ${c.objetivo}` }) : null),
+      c.objetivo ? el("small", { className: "suave", textContent: `${c.principal ? "objetivo principal" : "objetivo"} ${c.objetivo}` }) : null,
+      deGarmin ? el("small", { className: "suave", textContent: "tiempo y km de tu Garmin" }) : null),
     el("span", { className: `estado-carrera${hecho ? " bien" : ""}`, textContent: estado,
-      title: c.principal ? "Carrera principal" : "" }),
+      title: c.principal ? "Carrera principal" : (deGarmin ? "Según tu Garmin" : "") }),
+    editar,
     c.estrategia?.length ? el("details", { className: "estrategia-carrera" },
       el("summary", { textContent: "Estrategia por tramos" }),
-      el("ul", {}, ...c.estrategia.map((linea) => el("li", { textContent: linea })))) : null);
+      el("ul", {}, ...c.estrategia.map((linea) => el("li", { textContent: linea })))) : null,
+    formulario);
+}
+
+// Unit 059 (R3): name, date, target and time of a race, from its row (POST /api/plan/carrera). An empty time: the
+// one of Garmin; the strategy stays with the race whatever its name.
+function formCarrera(c) {
+  const campo = (etiqueta, props) => {
+    const entrada = el("input", props);
+    return [entrada, el("label", {}, el("small", { className: "suave", textContent: etiqueta }), entrada)];
+  };
+  const [nombre, lNombre] = campo("Nombre", { type: "text", value: c.nombre, required: true, name: "nombre" });
+  const [dia, lDia] = campo("Fecha", { type: "date", value: c.fecha ?? "", name: "fecha" });
+  const [objetivo, lObjetivo] = campo("Objetivo", { type: "text", value: c.objetivo ?? "", name: "objetivo" });
+  const [tiempo, lTiempo] = campo("Tu tiempo (vacío: el de Garmin)", { type: "text", name: "tiempo",
+    value: c.resultado?.origen === "a mano" ? c.resultado.tiempo : "", placeholder: "1:12:30", inputMode: "text" });
+  const error = el("p", { className: "aviso", role: "alert", hidden: true });
+  const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar carrera" });
+  const formulario = el("form", { className: "cerrar-incid form-carrera", hidden: true },
+    lNombre, lDia, lObjetivo, lTiempo, error, guardar);
+  formulario.style.flexBasis = "100%";
+  formulario.addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    guardar.disabled = true;
+    const { ok, datos } = await api("/api/plan/carrera", { id: ultimo.plan.id, carrera: c.nombre,
+      nombre: nombre.value, fecha: dia.value, objetivo: objetivo.value, tiempo: tiempo.value });
+    guardar.disabled = false;
+    if (!ok) { error.hidden = false; error.textContent = datos.error ?? "No he podido guardar la carrera."; return; }
+    pintarPlan(datos);
+  });
+  return formulario;
 }
 
 function hechoCorto(h) {

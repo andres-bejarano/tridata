@@ -167,3 +167,174 @@ def test_un_plan_guardado_se_lee_entero(tmp_path):  # R7: what is kept is what c
     ident = planes.crear(datos, datetime(2026, 10, 21, 10))
     leido = planes.leer(ident)
     assert leido == {**datos, "id": ident}
+
+
+# -- unit 059: the result of a race comes from Garmin, its name, date, target and time are edited, and its strategy
+# goes with the plan (R1-R5 · R-127, C-169). Every race, time and distance is invented. ---------------------------
+
+DIA_CARRERA = date(2026, 10, 18)  # a Sunday before HOY
+
+
+def _una(ident: str, tipo: str, metros: float, segundos: float, dia: date = DIA_CARRERA) -> Activity:
+    return Activity(activity_id=ident, activity_date=dia, activity_type=tipo, name="Actividad de prueba",
+                    duration_seconds=segundos, distance_meters=metros, moving_duration_seconds=segundos - 30)
+
+
+def _plan_con(*carreras: dict) -> dict:
+    return plan_de_prueba(carreras=[{"apartado": 0, "objetivo": "", "estado": "pendiente", "principal": False, **c}
+                                    for c in carreras])
+
+
+def _estado(store, *carreras: dict, hoy: date = HOY) -> list[dict]:
+    return semanas.vista(_plan_con(*carreras), store, hoy)["carreras"]
+
+
+@pytest.fixture
+def dia_de_carrera(tmp_path) -> DataStore:
+    """The race day: a warm-up, the race and a cool-down (all running), plus a ride to get there."""
+    s = DataStore(tmp_path / "carrera.sqlite3")
+    s.save_activities([
+        _una("calentar", "running", 2000, 720),
+        _una("la-carrera", "running", 15000, 3900),
+        _una("soltar", "running", 1500, 600),
+    ])
+    return s
+
+
+def test_una_carrera_corrida_sale_hecha_con_la_mas_larga_de_ese_dia(dia_de_carrera):  # R1 · R-127, C-169
+    (c,) = _estado(dia_de_carrera, {"nombre": "Carrera de ejemplo", "fecha": DIA_CARRERA.isoformat()})
+    assert c["resultado"] == {"tiempo": "1:05:00", "km": 15.0, "origen": "garmin"}
+    assert c["estado"].startswith("✅") and "1:05:00" in c["estado"] and "15,0 km" in c["estado"]
+
+
+def test_una_carrera_de_menos_de_una_hora_se_dice_en_minutos(tmp_path):  # R1
+    s = DataStore(tmp_path / "corta.sqlite3")
+    s.save_activities([_una("diez", "running", 10000, 2290)])
+    (c,) = _estado(s, {"nombre": "10K de ejemplo", "fecha": DIA_CARRERA.isoformat()})
+    assert c["resultado"] == {"tiempo": "38:10", "km": 10.0, "origen": "garmin"}
+
+
+def test_lo_escrito_a_mano_gana_a_garmin(dia_de_carrera):  # R2 · R-127
+    importada, a_mano = _estado(
+        dia_de_carrera,
+        {"nombre": "Carrera de ejemplo", "fecha": DIA_CARRERA.isoformat(), "estado": "✅ 1:04:30"},
+        {"nombre": "Otra de ejemplo", "fecha": DIA_CARRERA.isoformat(), "resultado": "1:04:45"})
+    assert importada["estado"] == "✅ 1:04:30"
+    assert importada["resultado"] == {"tiempo": "1:04:30", "km": None, "origen": "a mano"}
+    assert a_mano["estado"] == "✅ 1:04:45"
+    assert a_mano["resultado"] == {"tiempo": "1:04:45", "km": None, "origen": "a mano"}
+
+
+def test_sin_actividad_ese_dia_sigue_pendiente_u_hoy(store, dia_de_carrera):  # R1: nothing invented
+    pasada, hoy, futura = _estado(
+        store,
+        {"nombre": "Pasada sin nada", "fecha": "2026-10-15"},  # a Thursday without activity in `store`
+        {"nombre": "La de hoy", "fecha": HOY.isoformat(), "estado": ""},
+        {"nombre": "Futura de ejemplo", "fecha": "2026-11-08"})
+    assert (pasada["estado"], pasada["resultado"]) == ("pendiente", None)
+    assert futura["estado"] == "pendiente" and futura["resultado"] is None
+    # today, before the race is synced: «hoy»; with the activity of today, done
+    sin_sincronizar = _estado(dia_de_carrera, {"nombre": "La de hoy", "fecha": HOY.isoformat(), "estado": ""})
+    assert sin_sincronizar[0]["estado"] == "hoy"
+    assert hoy["resultado"]["origen"] == "garmin" and hoy["resultado"]["km"] == 8.0  # `store` has a run today
+
+
+def test_la_bici_de_ir_no_cuenta_en_una_carrera_a_pie(tmp_path):  # R5
+    s = DataStore(tmp_path / "bici.sqlite3")
+    s.save_activities([_una("ir", "cycling", 22000, 3000), _una("la-media", "running", 21100, 5400)])
+    for nombre in ("Media de ejemplo", "Behobia de ejemplo", "12K de ejemplo", "Maratón de ejemplo",
+                   "Trail de ejemplo"):
+        (c,) = _estado(s, {"nombre": nombre, "fecha": DIA_CARRERA.isoformat()})
+        assert (c["resultado"]["tiempo"], c["resultado"]["km"]) == ("1:30:00", 21.1), nombre
+    # a name that does not say the sport: the longest of the day, whatever it is
+    (c,) = _estado(s, {"nombre": "Prueba de ejemplo", "fecha": DIA_CARRERA.isoformat()})
+    assert c["resultado"]["km"] == 22.0
+    # a run race and only a ride that day: not done
+    solo_bici = DataStore(tmp_path / "solo-bici.sqlite3")
+    solo_bici.save_activities([_una("ir", "cycling", 22000, 3000)])
+    (c,) = _estado(solo_bici, {"nombre": "10K de ejemplo", "fecha": DIA_CARRERA.isoformat()})
+    assert c["resultado"] is None and c["estado"] == "pendiente"
+
+
+def test_un_triatlon_es_el_multideporte_o_la_suma_del_dia(tmp_path):  # R5
+    suelto = DataStore(tmp_path / "suelto.sqlite3")
+    suelto.save_activities([_una("nadar", "open_water_swimming", 1900, 2100), _una("bici", "cycling", 90000, 9000),
+                            _una("correr", "running", 21100, 5700)])
+    for nombre in ("Half de ejemplo", "Triatlón de ejemplo", "Ironman de ejemplo"):
+        (c,) = _estado(suelto, {"nombre": nombre, "fecha": DIA_CARRERA.isoformat()})
+        assert c["resultado"] == {"tiempo": "4:40:00", "km": 113.0, "origen": "garmin"}, nombre
+    junto = DataStore(tmp_path / "junto.sqlite3")
+    junto.save_activities([_una("tri", "multi_sport", 113000, 17100), _una("soltar", "running", 2000, 700)])
+    (c,) = _estado(junto, {"nombre": "Half de ejemplo", "fecha": DIA_CARRERA.isoformat()})
+    assert c["resultado"] == {"tiempo": "4:45:00", "km": 113.0, "origen": "garmin"}
+
+
+def _guardado(tmp_path) -> tuple[Planes, int]:
+    planes = Planes(tmp_path / "data.sqlite3")
+    datos = plan_de_prueba()
+    datos.pop("id")
+    datos["carreras"].append({"apartado": 0, "nombre": "Half de ejemplo", "fecha": "2027-06-05", "objetivo": "5:00",
+                              "estado": "pendiente", "principal": False})
+    return planes, planes.crear(datos, datetime(2026, 10, 21, 10))
+
+
+def test_editar_una_carrera_lleva_su_estrategia_con_ella(tmp_path):  # R3
+    planes, ident = _guardado(tmp_path)
+    planes.guardar_estrategia(ident, "Half de ejemplo", ["natación · por sensaciones", "gel: km 30 de bici"])
+    planes.editar_carrera(ident, "Half de ejemplo",
+                          {"nombre": "Half de otro sitio", "fecha": "2027-06-12", "objetivo": "4:55"})
+    carrera = planes.leer(ident)["carreras"][2]
+    assert (carrera["nombre"], carrera["fecha"], carrera["objetivo"]) == ("Half de otro sitio", "2027-06-12", "4:55")
+    assert carrera["estrategia"] == ["natación · por sensaciones", "gel: km 30 de bici"]
+    assert planes.estrategia(ident, "Half de otro sitio") == ["natación · por sensaciones", "gel: km 30 de bici"]
+    assert planes.estrategia(ident, "Half de ejemplo") == []
+    assert [c["nombre"] for c in planes.leer(ident)["carreras"]] == [
+        "10K de ejemplo", "Maratón de ejemplo", "Half de otro sitio"]  # same place, the others untouched
+
+
+def test_editar_una_carrera_no_guarda_un_nombre_repetido_ni_una_fecha_mala(tmp_path):  # R3
+    planes, ident = _guardado(tmp_path)
+    antes = planes.leer(ident)
+    with pytest.raises(ValueError, match="Maratón de ejemplo"):
+        planes.editar_carrera(ident, "Half de ejemplo", {"nombre": "Maratón de ejemplo"})
+    for mala in ("2027-02-30", "5/6/2027", "mañana"):
+        with pytest.raises(ValueError, match="fecha"):
+            planes.editar_carrera(ident, "Half de ejemplo", {"fecha": mala})
+    with pytest.raises(ValueError, match="nombre"):
+        planes.editar_carrera(ident, "Half de ejemplo", {"nombre": "   "})
+    with pytest.raises(LookupError):
+        planes.editar_carrera(ident, "No existe de ejemplo", {"objetivo": "4:50"})
+    assert planes.leer(ident) == antes  # nothing saved
+
+
+def test_el_tiempo_a_mano_se_escribe_y_se_borra(tmp_path, dia_de_carrera):  # R2, R3
+    planes, ident = _guardado(tmp_path)
+    planes.editar_carrera(ident, "10K de ejemplo", {"fecha": DIA_CARRERA.isoformat()})
+    assert planes.leer(ident)["carreras"][0]["estado"] == "✅ 38:10"  # what the .md said is kept
+    planes.editar_carrera(ident, "10K de ejemplo", {"resultado": ""})  # erased: Garmin's
+    (c, *_) = semanas.vista(planes.leer(ident), dia_de_carrera, HOY)["carreras"]
+    assert c["resultado"] == {"tiempo": "1:05:00", "km": 15.0, "origen": "garmin"}
+    planes.editar_carrera(ident, "10K de ejemplo", {"resultado": " 38:05 "})  # the official one, again his
+    (c, *_) = semanas.vista(planes.leer(ident), dia_de_carrera, HOY)["carreras"]
+    assert (c["estado"], c["resultado"]["origen"]) == ("✅ 38:05", "a mano")
+
+
+def test_la_estrategia_va_en_la_vista_del_plan(tmp_path):  # R4
+    planes, ident = _guardado(tmp_path)
+    planes.guardar_estrategia(ident, "Maratón de ejemplo", ["km 0-10 · 4:25/km", "gel: km 10"])
+    carreras = semanas.vista(planes.leer(ident), None, HOY)["carreras"]
+    assert [c["estrategia"] for c in carreras] == [[], ["km 0-10 · 4:25/km", "gel: km 10"], []]
+
+
+def test_la_estrategia_y_el_tiempo_a_mano_van_en_el_md(tmp_path):  # R4
+    from tridata.plan.markdown import escribir
+
+    planes, ident = _guardado(tmp_path)
+    planes.guardar_estrategia(ident, "Maratón de ejemplo", ["km 0-10 · 4:25/km", "gel: km 10"])
+    planes.editar_carrera(ident, "Half de ejemplo", {"resultado": "4:58:00"})
+    md = escribir(planes.leer(ident), None, HOY)
+    assert "| Half de ejemplo | 2027-06-05 | 5:00 | ✅ 4:58:00 | no |" in md
+    tabla = md.index("| Maratón de ejemplo |")
+    estrategia = md.index("Estrategia de Maratón de ejemplo")
+    assert tabla < estrategia < md.index("## Semanas")
+    assert "- km 0-10 · 4:25/km\n- gel: km 10" in md[estrategia:]

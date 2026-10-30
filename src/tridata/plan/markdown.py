@@ -10,6 +10,9 @@ Unit 048 (R-133): under each incident opened in the app (unit 044) go its state 
 X»), each visit («Visita fecha · quién: qué dijo») and its lesson, as sub-items of its line. The incidents of the .md
 have no state and say nothing more, so a plan without incidents of the app gives the same .md as before. They come
 from `Planes.incidencias`, given or read from the same SQLite as `store` (the app keeps the plans there).
+
+Unit 059 (R4): under the table of the races goes the strategy of each one that has it («Estrategia de Behobia:» and
+a line per stretch), and a time written by hand is its «Estado» («✅ 1:12:30»), so imported again it still wins.
 """
 from __future__ import annotations
 
@@ -17,7 +20,7 @@ from datetime import date
 from typing import Any
 
 from ..storage import DataStore
-from . import ABIERTA, Planes, semanas as semanas_del_plan
+from . import ABIERTA, HECHA, Planes, semanas as semanas_del_plan
 
 
 def _celda(valor: Any) -> str:
@@ -83,8 +86,11 @@ def _apartado(plan: dict, i: int, store: DataStore | None, hoy: date, vivas: lis
     bloques: list[str] = []
     if de["carreras"]:
         bloques.append(_tabla(("Carrera", "Fecha", "Objetivo", "Estado", "Principal"),
-                              [(c["nombre"], c["fecha"], c["objetivo"], c["estado"], "sí" if c["principal"] else "no")
-                               for c in de["carreras"]]))
+                              [(c["nombre"], c["fecha"], c["objetivo"],
+                                f"{HECHA} {c['resultado']}" if c.get("resultado") else c["estado"],
+                                "sí" if c["principal"] else "no") for c in de["carreras"]]))
+        bloques += ["\n".join([f"Estrategia de {_celda(c['nombre'])}:", *(f"- {_celda(x)}" for x in c["estrategia"])])
+                    for c in de["carreras"] if c.get("estrategia")]
     if de["semanas"]:
         bloques.append(_tabla(("Semana", "Desde", "Hasta", "Previsto", "Clave", "Hecho", "Km"),
                               [(s["n"], s["desde"], s["hasta"], hmm(s["previsto_s"]), s["clave"], *_hecho(s, store, hoy))

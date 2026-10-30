@@ -71,7 +71,7 @@ class Web:
         if self.fallo_al_revocar is not None:
             raise self.fallo_al_revocar
 
-    def listados(self) -> int:
+    def pasadas_iniciadas(self) -> int:
         """How many passes have started: each one begins asking Google if «TriData» is still there."""
         return len([ll for ll in self.google.llamadas if ll[:2] == ("calendars", "get")])
 
@@ -212,13 +212,13 @@ def test_tras_cambiar_el_plan_el_calendario_se_actualiza_enseguida(tmp_path, acc
     with TestClient(web.app) as cliente:  # the thread of the calendar runs, asleep for 10 minutes after its first pass
         web.cliente = cliente
         _esperar(lambda: web.calendario.estado()["ultima"] is not None)
-        antes = web.listados()
+        antes = web.pasadas_iniciadas()
         web.google.puerta = threading.Event()  # Google is slow from now on
         inicio = time.monotonic()
         r = ACCIONES[accion](web, plan_id)
         assert r.status_code == 200, r.text
         assert time.monotonic() - inicio < 3  # the answer does not wait for Google
-        _esperar(lambda: web.listados() > antes, segundos=5)  # a pass started, not in 10 minutes
+        _esperar(lambda: web.pasadas_iniciadas() > antes, segundos=5)  # a pass started, not in 10 minutes
         web.google.puerta.set()
         web.google.puerta = None
         if accion == "tarjeta":
@@ -231,12 +231,12 @@ def test_lo_que_no_cambia_nada_no_despierta_el_calendario(tmp_path):  # 062 R1: 
     with TestClient(web.app) as cliente:
         web.cliente = cliente
         _esperar(lambda: web.calendario.estado()["ultima"] is not None)
-        antes = web.listados()
+        antes = web.pasadas_iniciadas()
         r = cliente.post("/api/plan/carrera", json={"id": plan_id, "carrera": "No existe inventada", "objetivo": "x"})
         assert r.status_code == 404
         assert cliente.get("/api/plan").status_code == 200
         time.sleep(0.5)
-        assert web.listados() == antes
+        assert web.pasadas_iniciadas() == antes
 
 
 def test_un_error_no_previsto_se_dice_en_ajustes_y_la_siguiente_vuelta_se_hace(tmp_path, monkeypatch,
@@ -321,3 +321,56 @@ def test_desconectar_sin_conectar_no_habla_con_google(tmp_path):  # 062 R4
     r = web.cliente.post("/api/calendario/desconectar")
     assert r.status_code == 200 and r.json()["texto"] == SIN_CONECTAR
     assert web.revocados == [] and web.google.llamadas == []
+
+
+# -- unit 062, round 2: the routes of the 063 (plans by hand in Fitness › Plan) wake the calendar too -----------------
+
+DIEZ = {"apartado": 0, "nombre": "10K inventado", "fecha": "2026-11-15", "objetivo": "40:00", "estado": "pendiente",
+        "principal": False}
+RUTAS_063 = {
+    "nuevo": lambda plan_id, otro: ("/api/plan/nuevo", {"nombre": "Plan nuevo inventado", "carrera": {
+        "nombre": "Provisional inventada", "fecha": "2027-09-12", "objetivo": "acabar"}}),
+    "renombrar": lambda plan_id, otro: (f"/api/plan/{plan_id}/renombrar", {"nombre": "Otro nombre inventado"}),
+    "borrar": lambda plan_id, otro: (f"/api/plan/{otro}/borrar", {}),
+    "carrera-anadir": lambda plan_id, otro: ("/api/plan/carrera/anadir", {
+        "id": plan_id, "nombre": "Sprint inventado", "fecha": "2027-04-18", "objetivo": ""}),
+    "carrera-quitar": lambda plan_id, otro: ("/api/plan/carrera/quitar", {"id": plan_id, "carrera": "10K inventado"}),
+    "carrera-mover": lambda plan_id, otro: ("/api/plan/carrera/mover", {
+        "id": plan_id, "carrera": "10K inventado", "destino": otro}),
+    "carrera-principal": lambda plan_id, otro: ("/api/plan/carrera/principal", {
+        "id": plan_id, "carrera": "10K inventado"}),
+}
+
+
+def _con_dos_planes(tmp_path) -> tuple[Web, int, int]:
+    web = Web(tmp_path, conectado=True)
+    otro = web.planes.crear(plan_inventado([], nombre="Otro plan inventado"), AHORA)
+    base = plan_inventado([SERIES])
+    plan_id = web.planes.crear({**base, "carreras": [*base["carreras"], DIEZ]}, AHORA)
+    return web, plan_id, otro
+
+
+@pytest.mark.parametrize("ruta", list(RUTAS_063))
+def test_lo_que_se_guarda_a_mano_en_fitness_plan_despierta_el_calendario(tmp_path, ruta):  # 062 R1 · 063
+    web, plan_id, otro = _con_dos_planes(tmp_path)
+    with TestClient(web.app) as cliente:
+        web.cliente = cliente
+        _esperar(lambda: web.calendario.estado()["ultima"] is not None)
+        antes = web.pasadas_iniciadas()
+        camino, cuerpo = RUTAS_063[ruta](plan_id, otro)
+        r = cliente.post(camino, json=cuerpo)
+        assert r.status_code == 200, r.text
+        _esperar(lambda: web.pasadas_iniciadas() > antes, segundos=5)  # a pass started, not in 10 minutes
+
+
+def test_la_tarjeta_del_reloj_no_cambia_el_plan_ni_despierta_el_calendario(tmp_path):  # 062 R1
+    web, plan_id, _ = _con_dos_planes(tmp_path)
+    (sesion,) = web.planes.sesiones_reloj(plan_id)
+    with TestClient(web.app) as cliente:
+        web.cliente = cliente
+        _esperar(lambda: web.calendario.estado()["ultima"] is not None)
+        antes = web.pasadas_iniciadas()
+        r = cliente.post(f"/api/plan/sesion/{sesion['id']}/garmin")
+        assert r.status_code == 200, r.text  # only a card: nothing changes until it is confirmed
+        time.sleep(0.5)
+        assert web.pasadas_iniciadas() == antes

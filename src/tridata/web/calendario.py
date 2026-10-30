@@ -18,13 +18,14 @@ said in Ajustes and tried again on the next one, and nothing of the plan waits f
 nothing talks to Google (R6). Nothing here logs or answers the token or the path of the client's JSON (R5).
 
 Unit 062: `pronto()` wakes that thread at once (after confirming a card, saving in Fitness › Plan or «Actualizar
-Garmin»: `Despertar`, a middleware of `crear_app`), so the calendar changes in seconds; several in a row give one
-pass more, not one each. An unexpected failure of a pass is said with a fixed text and only its type is logged: the
-thread never dies.
+Garmin»: `Despertar`, a middleware of `crear_app`, with `despierta`), so the calendar changes in seconds; several in
+a row give one pass more, not one each. An unexpected failure of a pass is said with a fixed text and only its type
+is logged: the thread never dies.
 """
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections.abc import Callable
 from datetime import date, datetime
@@ -47,9 +48,21 @@ CADA_SEGUNDOS = 600
 CONECTANDO = "Ya estoy conectando Google Calendar: termina en el navegador del PC."
 INESPERADO = "No se pudo actualizar el calendario: error inesperado. Se reintentará en la próxima vuelta."
 NO_REVOCADO = "Desconectado en este PC, pero no se pudo retirar el permiso en Google ({}): puedes quitarlo en tu cuenta."
-# unit 062 R1: what changes the plan or the activities, so the calendar is updated at once after a good answer
-DESPIERTAN = frozenset({"/api/asistente/confirmar", "/api/plan/importar", "/api/plan/confirmar", "/api/plan/carrera",
-                        "/api/garmin/actualizar"})
+# unit 062 R1: what changes the plan or the activities, so the calendar is updated at once after a good answer: a
+# card confirmed, «Actualizar Garmin» and every POST under /api/plan/ (confirming an import, the races, the plans by
+# hand of the 063…) but those that change nothing that goes to the calendar: `importar` only proposes, the watch's
+# card only is a card, and an incidence never goes to Google (G-59)
+DESPIERTAN = frozenset({"/api/asistente/confirmar", "/api/garmin/actualizar"})
+NO_DESPIERTAN = re.compile(r"/api/plan/(importar|sesion/\d+/garmin|incidencia/\d+/cerrar)")
+
+
+def despierta(metodo: str, ruta: str) -> bool:
+    """Whether a 2xx of this request changes what goes to Google Calendar (062 R1)."""
+    if metodo != "POST":
+        return False
+    if ruta in DESPIERTAN:
+        return True
+    return ruta.startswith("/api/plan/") and not NO_DESPIERTAN.fullmatch(ruta)
 
 
 class Sincronizacion:
@@ -105,6 +118,8 @@ class Sincronizacion:
         """At start, then every `cada` seconds or as soon as `pronto()`, until `parar` (set it, then `pronto()`)."""
         while not parar.is_set():
             self._despertar.clear()  # what asks for a pass from here on gets one more after this one
+            if parar.is_set():  # `parar.set(); pronto()` may have fallen just before the `clear()`
+                break
             try:
                 self.vuelta()
             except Exception as exc:  # noqa: BLE001 - unit 062 R3: the thread never dies (e.g. the SQLite busy)
@@ -113,14 +128,14 @@ class Sincronizacion:
 
 
 class Despertar:
-    """Unit 062 R1: after a 2xx of a POST in `DESPIERTAN`, `pronto()`. The answer has gone already: it never waits
+    """Unit 062 R1: after a 2xx of a request that `despierta`, `pronto()`. The answer has gone already: it never waits
     for Google."""
 
     def __init__(self, app: ASGIApp, sinc: Sincronizacion) -> None:
         self.app, self.sinc = app, sinc
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] not in DESPIERTAN:
+        if scope["type"] != "http" or not despierta(scope["method"], scope["path"]):
             await self.app(scope, receive, send)
             return
         estado = 0
@@ -170,4 +185,4 @@ def rutas(sinc: Sincronizacion) -> list[Route]:
     ]
 
 
-__all__ = ["CADA_SEGUNDOS", "DESPIERTAN", "Despertar", "Sincronizacion", "rutas"]
+__all__ = ["CADA_SEGUNDOS", "DESPIERTAN", "Despertar", "Sincronizacion", "despierta", "rutas"]

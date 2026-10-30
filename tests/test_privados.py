@@ -5,12 +5,16 @@ them. Every value is invented; the repo is a throwaway git repository.
 from __future__ import annotations
 
 import subprocess  # noqa: S404 - the test builds a throwaway git repo
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
 
 from tridata import privados
+from tridata.models import Activity
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes
+from tridata.plan import Planes
+from tridata.storage import DataStore
 
 VALOR = 207  # an invented HR max, the value «leaked»
 PULSO = {"fc_max": VALOR, "fc_reposo": 43, "zonas_fc": [[43, 118], [119, 133], [134, 149], [150, 166], [167, VALOR]],
@@ -47,7 +51,7 @@ def test_sin_fugas_cuenta_cero(repo, db, tmp_path):  # R9 · C-151
     registros.mkdir()
     (registros / "sync.log").write_text("sync: todo bien a las 08:01\n")
     r = privados.comprobar(db, repo, [registros])
-    assert r == {"valores": 10, "repo": 0, "registros": 0, "aceptadas": 0}
+    assert r == {"valores": 10, "actividades": 0, "carreras": 0, "repo": 0, "registros": 0, "aceptadas": 0}
 
 
 def test_un_valor_en_un_fichero_del_repo_cuenta_uno(repo, db, tmp_path):  # R9 · C-151
@@ -241,3 +245,86 @@ def test_la_lista_de_aceptados_se_lee_de_su_fichero_local(repo, db, tmp_path, ca
     assert cli.main(["comprobar-privados", "--repo", str(repo)]) == 0
     for valor in ("207", "119", "133", "134", "149"):
         assert valor not in capsys.readouterr().out
+
+
+# -- unit 058: the activities and the races of the plan (the leak of the 057 tests went unseen) ----------------------
+
+DIA = "2026-05-17"  # an invented day: a run of 36'03" and 10,023 km at 09:12, and 25' of strength at 19:05
+CARRERA = "Media Inventada de las Dunas"
+
+
+@pytest.fixture
+def db_con_actividades(tmp_path) -> Path:
+    d = tmp_path / "data.sqlite3"
+    DataStore(d).save_activities([
+        Activity(activity_id="a1", activity_date=date.fromisoformat(DIA), activity_type="running", name="Carrera",
+                 duration_seconds=2163.0, distance_meters=10023.0, start_time_local=f"{DIA} 09:12:00"),
+        Activity(activity_id="a2", activity_date=date.fromisoformat(DIA), activity_type="strength_training",
+                 name="Fuerza", duration_seconds=1500.0, start_time_local=f"{DIA} 19:05:00")])
+    plan = {"nombre": "Plan inventado", "apartados": [{"titulo": "Semanas", "parte": "previsto"}],
+            "carreras": [{"apartado": 0, "nombre": f"{CARRERA} (asfalto)", "fecha": "2026-11-22",
+                          "objetivo": "1:29:59", "estado": "pendiente", "principal": True}],
+            "semanas": [], "sesiones": [], "nutricion": [], "incidencias": [], "notas": []}
+    Planes(d).crear(plan, datetime(2026, 5, 1, 9, 0))
+    return d
+
+
+def _staged(repo: Path, texto: str) -> None:
+    (repo / "fixture.py").write_text(texto + "\n")
+    _git(repo, "add", "fixture.py")
+
+
+@pytest.mark.parametrize("linea", [
+    f'CROSS = hecho("h-cross", "{DIA}", "running", 36 * 60, 10000.0, hora="09:12:00")',  # the 057 leak
+    f"assert evento == '{DIA} · 🏃 36\' · 10,0 km'",
+    f"{DIA} 2163 10023",
+    f'{{"fecha": "{DIA}", "minutos": "36 min", "km": "10.0"}}',
+])
+def test_una_actividad_real_con_su_fecha_duracion_y_distancia_cuenta(repo, db_con_actividades, linea):  # 058 R1
+    _staged(repo, linea)
+    r = privados.comprobar(db_con_actividades, repo, [])
+    assert (r["actividades"], r["repo"]) == (2, 1)
+
+
+@pytest.mark.parametrize("linea", [
+    f'hecho("x", "{DIA}", "running", 40 * 60, 9000.0)',  # the same day, other numbers: an invented fixture
+    'hecho("x", "2026-05-18", "running", 36 * 60, 10000.0)',  # its numbers, another day
+    f'hecho("x", "{DIA}", "running", 36 * 60, None)',  # no distance and no hour
+    f'hecho("x", "{DIA}", "strength_training", 25 * 60, None, hora=None)',  # strength without its hour
+])
+def test_una_fecha_real_con_otros_numeros_no_cuenta(repo, db_con_actividades, linea):  # 058 R4
+    _staged(repo, linea)
+    assert privados.comprobar(db_con_actividades, repo, [])["repo"] == 0
+
+
+def test_una_actividad_sin_distancia_cuenta_con_su_hora(repo, db_con_actividades):  # 058 R1
+    _staged(repo, f'hecho("x", "{DIA}", "strength_training", 25 * 60, None, hora="19:05:00")')
+    assert privados.comprobar(db_con_actividades, repo, [])["repo"] == 1
+
+
+@pytest.mark.parametrize("linea, veces", [
+    (f"la {CARRERA.lower()} es el 2026-11-22", 1),
+    (f"«{CARRERA.upper()}» · objetivo 1:29:59", 1),
+    ("Media Inventada de las Dúnas (asfalto), 2026-11-22", 1),  # accents and the final parenthesis do not matter
+    (f"{CARRERA}: una carrera bonita", 0),  # the name alone is public
+    ("objetivo 1:29:59 el 2026-11-22", 0),  # without the name
+])
+def test_una_carrera_del_plan_cuenta_con_su_fecha_u_objetivo(repo, db_con_actividades, linea, veces):  # 058 R2
+    _staged(repo, linea)
+    r = privados.comprobar(db_con_actividades, repo, [])
+    assert (r["carreras"], r["repo"]) == (1, veces)
+
+
+def test_el_informe_dice_cuantas_actividades_y_carreras_pero_nunca_cuales(repo, db_con_actividades, capsys,
+                                                                         monkeypatch):  # 058 R3
+    from tridata import cli
+    monkeypatch.setattr(cli, "DEFAULT_DB_PATH", db_con_actividades)
+    monkeypatch.setattr(cli, "PRIVADOS_ACEPTADOS", repo / "no-hay")
+    _staged(repo, f'CROSS = hecho("h-cross", "{DIA}", "running", 36 * 60, 10000.0)')
+    _git(repo, "commit", "-q", "-m", "fuga")
+    assert cli.main(["comprobar-privados", "--repo", str(repo)]) == 1
+    salida = capsys.readouterr().out
+    assert "2 actividades" in salida and "1 carrera" in salida and "2 apariciones" in salida
+    for dato in (DIA, "2163", "10023", "Dunas", "1:29:59", "2026-11-22"):
+        assert dato not in salida
+

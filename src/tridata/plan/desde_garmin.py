@@ -122,7 +122,11 @@ def cambios(sesiones: Sequence[Mapping[str, Any]], programados: Sequence[Program
     emparejadas: set[int] = set()
     sueltos: list[Programado] = []
 
+    vistos: set[int] = set()
     for p in programados:  # 1. by its ids
+        if p.programado in vistos:  # bug 064: the same scheduling twice is one
+            continue
+        vistos.add(p.programado)
         s = next((s for s in sesiones if int(s["id"]) not in emparejadas
                   and (s.get("garmin_workout_id") == p.entreno or s.get("garmin_schedule_id") == p.programado)), None)
         if s is None:

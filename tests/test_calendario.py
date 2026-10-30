@@ -443,27 +443,26 @@ def h(tmp_path) -> BaseHechos:
 
 def test_el_hecho_es_un_evento_a_su_hora_con_deporte_duracion_y_distancia():  # R1, R2 (criterio portante)
     assert DESDE_HECHOS == date(2026, 8, 1)
-    assert cuerpo_del_hecho(CARRERA.to_dict(), ZONA) == {
-        "summary": "✅ 🏃 Carrera · 52' · 10,2 km", "description": "Hecho según Garmin",
+    assert cuerpo_del_hecho([CARRERA.to_dict()], ZONA) == {  # 057: a group of one, only icon, minutes, distance
+        "summary": "🏃 52' · 10,2 km", "description": "Hecho según Garmin",
         "start": {"dateTime": "2026-10-27T18:30:00+01:00", "timeZone": ZONA},
         "end": {"dateTime": "2026-10-27T19:22:00+01:00", "timeZone": ZONA},
-        "extendedProperties": {"private": {CLAVE_HECHO: "h-carrera"}}}
+        "extendedProperties": {"private": {CLAVE_HECHO: "2026-10-27/carrera"}}}
 
 
 @pytest.mark.parametrize("actividad, titulo", [
-    (NATACION, "✅ 🏊 Natación · 30' · 1500 m"),  # the swim in metres
-    (FUERZA, "✅ 🏋️ Fuerza · 45'"),  # without distance
-    (hecho("h-bici", "2026-10-25", "road_biking", 5400, 45000.0), "✅ 🚴 Bici · 90' · 45,0 km"),
-    (hecho("h-cinta", "2026-10-25", "treadmill_running", 1500, 5000.0), "✅ 🏃 Carrera · 25' · 5,0 km"),
-    (hecho("h-otro", "2026-10-25", "hiking", 4500, 9300.0), "✅ 🏃 Entreno · 75' · 9,3 km"),
+    (NATACION, "🏊 30' · 1500 m"),  # the swim in metres
+    (FUERZA, "🏋️ 45'"),  # without distance
+    (hecho("h-bici", "2026-10-25", "road_biking", 5400, 45000.0), "🚴 90' · 45,0 km"),
+    (hecho("h-cinta", "2026-10-25", "treadmill_running", 1500, 5000.0), "🏃 25' · 5,0 km"),
 ])
-def test_el_titulo_dice_el_deporte_los_minutos_y_la_distancia(actividad, titulo):  # R1
-    assert cuerpo_del_hecho(actividad.to_dict(), ZONA)["summary"] == titulo
+def test_el_titulo_dice_el_icono_los_minutos_y_la_distancia(actividad, titulo):  # R1 · 057: no ✅, no sport word
+    assert cuerpo_del_hecho([actividad.to_dict()], ZONA)["summary"] == titulo
 
 
 def test_en_verano_la_hora_lleva_su_desfase():  # R1: its real hour, the offset of that day
     agosto = hecho("h-agosto", "2026-08-04", "running", 2400, 8000.0, hora="07:05:00")
-    cuerpo = cuerpo_del_hecho(agosto.to_dict(), ZONA)
+    cuerpo = cuerpo_del_hecho([agosto.to_dict()], ZONA)
     assert cuerpo["start"] == {"dateTime": "2026-08-04T07:05:00+02:00", "timeZone": ZONA}
     assert cuerpo["end"] == {"dateTime": "2026-08-04T07:45:00+02:00", "timeZone": ZONA}
 
@@ -488,25 +487,25 @@ def test_los_hechos_desde_agosto_llegan_una_vez_y_siguen_a_garmin(h):  # R3
     h.store.save_activities([CARRERA, NATACION, FUERZA, JULIO])
     h.conectar()
     assert h.pasada() == {"creados": 3, "cambiados": 0, "borrados": 0}
-    assert set(h.hechos()) == {"h-carrera", "h-natacion", "h-fuerza"}  # nothing of July
+    assert set(h.hechos()) == {"2026-10-27/carrera", "2026-10-27/natacion", "2026-10-27/fuerza"}  # nothing of July
 
     escrito = len(h.google.escrituras())
     assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}  # a second pass writes nothing
     assert len(h.google.escrituras()) == escrito
 
     # it changes in Garmin (longer and further): its event changes, the same one
-    antes = h.hechos()["h-carrera"]["id"]
+    antes = h.hechos()["2026-10-27/carrera"]["id"]
     h.store.save_activities([hecho("h-carrera", "2026-10-27", "running", 3600, 11000.0)])
     assert h.pasada() == {"creados": 0, "cambiados": 1, "borrados": 0}
-    carrera = h.hechos()["h-carrera"]
-    assert carrera["id"] == antes and carrera["summary"] == "✅ 🏃 Carrera · 60' · 11,0 km"
+    carrera = h.hechos()["2026-10-27/carrera"]
+    assert carrera["id"] == antes and carrera["summary"] == "🏃 60' · 11,0 km"
     assert carrera["end"]["dateTime"] == "2026-10-27T19:30:00+01:00"
 
     # it leaves the base: its event is deleted
     with h.store._connect() as conn:
         conn.execute("DELETE FROM activities WHERE activity_id = 'h-fuerza'")
     assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 1}
-    assert set(h.hechos()) == {"h-carrera", "h-natacion"}
+    assert set(h.hechos()) == {"2026-10-27/carrera", "2026-10-27/natacion"}
 
 
 # -- R4: an activity saved without its hour ---------------------------------------------------------------------------
@@ -565,7 +564,7 @@ def test_el_mismo_dia_y_deporte_solo_queda_el_hecho(h):  # R6, changed by the 05
 
     h.store.save_activities([TEMPO])  # the run of the 28th arrives: the session leaves, the training comes
     assert h.pasada() == {"creados": 1, "cambiados": 0, "borrados": 1}
-    assert [e["summary"] for e in h.google.de(h.cal())] == ["✅ 🏃 Carrera · 60' · 12,0 km"]
+    assert [e["summary"] for e in h.google.de(h.cal())] == ["🏃 60' · 12,0 km"]
     assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}
 
     # the training leaves the base: the session is back
@@ -583,7 +582,7 @@ def test_la_sesion_de_un_deporte_que_ese_dia_no_se_hizo_se_queda(h):  # 056 R3
     h.conectar()
     h.pasada()
     assert sorted(e["summary"] for e in h.google.de(h.cal())) == [
-        "✅ 🏃 Carrera · 50' · 10,0 km", "✅ 🏊 Natación · 30' · 1500 m", "🏃 Series 4×12' a 4:00"]
+        "🏃 50' · 10,0 km", "🏃 Series 4×12' a 4:00", "🏊 30' · 1500 m"]
 
 
 # -- R8: Google fails half way through the first pass ------------------------------------------------------------------
@@ -604,8 +603,10 @@ class GoogleQueFalla(GoogleDoble):
 
 def test_si_google_falla_a_mitad_lo_creado_se_queda_y_la_siguiente_termina_sin_duplicar(tmp_path):  # R8
     h = BaseHechos(tmp_path, GoogleQueFalla(en=60))
-    actividades = [hecho(f"h-{n}", (DESDE_HECHOS + timedelta(days=n % 88)).isoformat(), "running", 2400, 8000.0,
-                         hora=f"{6 + n // 88:02d}:00:00") for n in range(130)]  # up to the 27th: no session day (056 R3)
+    # 130 groups (057: one event per day and sport): a run each day up to the 27th, a swim each of the first 42 days;
+    # no session day (056 R3)
+    actividades = [hecho(f"h-{n}", (DESDE_HECHOS + timedelta(days=n % 88)).isoformat(),
+                         "running" if n < 88 else "lap_swimming", 2400, 8000.0, hora="07:00:00") for n in range(130)]
     h.store.save_activities(actividades)
     h.planes.crear(plan_inventado([SERIES, RODAJE]), AHORA)
     h.conectar()
@@ -618,7 +619,7 @@ def test_si_google_falla_a_mitad_lo_creado_se_queda_y_la_siguiente_termina_sin_d
 
     estado = sinc.vuelta()
     assert estado["error"] is None
-    assert len(h.hechos()) == 130  # every activity once
+    assert len(h.hechos()) == 130  # every group once
     assert len(h.google.de(h.cal())) == 132
     escrito = len(h.google.escrituras())
     assert sinc.vuelta()["error"] is None and len(h.google.escrituras()) == escrito
@@ -650,4 +651,59 @@ def test_la_bici_de_50_minutos_y_lo_corto_de_otros_deportes_siguen(h):  # 056 R2
                              hecho("h-fuerza-corta", "2026-10-28", "strength_training", 15 * 60, None, hora="20:00:00")])
     h.conectar()
     assert h.pasada()["creados"] == 4
-    assert set(h.hechos()) == {"h-bici-50", "h-carrera-corta", "h-natacion-corta", "h-fuerza-corta"}
+    assert set(h.hechos()) == {"2026-10-27/bici", "2026-10-27/carrera", "2026-10-28/natacion", "2026-10-28/fuerza"}
+
+
+# -- unit 057: one event per day and sport, only icon, time and distance, and the race of the plan -------------------
+
+CROSS = hecho("h-cross", "2026-10-11", "running", 36 * 60, 10000.0, hora="09:59:00")
+CALENTAR = hecho("h-calentar", "2026-10-11", "running", 25 * 60, 4000.0, hora="09:29:00")
+SOLTAR = hecho("h-soltar", "2026-10-11", "running", 19 * 60, 3000.0, hora="10:58:00")
+
+
+def test_lo_de_un_dia_y_deporte_es_un_evento_con_la_suma_y_la_carrera_del_plan(h):  # 057 R1, R2 (portante)
+    carreras = [{"apartado": 0, "nombre": "10K Inventado de las Tres Calas (asfalto)", "fecha": "2026-10-11",
+                 "objetivo": "PR", "estado": "pendiente", "principal": False}]
+    h.planes.crear(plan_inventado([SERIES], carreras=carreras), AHORA)
+    h.store.save_activities([CROSS, CALENTAR, SOLTAR, hecho("h-nado-11", "2026-10-11", "lap_swimming", 1200, 800.0,
+                                                            hora="18:00:00")])
+    h.conectar()
+    h.pasada()
+    hechos = h.hechos()
+    assert set(hechos) == {"2026-10-11/carrera", "2026-10-11/natacion"}
+    carrera = hechos["2026-10-11/carrera"]
+    assert carrera["summary"] == "🏃 80' · 17,0 km (10K Inventado de las Tres Calas)"
+    assert carrera["start"]["dateTime"] == "2026-10-11T09:29:00+02:00"  # the first one starts
+    assert carrera["end"]["dateTime"] == "2026-10-11T11:17:00+02:00"  # the last one ends
+    assert hechos["2026-10-11/natacion"]["summary"] == "🏊 20' · 800 m (10K Inventado de las Tres Calas)"
+    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}
+
+
+def test_si_a_una_le_falta_la_hora_el_grupo_va_todo_el_dia(h):  # 057 R1
+    h.store.save_activities([CROSS, hecho("h-sin-hora", "2026-10-11", "running", 600, 2000.0, hora=None)])
+    h.conectar()
+    h.pasada()
+    (evento,) = h.hechos().values()
+    assert evento["start"] == {"date": "2026-10-11"} and evento["summary"] == "🏃 46' · 12,0 km"
+
+
+def test_los_eventos_de_una_actividad_se_sustituyen_por_el_del_grupo(h):  # 057 R1: the events of the 054 go
+    h.store.save_activities([CROSS, CALENTAR])
+    h.conectar()
+    for viejo in (CROSS, CALENTAR):  # as the 054 sent them: one per activity, keyed by its id
+        h.calendario.crear({"summary": "✅ 🏃 Carrera · 36' · 10,0 km", "start": {"date": "2026-10-11"},
+                            "end": {"date": "2026-10-12"},
+                            "extendedProperties": {"private": {CLAVE_HECHO: viejo.activity_id}}})
+    assert h.pasada() == {"creados": 1, "cambiados": 0, "borrados": 2}
+    assert [e["summary"] for e in h.google.de(h.cal())] == ["🏃 61' · 14,0 km"]
+    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}
+
+
+def test_un_paseo_no_va_al_calendario_ni_esconde_la_carrera_prevista(h):  # 057 R3
+    h.planes.crear(plan_inventado([SERIES]), AHORA)  # a run, the 28th
+    h.store.save_activities([hecho("h-paseo", "2026-10-28", "hiking", 4500, 9300.0),
+                             hecho("h-andar", "2026-10-28", "walking", 1800, 2500.0)])
+    h.conectar()
+    h.pasada()
+    assert h.hechos() == {}
+    assert [e["summary"] for e in h.google.de(h.cal())] == ["🏃 Series 4×12' a 4:00"]

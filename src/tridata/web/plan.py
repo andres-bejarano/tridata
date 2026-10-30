@@ -27,7 +27,9 @@
                                       like GET /api/plan/incidencias; 400 without a lesson, 404 without it, 409 closed
 
 Unit 042: each day of GET /api/plan/semana/N also brings `reloj`, one per session of `sesiones` and in its order:
-{id, estado: "al_dia" | "cambiada" | None, enviada}, whether it is in the watch as it is now.
+{id, estado: "al_dia" | "cambiada" | None, enviada}, whether it is in the watch as it is now. Unit 061: and its
+`aviso` from the last pass with Garmin («Ya no está en tu Garmin», or that Garmin has another one that day and which
+one it replaces is not known), or None.
 Unit 059: each race of GET /api/plan brings its `resultado` ({tiempo, km, origen: "garmin" | "a mano"} or None)
 and its `estrategia` (unit 045), both from `plan.semanas.vista`.
 Unit 044: each day also brings its `notas` (how it went, R-150), and GET /api/plan its `abiertas`, how many incidents
@@ -121,7 +123,8 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
             return None
         reloj = planes.sesiones_reloj(plan["id"])  # the same order as plan["sesiones"]
         for dia in vista["dias"]:
-            dia["reloj"] = [{k: s[k] for k in ("id", "estado", "enviada")} for s in reloj if s["fecha"] == dia["fecha"]]
+            dia["reloj"] = [{k: s[k] for k in ("id", "estado", "enviada", "aviso")} for s in reloj
+                           if s["fecha"] == dia["fecha"]]
         return vista
 
     async def ver_semana(request: Request) -> Response:

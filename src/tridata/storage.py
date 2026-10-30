@@ -143,6 +143,11 @@ class DataStore:
             conn.executescript(_SCHEMA)
             conn.executescript(_MIGRATE_LAP_SYNC_STATE)
 
+    @property
+    def db_path(self) -> Path:
+        """The SQLite file (unit 061: the sync opens the plans, which live in the same one)."""
+        return self._db_path
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self._db_path)

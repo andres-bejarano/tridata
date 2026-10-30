@@ -2,6 +2,11 @@
 
 This is the piece a daily cron job / scheduled task calls: it figures
 out what's missing since the last run and only fetches that.
+
+Unit 061 («Garmin manda»): at the end of each sync (the routine of 08:00 and «Actualizar Garmin», which run this same
+`sync`), the workouts scheduled in Garmin from 3 days ago to the end of the plan in course reach the plan
+(`plan_desde_garmin`). In its own `try` (R6): a 429 or a failure there leaves the plan as it was, the rest of the sync
+ends the same and the next one tries again. Only counts are logged, never a text of the plan.
 """
 from __future__ import annotations
 
@@ -15,6 +20,8 @@ from typing import Any
 
 from .calendario import DESDE_HECHOS
 from .garmin_client import GarminClient
+from .plan import Planes
+from .plan.desde_garmin import cambios, programado
 from .storage import DataStore
 
 logger = logging.getLogger(__name__)
@@ -36,6 +43,7 @@ ALL_SPORT_TYPES = RUNNING_TYPES + CYCLING_TYPES + SWIMMING_TYPES + GYM_TYPES
 # -- unit 018: the last good sync, the warning of today and what «Actualizar Garmin» brings (R-90, R-91) --
 HORAS_AVISO = 26  # one day plus the margin of the routine: older than this, today's screen warns
 REINTENTO_HASTA = 14  # the routine tries again every hour until 14:00 (the timer says 08..14)
+DIAS_ATRAS_PLAN = 3  # unit 061: the scheduled workouts of Garmin are read from 3 days ago to the end of the plan
 MAX_DIAS_ATRAS = 45  # «Actualizar Garmin» brings at most these days, the same window as `tridata sync`
 MOTIVOS = {"sesion": "Garmin no dejó iniciar sesión", "limite": "Garmin estaba limitando las peticiones",
            "conexion": "se cortó la conexión"}
@@ -251,7 +259,31 @@ class SyncService:
                 if prediction:
                     self._store.save_race_predictions(prediction)
 
+        if callable(getattr(self._client, "entrenos_programados", None)):
+            try:
+                self.plan_desde_garmin(until)
+            except Exception as exc:  # noqa: BLE001 - R6: a 429 or a failure never stops the sync; tried next time
+                logger.warning("The plan was not updated from Garmin (%s); the next sync tries again",
+                               type(exc).__name__)
+
         logger.info("Sync complete: %s to %s", since, until)
+
+    def plan_desde_garmin(self, hoy: date) -> dict[str, int] | None:
+        """Unit 061 (R1-R5): what is scheduled in Garmin from `DIAS_ATRAS_PLAN` days before `hoy` to the end of the
+        plan in course wins over its sessions. Everything is read from Garmin before anything is written, so a
+        failure halfway leaves the plan as it was (R6). `{cambiadas, anadidas, avisos}`, or None without a plan."""
+        planes = Planes(self._store.db_path)
+        plan_id = planes.en_curso(hoy)
+        fin = planes.fin(plan_id) if plan_id is not None else None
+        desde = hoy - timedelta(days=DIAS_ATRAS_PLAN)
+        if plan_id is None or fin is None or fin < desde:
+            return None
+        programados = [programado(item, self._client.entreno(item["entreno"]))
+                       for item in self._client.entrenos_programados(desde, fin)]
+        resumen = planes.aplicar_garmin(plan_id, cambios(planes.sesiones_garmin(plan_id, desde, fin), programados))
+        logger.info("Plan from Garmin: %d workouts read, %d sessions changed, %d added, %d warnings",
+                    len(programados), resumen["cambiadas"], resumen["anadidas"], resumen["avisos"])
+        return resumen
 
     def rellenar_horas(self, hasta: date) -> int:
         """Unit 054 (R4): the activities since `DESDE_HECHOS` saved without their hour (before the 054) get it, with

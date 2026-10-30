@@ -112,3 +112,25 @@ def test_si_garmin_falla_se_baja_el_fichero(servidor, abrir, capturar, garmin): 
     assert descarga.value.suggested_filename.endswith(".fit")
     _sin_scroll(p, "fallo")
     capturar(p, "reloj-fallo-claro", completa=True)
+
+
+@TEMAS
+def test_la_sesion_que_ya_no_esta_en_garmin_lo_dice(servidor, abrir, capturar, garmin, oscuro):  # 061 · R5
+    from datetime import date
+
+    from tridata.plan.desde_garmin import cambios
+
+    planes = Planes(servidor.db)
+    plan_id = planes.en_curso(date(2026, 10, 21))
+    (sesion,) = planes.sesiones_garmin(plan_id, date(2026, 10, 19), date(2026, 12, 6))
+    planes.marcar_garmin(sesion["id"], 801, 901, datetime(2026, 10, 20, 9, 0), "Series 4×12': enviada")
+    (sesion,) = planes.sesiones_garmin(plan_id, date(2026, 10, 19), date(2026, 12, 6))
+    planes.aplicar_garmin(plan_id, cambios([sesion], []))  # removed in Garmin Connect: the plan keeps it
+
+    sufijo = "-oscuro" if oscuro else "-claro"
+    p = abrir(servidor, "/#fitness/plan", oscuro=oscuro, esperar=False)
+    expect(p.locator("#plan-nombre")).to_have_text("Road to Ejemplo 26")
+    dia = _miercoles(p)
+    expect(dia.locator(".garmin-aviso")).to_have_text("⚠️ Ya no está en tu Garmin")
+    _sin_scroll(p, "aviso")
+    capturar(p, f"reloj-ya-no-esta{sufijo}", completa=True)

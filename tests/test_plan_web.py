@@ -248,3 +248,32 @@ def test_la_estrategia_sale_en_el_md_bajo_su_carrera(web):  # R4
     md = web.cliente.get(f"/api/plan/{plan_id}.md").text
     assert "Estrategia de Maratón de ejemplo" in md and "- km 0-10 · 4:25/km\n- gel: km 10" in md
     assert md.index("| Maratón de ejemplo |") < md.index("Estrategia de Maratón de ejemplo") < md.index("## Semanas")
+
+
+# -- unit 061: the warnings of «Garmin manda» in Fitness › Plan (R2, R5) ------------------------------------------------
+
+def test_la_semana_lleva_el_aviso_de_cada_sesion(web):  # 061 · R2, R5
+    from tridata.plan.desde_garmin import YA_NO_ESTA, cambios
+
+    planes = Planes(web.db)
+    plan = {"nombre": "Road to Avisos 26", "apartados": [{"titulo": "Semanas", "parte": "previsto"}],
+            "carreras": [{"apartado": 0, "nombre": "Media inventada", "fecha": "2026-11-22", "objetivo": "1:30",
+                          "estado": "pendiente", "principal": True}],
+            "semanas": [{"apartado": 0, "n": 1, "desde": "2026-10-19", "hasta": "2026-10-25", "previsto_s": 14400,
+                         "clave": "rodajes", "hecho_plan_s": None, "hecho_plan_km": None}],
+            "sesiones": [{"apartado": 0, "fecha": "2026-10-22", "titulo": "Rodaje", "bloques": ["40' a 5:40"],
+                          "clave": False},
+                         {"apartado": 0, "fecha": "2026-10-24", "titulo": "Tirada", "bloques": ["1h30 a 5:20"],
+                          "clave": True}],
+            "nutricion": [], "incidencias": [], "notas": []}
+    plan_id = planes.crear(plan, AHORA)
+    rodaje, tirada = planes.sesiones_garmin(plan_id, date(2026, 10, 19), date(2026, 11, 22))
+    planes.marcar_garmin(tirada["id"], 801, 901, AHORA, "Tirada: 1h30 a 5:20")
+    tirada = planes.sesiones_garmin(plan_id, date(2026, 10, 19), date(2026, 11, 22))[1]
+    planes.aplicar_garmin(plan_id, cambios([rodaje, tirada], []))  # it is not in Garmin any more
+
+    r = web.cliente.get(f"/api/plan/semana/1?id={plan_id}")
+    assert r.status_code == 200, r.text
+    reloj = {d["fecha"]: d["reloj"] for d in r.json()["dias"]}
+    assert reloj["2026-10-22"] == [{"id": rodaje["id"], "estado": None, "enviada": None, "aviso": None}]
+    assert reloj["2026-10-24"][0]["aviso"] == YA_NO_ESTA

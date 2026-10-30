@@ -476,6 +476,35 @@ class GarminClient:
         """The FIT file of a workout of the library, as Garmin Connect gives it."""
         return bytes(self._workout_call("download the workout", lambda api, w: api.download_workout(w), workout_id))
 
+    # -- The calendar of Garmin Connect (unit 061, «Garmin manda») ---------------------------------------------------
+
+    def entrenos_programados(self, desde: date, hasta: date) -> list[dict[str, Any]]:
+        """The workouts scheduled from `desde` to `hasta`, one call per month: `[{programado, entreno, fecha, titulo,
+        deporte}]` (the id of the scheduling, the `workoutId`, the ISO day, its title and Garmin's `sportTypeKey`).
+        The other items of the calendar (activities, events…) are left out. A 429 is `GarminRateLimitError`."""
+        salida: list[dict[str, Any]] = []
+        mes = date(desde.year, desde.month, 1)
+        while mes <= hasta:
+            raw = self._workout_call("read the calendar", lambda api, y, m: api.get_scheduled_workouts(y, m),
+                                     mes.year, mes.month)
+            items = raw.get("calendarItems") if isinstance(raw, dict) else None
+            for item in items or []:
+                dia = str(item.get("date") or "")
+                if (item.get("itemType") != "workout" or item.get("workoutId") is None or item.get("id") is None
+                        or not desde.isoformat() <= dia <= hasta.isoformat()):
+                    continue
+                salida.append({"programado": int(item["id"]), "entreno": int(item["workoutId"]), "fecha": dia,
+                               "titulo": str(item.get("title") or ""), "deporte": str(item.get("sportTypeKey") or "")})
+            mes = date(mes.year + mes.month // 12, mes.month % 12 + 1, 1)
+        return sorted(salida, key=lambda e: (e["fecha"], e["programado"]))
+
+    def entreno(self, workout_id: int) -> dict[str, Any]:
+        """The detail of a workout of the library (`workoutName`, `updatedDate`, `workoutSegments`…)."""
+        raw = self._workout_call("read the workout", lambda api, w: api.get_workout_by_id(w), int(workout_id))
+        if not isinstance(raw, dict):
+            raise GarminWorkoutError("Garmin Connect did not give the workout")
+        return raw
+
     # -- Routes (unit 045, REC-25) ----------------------------------------------------------------------------------
     # The library has no call for the saved routes (courses): the endpoints of the web, through `connectapi`
     # (tried on 2026-10-25). The unofficial way: a 429 is `GarminRateLimitError`, anything else `GarminRutaError`.

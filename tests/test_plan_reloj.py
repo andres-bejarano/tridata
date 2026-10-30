@@ -354,3 +354,127 @@ def test_sin_credenciales_no_entra():  # R3: without GARMIN_EMAIL / GARMIN_PASSW
     with pytest.raises(GarminNoLlega) as exc:
         reloj.mandar(SERIES, lambda: reloj.cliente_garmin({}))
     assert "Garmin" in str(exc.value)
+
+
+# -- unit 061 · R4: a workout of Garmin back to the text of a session (`de_garmin`, the inverse of `a_garmin`) ----------
+# The workouts below have the shape Garmin Connect gives when it is read (`get_workout_by_id`): the extra keys of each
+# step, a `stepId`, `updatedDate`… Every name, value and id is invented.
+
+def _paso_leido(orden: int, tipo: str, fin: str, valor: float, ritmo: tuple[int, int] | None = None, *,
+                objetivo: str | None = None) -> dict:
+    tipos = {"warmup": 1, "cooldown": 2, "interval": 3, "recovery": 4}
+    fines = {"time": 2, "distance": 3, "lap.button": 1}
+    paso = {"type": "ExecutableStepDTO", "stepId": 9000 + orden, "stepOrder": orden,
+            "stepType": {"stepTypeId": tipos[tipo], "stepTypeKey": tipo, "displayOrder": tipos[tipo]},
+            "childStepId": None, "description": None,
+            "endCondition": {"conditionTypeId": fines[fin], "conditionTypeKey": fin, "displayOrder": fines[fin],
+                             "displayable": True},
+            "endConditionValue": float(valor), "preferredEndConditionUnit": None, "endConditionCompare": None,
+            "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1},
+            "targetValueOne": None, "targetValueTwo": None, "targetValueUnit": None, "zoneNumber": None,
+            "secondaryTargetType": None, "strokeType": {"strokeTypeId": 0, "strokeTypeKey": None, "displayOrder": 0},
+            "equipmentType": {"equipmentTypeId": 0, "equipmentTypeKey": None, "displayOrder": 0}}
+    if ritmo is not None:
+        paso.update(targetType={"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone", "displayOrder": 6},
+                    targetValueOne=1000 / ritmo[1], targetValueTwo=1000 / ritmo[0])
+    if objetivo is not None:
+        paso.update(targetType={"workoutTargetTypeId": 4, "workoutTargetTypeKey": objetivo, "displayOrder": 4},
+                    targetValueOne=140.0, targetValueTwo=150.0)
+    return paso
+
+
+def _repeticion_leida(orden: int, veces: int, *pasos: dict) -> dict:
+    return {"type": "RepeatGroupDTO", "stepId": 9500 + orden, "stepOrder": orden,
+            "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat", "displayOrder": 6}, "childStepId": 1,
+            "numberOfIterations": veces, "smartRepeat": False,
+            "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations", "displayOrder": 7,
+                             "displayable": False},
+            "endConditionValue": float(veces), "workoutSteps": list(pasos)}
+
+
+def entreno_leido(nombre: str, *pasos: dict, deporte: str = "running", descripcion: str | None = None,
+                  duracion: int | None = 3000, actualizado: str = "2026-10-29T18:20:00.0") -> dict:
+    """A workout as `get_workout_by_id` gives it (invented)."""
+    ids = {"running": 1, "cycling": 2, "swimming": 4, "strength_training": 5}
+    tipo = {"sportTypeId": ids.get(deporte, 9), "sportTypeKey": deporte, "displayOrder": 1}
+    return {"workoutId": 777001, "ownerId": 555, "workoutName": nombre, "description": descripcion,
+            "updatedDate": actualizado, "createdDate": "2026-10-20T07:00:00.0", "sportType": tipo,
+            "subSportType": None, "trainingPlanId": None, "estimatedDurationInSecs": duracion,
+            "estimatedDistanceInMeters": None,
+            "workoutSegments": [{"segmentOrder": 1, "sportType": tipo, "poolLengthUnit": None, "poolLength": None,
+                                 "description": None, "workoutSteps": list(pasos)}],
+            "avgTrainingSpeed": 2.9, "shared": False}
+
+
+def _pasos(entreno: dict) -> list[tuple]:
+    """What makes two workouts the same one for the watch: the type, the end and the target (in s/km) of each step."""
+    def uno(p: dict) -> tuple:
+        if p["type"] == "RepeatGroupDTO":
+            return ("repeat", p["numberOfIterations"], tuple(uno(h) for h in p["workoutSteps"]))
+        ritmo = None
+        if p["targetType"]["workoutTargetTypeKey"] == "pace.zone":
+            ritmo = tuple(sorted(round(1000 / v) for v in (p["targetValueOne"], p["targetValueTwo"])))
+        return (p["stepType"]["stepTypeKey"], p["endCondition"]["conditionTypeKey"], round(p["endConditionValue"]),
+                ritmo)
+    return [uno(p) for s in entreno["workoutSegments"] for p in s["workoutSteps"]]
+
+
+def test_un_entreno_de_garmin_vuelve_al_texto_del_entrenador():  # 061 · R4
+    leido = entreno_leido(
+        "Cambios inventados",
+        _paso_leido(1, "warmup", "time", 900, (340, 350)),
+        _repeticion_leida(2, 4, _paso_leido(3, "interval", "distance", 1000, (245, 255)),
+                          _paso_leido(4, "recovery", "time", 120)),
+        _paso_leido(5, "cooldown", "time", 600))
+    titulo, bloques = reloj.de_garmin(leido)
+    assert titulo == "Cambios inventados"
+    assert bloques == ["15' a 5:45", "4×1 km a 4:10 (2' rec)", "10' suave"]
+    # sending it again gives the same workout (R4)
+    assert _pasos(a_garmin({"titulo": titulo, "bloques": bloques})) == _pasos(leido)
+
+
+@pytest.mark.parametrize("sesion", [
+    SERIES,
+    {"titulo": "Tirada de prueba", "bloques": ["1h30 a 5:30", "10 km a 4:20", "3×1000 a 4:05 (90\" rec)",
+                                               "2,5 km por esfuerzo"]},
+    {"titulo": "Rodaje", "bloques": ["40' a 5:40"]},
+    {"titulo": "Fartlek de prueba", "bloques": ["12'30\" suave", "6×400 m a 3:50-4:00 (200 m rec)", "3' rec",
+                                                "5×2' a 4:00 (1' a 5:30)", "8' suave"]},
+], ids=["series", "tirada", "rodaje", "fartlek"])
+def test_ida_y_vuelta_da_el_mismo_entreno(sesion):  # 061 · R4: text → Garmin → text → Garmin
+    ida = a_garmin(sesion)
+    titulo, bloques = reloj.de_garmin(ida)
+    assert titulo == sesion["titulo"]
+    assert _pasos(a_garmin({"titulo": titulo, "bloques": bloques})) == _pasos(ida)
+
+
+def test_las_series_vuelven_con_su_mismo_texto():  # 061 · R4
+    assert reloj.de_garmin(a_garmin(SERIES)) == (SERIES["titulo"], SERIES["bloques"])
+
+
+def test_un_rango_que_no_es_de_mas_menos_5_se_escribe_entero():  # 061 · R4
+    leido = entreno_leido("Rango inventado", _paso_leido(1, "interval", "time", 1800, (240, 260)))
+    assert reloj.de_garmin(leido) == ("Rango inventado", ["30' a 4:00-4:20"])
+
+
+def test_un_paso_suelto_que_por_su_sitio_se_leeria_de_otro_tipo_lleva_su_etiqueta():  # 061 · R4
+    leido = entreno_leido("Solo calentar", _paso_leido(1, "warmup", "time", 1200))
+    titulo, bloques = reloj.de_garmin(leido)
+    assert _pasos(a_garmin({"titulo": titulo, "bloques": bloques})) == _pasos(leido)
+
+
+@pytest.mark.parametrize("leido", [
+    entreno_leido("Bici inventada", _paso_leido(1, "interval", "time", 3600), deporte="cycling",
+                  descripcion="Z2 llano inventado", duracion=3600),
+    entreno_leido("Pulso inventado", _paso_leido(1, "interval", "time", 3600, objetivo="heart.rate.zone"),
+                  descripcion="Z2 llano inventado", duracion=3600),
+    entreno_leido("Botón inventado", _paso_leido(1, "interval", "lap.button", 0), descripcion="Z2 llano inventado",
+                  duracion=3600),
+], ids=["bici", "pulso", "boton"])
+def test_lo_que_el_texto_no_sabe_decir_es_titulo_duracion_y_descripcion(leido):  # 061 · R4
+    assert reloj.de_garmin(leido) == (leido["workoutName"], ["1h", "Z2 llano inventado"])
+
+
+def test_sin_descripcion_ni_duracion_queda_el_titulo():  # 061 · R4
+    leido = entreno_leido("Fuerza inventada", deporte="strength_training", duracion=None)
+    assert reloj.de_garmin(leido) == ("Fuerza inventada", [])

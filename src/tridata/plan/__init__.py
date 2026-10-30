@@ -45,6 +45,13 @@ Unit 061 («Garmin manda»): a session paired with a workout of Garmin keeps Gar
 (`garmin_aviso`: «Ya no está en tu Garmin», or several sessions that day and none with its title), which
 `sesiones_reloj` gives as `aviso`. `aplicar_garmin` writes what `plan.desde_garmin.cambios` says, IN PLACE (an added
 session goes at the end, so no `orden` moves).
+
+Unit 063 (plans by hand): `nuevo` makes a plan with no weeks, only its main race, with the sections of
+`APARTADOS_NUEVO` (so its .md goes and comes back the same); `renombrar` and `borrar` (everything of it, in one
+transaction). A race is added (`anadir_carrera`), removed (`quitar_carrera`), moved to another plan (`mover_carrera`,
+one `UPDATE` of its row, so its target, result and strategy go with it) or made the main one (`hacer_principal`, one
+per plan). A plan can be left without a main race (removing or moving it never picks another one): it then does not
+count for the current plan, which is still the one of the next main race (`en_curso`).
 """
 from __future__ import annotations
 
@@ -159,6 +166,12 @@ _ESTRATEGIA = (("estrategia", "TEXT"),)
 # unit 059: the result of a race written by hand, added to an older base without it
 _RESULTADO = (("resultado", "TEXT"),)
 HECHA = "✅"
+# unit 063: the sections of a plan made by hand (the races, then the weeks and the sessions to come), titled as the
+# import reads them (`plan/importar.py`), so its .md goes and comes back the same (R1)
+APARTADOS_NUEVO = ({"titulo": "Objetivos", "parte": "objetivos"}, {"titulo": "Previsto", "parte": "previsto"},
+                   {"titulo": "Sesiones clave", "parte": "sesiones_clave"})
+_TABLAS_DEL_PLAN = ("plan_carrera", "plan_semana", "plan_sesion", "plan_nutricion", "plan_incidencia", "plan_nota",
+                    "plan_nota_dia")
 ABIERTA, CERRADA = "abierta", "cerrada"
 
 
@@ -410,6 +423,119 @@ class Planes:
                 conn.execute(f"UPDATE plan_carrera SET {', '.join(f'{c} = ?' for c in valores)} "  # noqa: S608
                              "WHERE rowid = ?", (*valores.values(), fila["id"]))
 
+    # -- unit 063: plans by hand ---------------------------------------------------------------------------------------
+
+    def nuevo(self, nombre: str, carrera: dict[str, Any], ahora: datetime) -> int:
+        """A new plan with no weeks, only its main race (`{nombre, fecha, objetivo}`), with the sections of a plan
+        (`APARTADOS_NUEVO`) so «Bajar .md» and importing it again give the same plan (R1). ValueError, with why, for
+        an empty name of the plan or of the race, or a missing or bad date; nothing is saved."""
+        nombre_plan = _limpio(nombre)
+        if not nombre_plan:
+            raise ValueError("Ponle un nombre al plan")
+        principal = _carrera_nueva(carrera)
+        if principal["fecha"] is None:
+            raise ValueError("La carrera principal necesita su fecha (año-mes-día)")
+        return self.crear({"nombre": nombre_plan, "apartados": [dict(a) for a in APARTADOS_NUEVO],
+                           "carreras": [{**principal, "apartado": 0, "principal": True}]}, ahora)
+
+    def renombrar(self, plan_id: int, nombre: str) -> None:
+        """Another name for that plan (R2). ValueError if empty; LookupError without that plan."""
+        limpio = _limpio(nombre)
+        if not limpio:
+            raise ValueError("Ponle un nombre al plan")
+        with self._connect() as conn:
+            if conn.execute("UPDATE plan SET nombre = ? WHERE id = ?", (limpio, plan_id)).rowcount == 0:
+                raise LookupError(plan_id)
+
+    def borrar(self, plan_id: int) -> None:
+        """The whole plan and everything of it (races, weeks, sessions, nutrition, incidents with their visits, notes),
+        in one transaction (R3). Garmin and what was done are not touched. LookupError without that plan."""
+        with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM plan WHERE id = ?", (plan_id,)).fetchone() is None:
+                raise LookupError(plan_id)
+            conn.execute("DELETE FROM plan_visita WHERE incidencia IN "
+                         "(SELECT rowid FROM plan_incidencia WHERE plan_id = ?)", (plan_id,))
+            for tabla in _TABLAS_DEL_PLAN:
+                conn.execute(f"DELETE FROM {tabla} WHERE plan_id = ?", (plan_id,))  # noqa: S608
+            conn.execute("DELETE FROM plan WHERE id = ?", (plan_id,))
+
+    @staticmethod
+    def _apartado_carreras(conn: sqlite3.Connection, plan_id: int) -> int:
+        """The section of the races of a plan: the one of its last race; without races, its «objetivos» section; else
+        a new «Carreras» section at the end."""
+        fila = conn.execute("SELECT apartado FROM plan_carrera WHERE plan_id = ? ORDER BY orden DESC LIMIT 1",
+                            (plan_id,)).fetchone()
+        if fila is not None:
+            return int(fila[0])
+        (texto,) = conn.execute("SELECT apartados FROM plan WHERE id = ?", (plan_id,)).fetchone()
+        apartados = json.loads(texto)
+        i = next((i for i, a in enumerate(apartados) if a.get("parte") == "objetivos"), None)
+        if i is not None:
+            return i
+        apartados.append({"titulo": "Carreras", "parte": "objetivos"})
+        conn.execute("UPDATE plan SET apartados = ? WHERE id = ?", (json.dumps(apartados, ensure_ascii=False), plan_id))
+        return len(apartados) - 1
+
+    @staticmethod
+    def _repetida(conn: sqlite3.Connection, plan_id: int, nombre: str) -> None:
+        if conn.execute("SELECT 1 FROM plan_carrera WHERE plan_id = ? AND nombre = ?", (plan_id, nombre)).fetchone():
+            raise ValueError(f"Ya hay otra carrera en el plan que se llama «{nombre}»")
+
+    @staticmethod
+    def _fila_carrera(conn: sqlite3.Connection, plan_id: int, carrera: str) -> int:
+        fila = conn.execute("SELECT rowid FROM plan_carrera WHERE plan_id = ? AND nombre = ? ORDER BY orden LIMIT 1",
+                            (plan_id, carrera)).fetchone()
+        if fila is None:
+            raise LookupError(carrera)
+        return int(fila[0])
+
+    def anadir_carrera(self, plan_id: int, carrera: dict[str, Any]) -> None:
+        """A race (`{nombre, fecha, objetivo}`) at the end of the races of that plan, not the main one (R4). ValueError
+        for an empty name, a name of another race of the plan or a bad date; LookupError without that plan."""
+        nueva = _carrera_nueva(carrera)
+        with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM plan WHERE id = ?", (plan_id,)).fetchone() is None:
+                raise LookupError(plan_id)
+            self._repetida(conn, plan_id, nueva["nombre"])
+            apartado = self._apartado_carreras(conn, plan_id)
+            (orden,) = conn.execute("SELECT COALESCE(MAX(orden), -1) + 1 FROM plan_carrera WHERE plan_id = ?",
+                                    (plan_id,)).fetchone()
+            conn.execute("INSERT INTO plan_carrera (plan_id, orden, apartado, nombre, fecha, objetivo, estado, "
+                         "principal) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+                         (plan_id, orden, apartado, nueva["nombre"], nueva["fecha"], nueva["objetivo"],
+                          nueva["estado"]))
+
+    def quitar_carrera(self, plan_id: int, carrera: str) -> None:
+        """That race out of the plan, with its strategy and result (R5); if it was the main one, the plan has none
+        (R8). LookupError without it."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM plan_carrera WHERE rowid = ?", (self._fila_carrera(conn, plan_id, carrera),))
+
+    def mover_carrera(self, plan_id: int, carrera: str, destino: int) -> None:
+        """That race to the end of the races of plan `destino`, in one `UPDATE` of its row, so its target, its result
+        by hand and its strategy go with it (R5); it is not the main one there, and its plan of origin is left without
+        one if it was (R8). ValueError if `destino` is the same plan or already has a race with that name;
+        LookupError without the race or the plan of destination."""
+        if destino == plan_id:
+            raise ValueError("La carrera ya está en ese plan")
+        with self._connect() as conn:
+            fila = self._fila_carrera(conn, plan_id, carrera)
+            if conn.execute("SELECT 1 FROM plan WHERE id = ?", (destino,)).fetchone() is None:
+                raise LookupError(destino)
+            self._repetida(conn, destino, carrera)
+            apartado = self._apartado_carreras(conn, destino)
+            (orden,) = conn.execute("SELECT COALESCE(MAX(orden), -1) + 1 FROM plan_carrera WHERE plan_id = ?",
+                                    (destino,)).fetchone()
+            conn.execute("UPDATE plan_carrera SET plan_id = ?, orden = ?, apartado = ?, principal = 0 WHERE rowid = ?",
+                         (destino, orden, apartado, fila))
+
+    def hacer_principal(self, plan_id: int, carrera: str) -> None:
+        """That race is the main one of its plan, and the one that was is not any more: one per plan (R6).
+        LookupError without it."""
+        with self._connect() as conn:
+            fila = self._fila_carrera(conn, plan_id, carrera)
+            conn.execute("UPDATE plan_carrera SET principal = (rowid = ?) WHERE plan_id = ?", (fila, plan_id))
+
     # -- unit 044: the live incidents and the notes of a day ---------------------------------------------------------
 
     def abrir_incidencia(self, plan_id: int, zona: str, lado: str | None, desde: date, que_paso: str,
@@ -507,9 +633,23 @@ def _fecha(valor: Any) -> str | None:
         raise ValueError(f"La fecha «{texto}» no es una fecha válida (año-mes-día)") from None
 
 
+def _limpio(valor: Any) -> str:
+    return " ".join(str(valor or "").split())
+
+
+def _carrera_nueva(carrera: dict[str, Any]) -> dict[str, Any]:
+    """`{nombre, fecha, objetivo, estado}` of a race typed by hand; ValueError, with why, for an empty name or a bad
+    date."""
+    nombre = _limpio(carrera.get("nombre"))
+    if not nombre:
+        raise ValueError("Ponle un nombre a la carrera")
+    return {"nombre": nombre, "fecha": _fecha(carrera.get("fecha")), "objetivo": _limpio(carrera.get("objetivo")),
+            "estado": "pendiente"}
+
+
 def titulo_incidencia(zona: str | None, lado: str | None) -> str:
     """«tobillo derecho, lateral»: how an incident is named."""
     return " ".join(x for x in (zona, lado) if x)
 
 
-__all__ = ["ABIERTA", "CERRADA", "HECHA", "Planes", "texto_sesion", "titulo_incidencia"]
+__all__ = ["ABIERTA", "APARTADOS_NUEVO", "CERRADA", "HECHA", "Planes", "texto_sesion", "titulo_incidencia"]

@@ -617,3 +617,32 @@ def test_si_google_falla_a_mitad_lo_creado_se_queda_y_la_siguiente_termina_sin_d
     assert len(h.google.de(h.cal())) == 132
     escrito = len(h.google.escrituras())
     assert sinc.vuelta()["error"] is None and len(h.google.escrituras()) == escrito
+
+
+# -- unit 056: a ride of less than 50 minutes is a commute, not a training --------------------------------------------
+
+def test_una_bici_de_menos_de_50_minutos_no_va_al_calendario(h):  # 056 R1
+    h.store.save_activities([hecho("h-bici-corta", "2026-10-27", "cycling", 49 * 60, 9000.0),
+                             hecho("h-rodillo-corto", "2026-10-28", "indoor_cycling", 30 * 60, None)])
+    h.conectar()
+    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 0}
+    assert h.hechos() == {}
+
+
+def test_la_bici_corta_que_ya_estaba_se_borra(h):  # 056 R1: the commutes sent by the 054 leave the calendar
+    h.store.save_activities([hecho("h-bici", "2026-10-27", "cycling", 50 * 60, 9000.0)])
+    h.conectar()
+    assert h.pasada()["creados"] == 1
+    h.store.save_activities([hecho("h-bici", "2026-10-27", "cycling", 49 * 60 + 59, 9000.0)])
+    assert h.pasada() == {"creados": 0, "cambiados": 0, "borrados": 1}
+    assert h.hechos() == {}
+
+
+def test_la_bici_de_50_minutos_y_lo_corto_de_otros_deportes_siguen(h):  # 056 R2
+    h.store.save_activities([hecho("h-bici-50", "2026-10-27", "road_biking", 50 * 60, 20000.0),
+                             hecho("h-carrera-corta", "2026-10-27", "running", 30 * 60, 5000.0, hora="07:00:00"),
+                             hecho("h-natacion-corta", "2026-10-28", "lap_swimming", 20 * 60, 800.0),
+                             hecho("h-fuerza-corta", "2026-10-28", "strength_training", 15 * 60, None, hora="20:00:00")])
+    h.conectar()
+    assert h.pasada()["creados"] == 4
+    assert set(h.hechos()) == {"h-bici-50", "h-carrera-corta", "h-natacion-corta", "h-fuerza-corta"}

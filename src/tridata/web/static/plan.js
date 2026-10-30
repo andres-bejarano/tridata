@@ -307,6 +307,8 @@ function filaReloj(d, r) {
   const fila = el("div", { className: "fila-reloj" });
   if (r.estado === "al_dia") fila.append(el("span", { className: "en-garmin", textContent: "⌚ en tu Garmin" }));
   if (r.estado === "cambiada") fila.append(el("span", { className: "garmin-cambiada", textContent: "Cambiada desde que la mandaste a tu Garmin" }));
+  // unit 061: what the last pass with Garmin could not do on its own («Ya no está en tu Garmin», several that day)
+  if (r.aviso) fila.append(el("span", { className: "garmin-cambiada garmin-aviso", textContent: `⚠️ ${r.aviso}` }));
   if (r.estado !== "al_dia" && (d.estado === "hoy" || d.estado === "pendiente")) {
     const boton = el("button", { type: "button", className: "enlace-boton", textContent: "Mandar a mi Garmin" });
     boton.addEventListener("click", () => pedirTarjeta(r.id, caja, boton));

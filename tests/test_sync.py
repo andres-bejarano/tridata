@@ -1,7 +1,7 @@
 """Regression tests for SyncService — no real network, no real Garmin credentials."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -330,3 +330,178 @@ def test_the_daily_sync_fills_the_missing_hours(tmp_path) -> None:  # R4: the ro
     SyncService(client, store).sync(since=HOY_054, until=HOY_054, revalidate_days=0)
     assert (DESDE_HECHOS, HOY_054) in client.get_activities_calls
     assert store.get_activity("a")["start_time_local"] == "2026-08-03 06:10:00"
+
+
+# ---------------------------------------------------------------------------
+# Unit 061: the workouts scheduled in Garmin reach the plan («Garmin manda»).
+# Garmin is always a double; every name, date and id is invented.
+# ---------------------------------------------------------------------------
+
+from tridata.garmin_client import GarminRateLimitError  # noqa: E402
+from tridata.plan import Planes  # noqa: E402
+
+HOY_061 = date(2026, 10, 30)
+PLAN_061 = {"nombre": "Road to Inventada 26", "apartados": [{"titulo": "Semanas", "parte": "previsto"}],
+            "carreras": [{"apartado": 0, "nombre": "Media inventada", "fecha": "2026-11-22", "objetivo": "1:30",
+                          "estado": "pendiente", "principal": True}],
+            "semanas": [], "nutricion": [], "incidencias": [], "notas": [],
+            "sesiones": [{"apartado": 0, "fecha": "2026-11-01", "titulo": "LR 1h30", "bloques": ["1h30 a 5:20"],
+                          "clave": True}]}
+
+
+def _leido(nombre: str, segundos: int, ritmo_s_km: int, actualizado: str) -> dict:
+    """A workout of one running step, as `get_workout_by_id` gives it (invented)."""
+    corre = {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1}
+    return {"workoutId": 0, "workoutName": nombre, "description": None, "updatedDate": actualizado,
+            "sportType": corre, "estimatedDurationInSecs": segundos,
+            "workoutSegments": [{"segmentOrder": 1, "sportType": corre, "workoutSteps": [
+                {"type": "ExecutableStepDTO", "stepId": 1, "stepOrder": 1,
+                 "stepType": {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3},
+                 "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2,
+                                  "displayable": True},
+                 "endConditionValue": float(segundos),
+                 "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone", "displayOrder": 6},
+                 "targetValueOne": 1000 / (ritmo_s_km + 5), "targetValueTwo": 1000 / (ritmo_s_km - 5)}]}]}
+
+
+class _ConCalendario(_StubClient):
+    """`_StubClient` plus the calendar of Garmin Connect: `entrenos_programados` and `entreno`."""
+
+    def __init__(self, programados: list[dict], detalles: dict[int, dict], *, falla: Exception | None = None,
+                 falla_detalle: Exception | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.programados, self.detalles = programados, detalles
+        self.falla, self.falla_detalle = falla, falla_detalle
+        self.calendario_calls: list[tuple[date, date]] = []
+
+    def entrenos_programados(self, desde: date, hasta: date) -> list[dict]:
+        self.calendario_calls.append((desde, hasta))
+        if self.falla is not None:
+            raise self.falla
+        return [p for p in self.programados if desde.isoformat() <= p["fecha"] <= hasta.isoformat()]
+
+    def entreno(self, workout_id: int) -> dict:
+        if self.falla_detalle is not None:
+            raise self.falla_detalle
+        return self.detalles[workout_id]
+
+
+def _cliente_061(**kwargs) -> _ConCalendario:
+    return _ConCalendario(
+        [{"programado": 611, "entreno": 511, "fecha": "2026-11-01", "titulo": "Long run inventado",
+          "deporte": "running"},
+         {"programado": 612, "entreno": 512, "fecha": "2026-11-03", "titulo": "Rodaje inventado",
+          "deporte": "running"}],
+        {511: _leido("Long run inventado", 6300, 320, "2026-10-29T21:00:00.0"),
+         512: _leido("Rodaje inventado", 2700, 335, "2026-10-28T10:00:00.0")},
+        activities=[_activity(HOY_061, "act-061")], daily_stats={HOY_061: _stats(HOY_061)}, **kwargs)
+
+
+def _sesiones(store: DataStore) -> list[tuple]:
+    planes = Planes(store.db_path)
+    plan = planes.leer(planes.en_curso(HOY_061))
+    return [(s["fecha"], s["titulo"], s["bloques"]) for s in plan["sesiones"]]
+
+
+def test_el_store_dice_su_ruta(tmp_path) -> None:  # 061: `sync.py` opens the plans next to the activities
+    assert DataStore(tmp_path / "t.db").db_path == tmp_path / "t.db"
+
+
+def test_la_sincronizacion_trae_al_plan_lo_de_garmin(tmp_path) -> None:  # R1, R2, R3: the routine of 08:00
+    store = DataStore(tmp_path / "t.db")
+    Planes(store.db_path).crear(PLAN_061, datetime(2026, 10, 20, 9))
+    client = _cliente_061()
+    SyncService(client, store).sync(since=HOY_061, until=HOY_061, revalidate_days=0)
+    # from 3 days ago to the end of the plan in course
+    assert client.calendario_calls == [(date(2026, 10, 27), date(2026, 11, 22))]
+    assert _sesiones(store) == [("2026-11-01", "Long run inventado", ["1h45 a 5:20"]),
+                                ("2026-11-03", "Rodaje inventado", ["45' a 5:35"])]
+    assert store.get_activity("act-061") is not None
+
+
+def test_sin_plan_en_curso_no_se_pregunta_el_calendario(tmp_path) -> None:
+    store = DataStore(tmp_path / "t.db")
+    client = _cliente_061()
+    SyncService(client, store).sync(since=HOY_061, until=HOY_061, revalidate_days=0)
+    assert client.calendario_calls == []
+
+
+@pytest.mark.parametrize("donde", ["calendario", "detalle"])
+@pytest.mark.parametrize("error", [GarminRateLimitError("Garmin Connect is limiting the requests (429)"),
+                                   RuntimeError("no answer")], ids=["429", "fallo"])
+def test_si_garmin_frena_o_falla_lo_demas_termina_y_el_plan_no_cambia(tmp_path, donde, error) -> None:  # R6
+    store = DataStore(tmp_path / "t.db")
+    Planes(store.db_path).crear(PLAN_061, datetime(2026, 10, 20, 9))
+    client = _cliente_061(**({"falla": error} if donde == "calendario" else {"falla_detalle": error}))
+    SyncService(client, store).sync(since=HOY_061, until=HOY_061, revalidate_days=0)  # does not raise
+    assert store.get_activity("act-061") is not None
+    assert HOY_061 in client.get_daily_stats_calls
+    assert _sesiones(store) == [("2026-11-01", "LR 1h30", ["1h30 a 5:20"])]
+    # the next one tries again
+    client.falla = client.falla_detalle = None
+    SyncService(client, store).sync(since=HOY_061, until=HOY_061, revalidate_days=0)
+    assert _sesiones(store)[0][1] == "Long run inventado"
+
+
+def test_actualizar_garmin_tambien_trae_el_plan(tmp_path, monkeypatch) -> None:  # R1: the button of the app
+    from tridata import cli
+
+    store = DataStore(tmp_path / "t.db")
+    Planes(store.db_path).crear(PLAN_061, datetime(2026, 10, 20, 9))
+    client = _cliente_061()
+    monkeypatch.setattr(cli, "GarminClient", lambda email, password: client)
+    actualizar = cli._actualizador_garmin(store, {"GARMIN_EMAIL": "inventado@example.com",
+                                                  "GARMIN_PASSWORD": "inventada"})
+    assert actualizar is not None
+    actualizar(HOY_061)
+    assert _sesiones(store)[0][1] == "Long run inventado"
+
+
+# -- GarminClient: the calendar of Garmin Connect -------------------------------------------------------------------
+
+def _item(ident: int, workout: int | None, dia: str, tipo: str = "workout") -> dict:
+    return {"id": ident, "itemType": tipo, "workoutId": workout, "date": dia, "title": f"Inventado {ident}",
+            "sportTypeKey": "running", "duration": None}
+
+
+class _ApiCalendario:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.meses: list[tuple[int, int]] = []
+        self.error = error
+
+    def get_scheduled_workouts(self, year: int, month: int) -> dict:
+        self.meses.append((year, month))
+        if self.error is not None:
+            raise self.error
+        return {"year": year, "month": month - 1, "calendarItems": [
+            _item(month * 10 + 1, month * 100 + 1, f"{year}-{month:02d}-02"),
+            _item(month * 10 + 2, None, f"{year}-{month:02d}-03", tipo="activity"),
+            _item(month * 10 + 3, month * 100 + 3, f"{year}-{month:02d}-28")]}
+
+    def get_workout_by_id(self, workout_id: int) -> dict:
+        if self.error is not None:
+            raise self.error
+        return {"workoutId": workout_id, "workoutName": "Inventado", "updatedDate": "2026-10-29T10:00:00.0"}
+
+
+def test_entrenos_programados_pide_cada_mes_una_vez_y_solo_trae_entrenos() -> None:  # R1 · P1
+    client = GarminClient("inventado@example.com", "inventada")
+    api = _ApiCalendario()
+    client._api = api
+    entrenos = client.entrenos_programados(date(2026, 10, 27), date(2026, 12, 2))
+    assert api.meses == [(2026, 10), (2026, 11), (2026, 12)]
+    assert entrenos == [
+        {"programado": 103, "entreno": 1003, "fecha": "2026-10-28", "titulo": "Inventado 103", "deporte": "running"},
+        {"programado": 111, "entreno": 1101, "fecha": "2026-11-02", "titulo": "Inventado 111", "deporte": "running"},
+        {"programado": 113, "entreno": 1103, "fecha": "2026-11-28", "titulo": "Inventado 113", "deporte": "running"},
+        {"programado": 121, "entreno": 1201, "fecha": "2026-12-02", "titulo": "Inventado 121", "deporte": "running"}]
+    assert client.entreno(1003)["updatedDate"] == "2026-10-29T10:00:00.0"
+
+
+def test_entrenos_programados_con_429_es_el_error_de_limite() -> None:  # R6
+    client = GarminClient("inventado@example.com", "inventada")
+    client._api = _ApiCalendario(RuntimeError("429 Client Error: Too Many Requests"))
+    with pytest.raises(GarminRateLimitError):
+        client.entrenos_programados(date(2026, 10, 27), date(2026, 11, 2))
+    with pytest.raises(GarminRateLimitError):
+        client.entreno(1003)

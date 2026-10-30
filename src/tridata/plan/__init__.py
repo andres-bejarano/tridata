@@ -39,6 +39,12 @@ import never writes; without one, the result of a race that was run comes from G
 (`plan/semanas.py`). `editar_carrera` changes its name, date, target and time in one `UPDATE` of its row, so its
 strategy goes with it. `leer` gives each race its `estrategia` and its `resultado` only when it has them, so a plan
 without them reads as before.
+
+Unit 061 («Garmin manda»): a session paired with a workout of Garmin keeps Garmin's `updatedDate`
+(`garmin_actualizado`, so it is converted again only when it changes) and the warning of the last pass
+(`garmin_aviso`: «Ya no está en tu Garmin», or several sessions that day and none with its title), which
+`sesiones_reloj` gives as `aviso`. `aplicar_garmin` writes what `plan.desde_garmin.cambios` says, IN PLACE (an added
+session goes at the end, so no `orden` moves).
 """
 from __future__ import annotations
 
@@ -48,7 +54,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .desde_garmin import Cambios
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS plan (
@@ -138,6 +147,10 @@ _BOOLEANOS = {("plan_carrera", "principal"), ("plan_sesion", "clave")}
 # unit 042: the columns of a session sent to the watch, added to an older base without them
 _RELOJ = (("garmin_workout_id", "INTEGER"), ("garmin_schedule_id", "INTEGER"), ("garmin_enviada", "TEXT"),
           ("garmin_texto", "TEXT"))
+# unit 061: Garmin's `updatedDate` of a paired session and the warning of the last pass
+_DESDE_GARMIN = (("garmin_actualizado", "TEXT"), ("garmin_aviso", "TEXT"))
+_COLUMNAS_GARMIN = {"titulo", "bloques", "fecha", "garmin_workout_id", "garmin_schedule_id", "garmin_actualizado",
+                    "garmin_texto"}
 # unit 044: the columns of a live incident, added to an older base without them
 _VIVA = (("zona", "TEXT"), ("lado", "TEXT"), ("que_paso", "TEXT"), ("estado", "TEXT"), ("leccion", "TEXT"),
          ("cerrada", "TEXT"), ("abierta", "TEXT"))
@@ -178,7 +191,7 @@ class Planes:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
             for tabla, columnas in (("plan_sesion", _RELOJ), ("plan_incidencia", _VIVA), ("plan_carrera", _ESTRATEGIA),
-                                    ("plan_carrera", _RESULTADO)):
+                                    ("plan_carrera", _RESULTADO), ("plan_sesion", _DESDE_GARMIN)):
                 tiene = {f["name"] for f in conn.execute(f"PRAGMA table_info({tabla})")}
                 for columna, tipo in columnas:
                     if columna not in tiene:
@@ -262,8 +275,9 @@ class Planes:
                 **{columna: f[columna] for columna, _ in _RELOJ}}
 
     def sesiones_reloj(self, plan_id: int) -> list[dict[str, Any]]:
-        """`[{id, fecha, titulo, estado, enviada}]` of the sessions of a plan, in the order of `leer`: `estado` is
-        "al_dia" (in the watch as it is now), "cambiada" (changed since it was sent) or None (never sent)."""
+        """`[{id, fecha, titulo, estado, enviada, aviso}]` of the sessions of a plan, in the order of `leer`: `estado`
+        is "al_dia" (in the watch as it is now), "cambiada" (changed since it was sent) or None (never sent);
+        `aviso`, the warning of the last pass with Garmin (unit 061) or None."""
         with self._connect() as conn:
             filas = conn.execute("SELECT rowid AS id, * FROM plan_sesion WHERE plan_id = ? ORDER BY orden",
                                  (plan_id,)).fetchall()
@@ -274,7 +288,7 @@ class Planes:
                 ahora = texto_sesion(f["titulo"], json.loads(f["bloques"]))
                 estado = "al_dia" if f["garmin_texto"] == ahora else "cambiada"
             salida.append({"id": f["id"], "fecha": f["fecha"], "titulo": f["titulo"], "estado": estado,
-                           "enviada": f["garmin_enviada"] if estado else None})
+                           "enviada": f["garmin_enviada"] if estado else None, "aviso": f["garmin_aviso"]})
         return salida
 
     def marcar_garmin(self, ident: int, workout_id: int | None, schedule_id: int | None,
@@ -285,6 +299,59 @@ class Planes:
                          "garmin_texto = ? WHERE rowid = ?",
                          (workout_id, schedule_id, enviada.isoformat(timespec="seconds") if enviada else None,
                           texto, ident))
+
+    # -- unit 061: «Garmin manda» --------------------------------------------------------------------------------
+
+    def fin(self, plan_id: int) -> date | None:
+        """The last day of a plan: its last week, session or race; None without that plan or without dates."""
+        with self._connect() as conn:
+            (fin,) = conn.execute(
+                "SELECT MAX(d) FROM (SELECT MAX(hasta) AS d FROM plan_semana WHERE plan_id = ? "
+                "UNION ALL SELECT MAX(fecha) FROM plan_sesion WHERE plan_id = ? "
+                "UNION ALL SELECT MAX(fecha) FROM plan_carrera WHERE plan_id = ?)",
+                (plan_id, plan_id, plan_id)).fetchone()
+        return date.fromisoformat(fin) if fin else None
+
+    def sesiones_garmin(self, plan_id: int, desde: date, hasta: date) -> list[dict[str, Any]]:
+        """The sessions of a plan from `desde` to `hasta`, in its order, as `plan.desde_garmin.cambios` pairs them:
+        `{id, fecha, titulo, bloques, garmin_workout_id, garmin_schedule_id, garmin_actualizado, garmin_texto}`."""
+        with self._connect() as conn:
+            filas = conn.execute("SELECT rowid AS id, * FROM plan_sesion WHERE plan_id = ? AND fecha BETWEEN ? AND ? "
+                                 "ORDER BY orden", (plan_id, desde.isoformat(), hasta.isoformat())).fetchall()
+        return [{"id": f["id"], "fecha": f["fecha"], "titulo": f["titulo"], "bloques": json.loads(f["bloques"]),
+                 "garmin_workout_id": f["garmin_workout_id"], "garmin_schedule_id": f["garmin_schedule_id"],
+                 "garmin_actualizado": f["garmin_actualizado"], "garmin_texto": f["garmin_texto"]} for f in filas]
+
+    def aplicar_garmin(self, plan_id: int, cambios: Cambios) -> dict[str, int]:
+        """Writes a pass of «Garmin manda» in one transaction: the changed sessions in place, the new ones at the end
+        of the plan (in the section of its last session) and the warnings. `{cambiadas, anadidas, avisos}`."""
+        with self._connect() as conn:
+            for ident, campos in cambios.actualizar.items():
+                valores = {c: _a_la_base("plan_sesion", c, v) for c, v in campos.items() if c in _COLUMNAS_GARMIN}
+                if valores:
+                    conn.execute(f"UPDATE plan_sesion SET {', '.join(f'{c} = ?' for c in valores)} "  # noqa: S608
+                                 "WHERE rowid = ? AND plan_id = ?", (*valores.values(), ident, plan_id))
+            if cambios.anadir:
+                (orden,) = conn.execute("SELECT COALESCE(MAX(orden), -1) + 1 FROM plan_sesion WHERE plan_id = ?",
+                                        (plan_id,)).fetchone()
+                fila = conn.execute("SELECT apartado FROM plan_sesion WHERE plan_id = ? ORDER BY orden DESC LIMIT 1",
+                                    (plan_id,)).fetchone()
+                if fila is not None:
+                    apartado = fila[0]
+                else:
+                    (apartados,) = conn.execute("SELECT apartados FROM plan WHERE id = ?", (plan_id,)).fetchone()
+                    apartado = max(len(json.loads(apartados)) - 1, 0)
+                for i, nueva in enumerate(cambios.anadir):
+                    columnas = [c for c in nueva if c in _COLUMNAS_GARMIN]
+                    conn.execute(
+                        f"INSERT INTO plan_sesion (plan_id, orden, apartado, clave, {', '.join(columnas)}) "  # noqa: S608
+                        f"VALUES (?, ?, ?, 0, {', '.join('?' * len(columnas))})",
+                        (plan_id, orden + i, apartado, *(_a_la_base("plan_sesion", c, nueva[c]) for c in columnas)))
+            for ident, aviso in cambios.avisos.items():
+                conn.execute("UPDATE plan_sesion SET garmin_aviso = ? WHERE rowid = ? AND plan_id = ?",
+                             (aviso, ident, plan_id))
+        return {"cambiadas": len(cambios.actualizar), "anadidas": len(cambios.anadir),
+                "avisos": sum(1 for a in cambios.avisos.values() if a)}
 
     def garmin(self) -> Any:
         """The Garmin client to send a session with (logged in only now, never when the app starts)."""

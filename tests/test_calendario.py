@@ -707,3 +707,33 @@ def test_un_paseo_no_va_al_calendario_ni_esconde_la_carrera_prevista(h):  # 057 
     h.pasada()
     assert h.hechos() == {}
     assert [e["summary"] for e in h.google.de(h.cal())] == ["🏃 Series 4×12' a 4:00"]
+
+
+# -- unit 061: what changes in Garmin reaches the plan IN PLACE, and the calendar changes its event ---------------------
+
+def test_lo_cambiado_en_garmin_cambia_su_evento_sin_duplicarlo(b):  # 061 · R1 (key `<plan>-<orden>` stable)
+    from test_sync import _ConCalendario, _leido
+
+    plan_id = b.planes.crear(plan_inventado([SERIES, RODAJE, TIRADA]), AHORA)
+    tirada = next(s for s in b.planes.sesiones_reloj(plan_id) if s["fecha"] == "2026-11-01")
+    b.planes.marcar_garmin(tirada["id"], 801, 901, AHORA, "Tirada larga 1h30: 1h30 a 5:20")  # sent from TriData
+    b.conectar()
+    sincronizar(b.planes, b.calendario, HOY)
+    cal = b.cal()
+    antes = {e["extendedProperties"]["private"]["tridata_sesion"]: e["id"] for e in b.google.de(cal)}
+
+    # Andrés edits it in Garmin Connect and drags it to the Saturday
+    garmin = _ConCalendario([{"programado": 901, "entreno": 801, "fecha": "2026-10-31", "titulo": "Tirada 1h45",
+                              "deporte": "running"}],
+                            {801: _leido("Tirada 1h45", 6300, 320, "2026-10-26T08:30:00.0")})
+    SyncService(garmin, DataStore(b.db)).sync(since=HOY, until=HOY, revalidate_days=0)
+
+    assert sincronizar(b.planes, b.calendario, HOY) == {"creados": 0, "cambiados": 1, "borrados": 0}
+    eventos = b.google.de(cal)
+    assert len(eventos) == 3  # never two events of one session
+    clave = b.sesion(plan_id, 2)
+    (evento,) = [e for e in eventos if e["extendedProperties"]["private"]["tridata_sesion"] == clave]
+    assert evento["id"] == antes[clave]
+    assert evento["summary"] == "🏃 Tirada 1h45"
+    assert evento["description"] == "1h45 a 5:20"
+    assert evento["start"] == {"date": "2026-10-31"} and evento["end"] == {"date": "2026-11-01"}

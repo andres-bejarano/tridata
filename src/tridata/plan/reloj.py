@@ -319,6 +319,131 @@ def a_garmin(sesion: Mapping[str, Any]) -> dict[str, Any]:
             "workoutSegments": [{"segmentOrder": 1, "sportType": dict(_CARRERA), "workoutSteps": pasos}]}
 
 
+# -- unit 061 (R4): a workout of Garmin Connect back to the text of a session ------------------------------------------
+
+DESDE_TRIDATA = "Desde TriData"  # the description `a_garmin` writes: not a text of Andrés's
+
+
+class _NoSeDice(ValueError):
+    """A step the text of a session cannot say (a heart-rate target, the lap button, a nested repeat…)."""
+
+
+def _cuanto_de(paso: Mapping[str, Any]) -> _Cuanto:
+    fin = (paso.get("endCondition") or {}).get("conditionTypeKey")
+    valor = paso.get("endConditionValue")
+    if fin not in ("time", "distance") or not valor or float(valor) <= 0:
+        raise _NoSeDice(fin)
+    if fin == "time":
+        return _Cuanto("time", round(float(valor)))
+    metros = round(float(valor))
+    return _Cuanto("distance", metros, en_km=metros >= 1000 and metros % 100 == 0)
+
+
+def _ritmo_de(paso: Mapping[str, Any]) -> tuple[int, int] | None:
+    """(fastest, slowest) in seconds per km of a pace target; None without a target."""
+    for clave, uno, dos in (("targetType", "targetValueOne", "targetValueTwo"),
+                            ("secondaryTargetType", "secondaryTargetValueOne", "secondaryTargetValueTwo")):
+        tipo = (paso.get(clave) or {}).get("workoutTargetTypeKey")
+        if clave == "secondaryTargetType":
+            if tipo not in (None, "no.target"):
+                raise _NoSeDice(tipo)
+            continue
+        if tipo in (None, "no.target"):
+            return None
+        if tipo != "pace.zone" or not paso.get(uno) or not paso.get(dos):
+            raise _NoSeDice(tipo)
+        rapido, lento = sorted(round(1000 / float(paso[v])) for v in (uno, dos))
+        return rapido, lento
+    return None
+
+
+def _ritmo_dicho(ritmo: tuple[int, int]) -> str:
+    """«a 4:10» when it is that pace ±5" (what `_rango` reads back), else the range «a 4:00-4:20»."""
+    if ritmo[1] - ritmo[0] == 2 * MARGEN_S_KM:
+        return f"a {_mmss(ritmo[0] + MARGEN_S_KM)}"
+    return f"a {_mmss(ritmo[0])}-{_mmss(ritmo[1])}"
+
+
+def _tipo_de(paso: Mapping[str, Any]) -> str:
+    return str((paso.get("stepType") or {}).get("stepTypeKey") or "")
+
+
+def _repeticion_dicha(grupo: Mapping[str, Any]) -> str:
+    """«4×1 km a 4:10 (2' rec)»: the work and, optionally, its recovery (with its pace: «(5' a 4:50)»)."""
+    veces, hijos = grupo.get("numberOfIterations"), list(grupo.get("workoutSteps") or [])
+    if (not isinstance(veces, int) or veces < 1 or not 1 <= len(hijos) <= 2
+            or any(h.get("type") != "ExecutableStepDTO" for h in hijos) or _tipo_de(hijos[0]) != "interval"):
+        raise _NoSeDice("repeat")
+    ritmo = _ritmo_de(hijos[0])
+    texto = f"{veces}×{_cuanto_de(hijos[0]).texto()}" + (f" {_ritmo_dicho(ritmo)}" if ritmo else "")
+    if len(hijos) == 2:
+        if _tipo_de(hijos[1]) != "recovery":
+            raise _NoSeDice("repeat")
+        cuanto, ritmo_rec = _cuanto_de(hijos[1]), _ritmo_de(hijos[1])
+        texto += f" ({cuanto.texto()} {_ritmo_dicho(ritmo_rec) if ritmo_rec else 'rec'})"
+    return texto
+
+
+def _bloques_dichos(pasos: list[Mapping[str, Any]]) -> list[str]:
+    """One line per step, as the coach writes them; a label only where the place of the line would say another
+    type (`_bloques`: the first of several is the warm-up, the last the cool-down)."""
+    salida = []
+    for i, paso in enumerate(pasos):
+        if paso.get("type") == "RepeatGroupDTO":
+            salida.append(_repeticion_dicha(paso))
+            continue
+        if paso.get("type") != "ExecutableStepDTO":
+            raise _NoSeDice(str(paso.get("type")))
+        tipo, cuanto, ritmo = _tipo_de(paso), _cuanto_de(paso), _ritmo_de(paso)
+        if tipo == "recovery":
+            if ritmo is not None:
+                raise _NoSeDice("recovery with a pace")
+            salida.append(f"{cuanto.texto()} rec")
+            continue
+        por_sitio = ("warmup" if len(pasos) > 1 and i == 0 else
+                     "cooldown" if len(pasos) > 1 and i == len(pasos) - 1 else "interval")
+        etiquetas = {"warmup": "calentamiento ", "cooldown": "vuelta a la calma ", por_sitio: ""}
+        if tipo not in etiquetas:  # an interval where its place says warm-up or cool-down; another type
+            raise _NoSeDice(tipo)
+        cola = f" {_ritmo_dicho(ritmo)}" if ritmo else (" suave" if tipo in ("warmup", "cooldown") else "")
+        salida.append(f"{etiquetas[tipo]}{cuanto.texto()}{cola}")
+    return salida
+
+
+def _firma(entreno: Mapping[str, Any]) -> list[tuple]:
+    """What makes two workouts the same for the watch: type, end and target (in s/km) of each step, in order."""
+    def una(p: Mapping[str, Any]) -> tuple:
+        if p.get("type") == "RepeatGroupDTO":
+            return ("repeat", p.get("numberOfIterations"), tuple(una(h) for h in p.get("workoutSteps") or []))
+        fin = (p.get("endCondition") or {}).get("conditionTypeKey")
+        return (_tipo_de(p), fin, round(float(p.get("endConditionValue") or 0)), _ritmo_de(p))
+    return [una(p) for s in entreno.get("workoutSegments") or [] for p in s.get("workoutSteps") or []]
+
+
+def de_garmin(entreno: Mapping[str, Any]) -> tuple[str, list[str]]:
+    """The title and the blocks of a session for a workout of Garmin Connect (the inverse of `a_garmin`): a running
+    workout whose steps the text can say comes back as the coach writes it («15' a 5:45», «4×1 km a 4:10 (2' rec)»),
+    and only if sending it again gives the same workout. Anything else (another sport, a heart-rate or power target,
+    the lap button): its duration and Garmin's description as it is, one block per line."""
+    titulo = " ".join(str(entreno.get("workoutName") or "").split()) or "Entreno de Garmin"
+    segmentos = list(entreno.get("workoutSegments") or [])
+    if (entreno.get("sportType") or {}).get("sportTypeKey") == "running" and len(segmentos) == 1:
+        try:
+            bloques = _bloques_dichos(list(segmentos[0].get("workoutSteps") or []))
+            if bloques and _firma(a_garmin({"titulo": titulo, "bloques": bloques})) == _firma(entreno):
+                return titulo, bloques
+        except (_NoSeDice, NoTraducible, TypeError, ValueError):
+            pass
+    bloques = []
+    segundos = entreno.get("estimatedDurationInSecs")
+    if isinstance(segundos, (int, float)) and segundos > 0:
+        bloques.append(_Cuanto("time", round(segundos)).texto())
+    descripcion = str(entreno.get("description") or "").strip()
+    if descripcion and descripcion != DESDE_TRIDATA:
+        bloques += [linea.strip() for linea in descripcion.splitlines() if linea.strip()]
+    return titulo, bloques
+
+
 # -- the same as a FIT file (R-159) ------------------------------------------------------------------------------
 
 _FIT_EPOCA = datetime(1989, 12, 31, tzinfo=timezone.utc)
@@ -433,5 +558,5 @@ def mandar(sesion: Mapping[str, Any], conectar: Callable[[], Any],
     return workout_id, schedule_id
 
 
-__all__ = ["GarminNoLlega", "NoTraducible", "SinCredenciales", "a_garmin", "cliente_garmin", "fit_local", "lineas",
-           "mandar"]
+__all__ = ["GarminNoLlega", "NoTraducible", "SinCredenciales", "a_garmin", "cliente_garmin", "de_garmin", "fit_local",
+           "lineas", "mandar"]

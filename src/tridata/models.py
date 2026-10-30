@@ -50,7 +50,6 @@ class Activity:
     avg_water_temp_c: float | None = None
     moving_duration_seconds: float | None = None  # unit 040: Garmin's `movingDuration` (the time in movement)
     start_time_local: str | None = None  # unit 054: Garmin's `startTimeLocal` (ISO, no zone); None if saved before
-    bmr_calories: float | None = None  # unit 060: Garmin's `bmrCalories` (the basal inside `calories`); None if saved before
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -71,7 +70,6 @@ class DailyStats:
     body_battery_max: int | None = None
     body_battery_min: int | None = None
     total_calories: int | None = None
-    bmr_calories: int | None = None  # unit 060: Garmin's `bmrKilocalories` of the day; None if saved before
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:

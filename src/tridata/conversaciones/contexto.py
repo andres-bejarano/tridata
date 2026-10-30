@@ -49,8 +49,6 @@ from ..hoy import _deporte
 from ..metrics import compute_pmc, daily_tss, pmc_hasta
 from ..nutricion.ajustes import DESDE_SIEMPRE, Ajustes
 from ..nutricion.asistente import texto_acciones
-from ..nutricion.cierre import basal_con_garmin
-from ..nutricion.gasto import kcal_sin_basal
 from ..nutricion.peso import RegistroPeso
 from ..nutricion.registro import RegistroComidas
 from ..ia.modelos import nombre_de
@@ -91,8 +89,6 @@ con lo previsto en segundos y lo hecho según Garmin, sus sesiones por día con 
 "incidencias", sus molestias y lesiones apuntadas en el plan: las abiertas (estado abierta) siguen ahí, tenlas en \
 cuenta antes de proponerle cualquier sesión; las cerradas de su plan en curso, con su lección; cada una con sus \
 visitas al fisio o al médico (fecha, quién y qué le dijo); las que no dicen estado vienen de su .md; \
-"basal", el basal que usa hoy su gasto estimado y de dónde sale ("origen": el BMR de su Garmin del último día \
-completo, o la fórmula, o el escrito a mano) y cómo cuentan los entrenos ("entrenos"); \
 "google_calendar", si su Google Calendar está conectado y qué lleva su calendario «TriData». Tú no puedes poner ni \
 quitar nada allí: lo pone la app sola. Si te pregunta si algo está en el calendario, contesta con lo que dice \
 "google_calendar" y nunca que «debería aparecer»; si algo falta, puede tocar «Sincronizar ahora» en Ajustes › \
@@ -111,10 +107,6 @@ objetivo o los pasos de un día, un ajuste, una carrera, el peso de un día, una
 o una nota de cómo fue un entreno), usa la \
 herramienta proponer_cambio con una acción de la lista de abajo; un cambio por llamada. La app le enseña una tarjeta \
 «Voy a …» que él confirma o descarta: nunca digas que ya está hecho. Lo que no esté en la lista, dile dónde se hace.
-- Gasto estimado y real: el estimado de un día es el basal de "basal" + sus pasos × kcal/paso + sus entrenos sin su \
-BMR ("kcal_sin_basal"; las "kcal" de Garmin ya llevan el basal de esa hora); el real es el total de Garmin del día \
-cerrado ("kcal_garmin"). Si te pregunta por qué no coinciden, explícalo con esas partes y sus números, sin \
-contradecirte con lo que dice "basal".
 - Título: en el primer mensaje de una conversación, llama también a poner_titulo con un título corto del tema.
 """
 
@@ -196,9 +188,7 @@ def _entreno(store: DataStore, a: dict[str, Any]) -> dict[str, Any]:
     return _limpio({"id": a["activity_id"], "nombre": a.get("name") or _deporte(tipo), "deporte": _deporte(tipo),
                     "minutos": _r(segundos / 60, 0), "km": _r(distancia / 1000, 2) if distancia else None,
                     "fc_media": _r(a.get("avg_hr"), 0), "fc_max": _r(a.get("max_hr"), 0),
-                    "kcal": _r(a.get("calories"), 0),
-                    "kcal_sin_basal": _r(kcal_sin_basal(a), 0) if a.get("bmr_calories") else None,  # unit 060
-                    "ritmo_km": ritmo if tipo in RUNNING_TYPES else None,
+                    "kcal": _r(a.get("calories"), 0), "ritmo_km": ritmo if tipo in RUNNING_TYPES else None,
                     "ritmo_100m": ritmo if tipo in SWIMMING_TYPES else None, "kmh": velocidad,
                     "desnivel_m": _r(a.get("elevation_gain_m"), 0), "temp_c": _r(clima.get("temp_c"))})
 
@@ -329,9 +319,6 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
 
     v = ajustes.vigentes(hoy)
     pulso = historial.vigente(hoy)
-    basal = basal_con_garmin(hoy, ajustes, pesos, store)  # unit 060 (R5): the same basal as Hoy
-    origen_basal = {"garmin": f"de tu Garmin, BMR del {basal.dia_garmin.isoformat() if basal.dia_garmin else ''}",
-                    "peso": f"fórmula: {basal.explicacion}"}.get(basal.origen, "escrito a mano en Ajustes")
     datos_json = {
         "hoy": hoy.isoformat(), "dia_semana": _DIAS[hoy.weekday()],
         "calendario": [{"fecha": d.isoformat(), "dia": _DIAS[d.weekday()]}
@@ -346,9 +333,6 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
         "pulso": _limpio({"fc_max": pulso.fc_max if pulso else None, "fc_reposo": pulso.fc_reposo if pulso else None,
                           "zonas": [list(z) for z in pulso.zonas] if pulso and pulso.zonas else None,
                           "texto": texto_pulso(pulso)["texto"]}),
-        "basal": {"kcal": basal.kcal, "origen": origen_basal,
-                  "entrenos": "las kcal de cada entreno (hecho o previsto) suman al gasto estimado sin su BMR: las de "
-                              "Garmin ya llevan el basal de esa hora, que el basal del día ya cuenta"},
         "dias": dias,
         "semanas": resumen_semanas,
         "planeado_despues_de_hoy": planeado,

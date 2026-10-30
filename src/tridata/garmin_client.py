@@ -159,7 +159,6 @@ class GarminClient:
                     avg_water_temp_c=raw.get("averageTemperature"),
                     moving_duration_seconds=raw.get("movingDuration"),
                     start_time_local=raw.get("startTimeLocal"),
-                    bmr_calories=raw.get("bmrCalories"),
                     raw=raw,
                 )
             )
@@ -203,7 +202,6 @@ class GarminClient:
             body_battery_max=raw.get("bodyBatteryHighestValue"),
             body_battery_min=raw.get("bodyBatteryLowestValue"),
             total_calories=raw.get("totalKilocalories"),
-            bmr_calories=raw.get("bmrKilocalories"),
             raw=raw,
         )
 

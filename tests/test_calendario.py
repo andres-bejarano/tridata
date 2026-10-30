@@ -604,8 +604,8 @@ class GoogleQueFalla(GoogleDoble):
 
 def test_si_google_falla_a_mitad_lo_creado_se_queda_y_la_siguiente_termina_sin_duplicar(tmp_path):  # R8
     h = BaseHechos(tmp_path, GoogleQueFalla(en=60))
-    actividades = [hecho(f"h-{n}", (DESDE_HECHOS + timedelta(days=n % 89)).isoformat(), "running", 2400, 8000.0,
-                         hora=f"{6 + n // 89:02d}:00:00") for n in range(130)]
+    actividades = [hecho(f"h-{n}", (DESDE_HECHOS + timedelta(days=n % 88)).isoformat(), "running", 2400, 8000.0,
+                         hora=f"{6 + n // 88:02d}:00:00") for n in range(130)]  # up to the 27th: no session day (056 R3)
     h.store.save_activities(actividades)
     h.planes.crear(plan_inventado([SERIES, RODAJE]), AHORA)
     h.conectar()

@@ -6,8 +6,14 @@ needs — a date range, one activity, a weekly summary. That keeps each
 conversation small, which on a Claude subscription means the usage limits
 stretch much further.
 
-Every tool is read-only and renders through the existing exporters, so the
-output looks exactly like the Markdown files people are used to.
+Every Garmin tool is read-only and renders through the existing exporters, so
+the output looks exactly like the Markdown files people are used to.
+
+Unit 065 (REC-28, R-186 to R-190): with the team (`equipo`, `conversaciones/desde_pc.py`), two more tools for the
+coach, the nutritionist and the physio of `~/tridata-equipo`: `get_contexto`, the same context the team of the app
+sees (read-only, never transcribing a medical PDF), and `proponer_cambio`, which leaves a card in the conversation
+«Desde el PC» of the Asistente. That card is the ONLY thing the server writes: nothing changes until Andrés confirms
+it in the app.
 
 Run it with `tridata-mcp` (stdio transport) and register that command in
 your MCP client, e.g. for Claude Code:
@@ -17,9 +23,11 @@ your MCP client, e.g. for Claude Code:
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from datetime import date, timedelta
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from dotenv import load_dotenv
 from mcp.server.mcpserver import MCPServer
@@ -33,6 +41,11 @@ from .metrics import LimitesDelDia, compute_pmc, daily_tss, pmc_hasta, trimp_for
 from .nutricion.ajustes import historial_fc_de
 from .storage import DEFAULT_DB_PATH, DataStore
 from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES
+
+if TYPE_CHECKING:  # the team needs the `app` extra (anthropic): the Garmin tools work without it
+    from .conversaciones.desde_pc import Equipo
+
+log = logging.getLogger(__name__)
 
 SPORTS: dict[str, tuple[str, ...]] = {
     "running": RUNNING_TYPES,
@@ -72,6 +85,10 @@ metrics, sleep, HRV, training load) of one triathlete.
   weeks of history.
 - Day totals marked "⚠ incompleto" were cached by Garmin before the day
   was finalized; don't treat them as real totals.
+- get_contexto (when present) gives the same context the team of the app
+  sees: foods, weight, objective, trainings, sleep, HR, HRV, the plan in
+  course, races and incidents. proponer_cambio leaves a card that Andrés
+  confirms in the app: never say a change is done.
 """
 
 
@@ -283,8 +300,10 @@ def get_records(store: DataStore) -> str:
 # -- MCP wiring ----------------------------------------------------------
 
 
-def build_server(store: DataStore, limites_fc: Callable[[], LimitesDelDia | None] | None = None) -> MCPServer:
-    """`limites_fc()` gives, on every call, the HR of each day confirmed in Ajustes (unit 031); None: .env only."""
+def build_server(store: DataStore, limites_fc: Callable[[], LimitesDelDia | None] | None = None, *,
+                 equipo: Equipo | None = None) -> MCPServer:
+    """`limites_fc()` gives, on every call, the HR of each day confirmed in Ajustes (unit 031); None: .env only.
+    Unit 065: with `equipo` (`conversaciones.desde_pc.montar_equipo`), also `get_contexto` and `proponer_cambio`."""
     server = MCPServer(name="tridata", instructions=INSTRUCTIONS)
     read_only = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
@@ -330,14 +349,57 @@ def build_server(store: DataStore, limites_fc: Callable[[], LimitesDelDia | None
         """Personal records, the latest race-time predictions and the latest VO2max."""
         return get_records(store)
 
+    if equipo is not None:
+        _tools_del_equipo(server, equipo)
     return server
+
+
+def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
+    """Unit 065 (R-186, R-187): the two tools of the team on the PC."""
+    from .conversaciones.desde_pc import PAPELES_PC, proponer_desde_pc, texto_contexto
+    from .nutricion.asistente import texto_acciones
+
+    @server.tool(name="get_contexto", annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+                 structured_output=False)
+    def get_contexto_tool() -> str:
+        """Everything the team of the app sees today, in one text: its instructions and the catalogue of changes,
+        the medical transcriptions already made, and the data in JSON (the last 8 weeks day by day with foods and
+        their kcal, weight, steps, resting HR, sleep, HRV and trainings; earlier weeks summed up; the settings and
+        objective of today; races; HR zones; the plan in course with its sessions and incidents). Read-only."""
+        return texto_contexto(equipo)
+
+    descripcion = (
+        "Propose ONE change to Andrés's data or plan. It is NOT applied: it becomes a card in the conversation "
+        "«Desde el PC» of the Asistente tab of the app, in a message of `papel` with `texto`, and Andrés confirms "
+        "or discards it there. Never say it is done; say you left it in a card.\n"
+        f"papel: one of {', '.join(PAPELES_PC)}. texto: what goes with the card (in Spanish, plain text).\n"
+        "cambio: an object with `accion` (an id of the list below) and the fields that action uses: objeto, campo, "
+        "valor, valores, texto, cantidad, unidad, kcal_estimadas, lineas, dia, desde, fecha (dates YYYY-MM-DD), "
+        "antes_dicho, falta; the rest omitted or null.\n\n" + texto_acciones())
+
+    @server.tool(name="proponer_cambio", description=descripcion,
+                 annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                             open_world_hint=False),
+                 structured_output=False)
+    def proponer_cambio_tool(papel: str, cambio: dict[str, Any], texto: str = "") -> str:
+        return proponer_desde_pc(equipo, papel, cambio, texto)
 
 
 def main() -> None:
     # stdout is the MCP channel on stdio; logs must go to stderr.
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
     load_dotenv()  # TRIDATA_HR_MAX / TRIDATA_HR_REST for TRIMP
-    build_server(DataStore(), limites_fc=lambda: historial_fc_de(DEFAULT_DB_PATH).limites).run("stdio")
+    store = DataStore()
+    equipo = None
+    try:  # unit 065: the team's tools need the `app` extra; without it, the Garmin tools as before
+        from .conversaciones.desde_pc import montar_equipo
+    except ImportError as exc:
+        log.warning("get_contexto and proponer_cambio are off: install the `app` extra (%s)", exc)
+    else:
+        medicos_dir = os.environ.get("TRIDATA_MEDICOS_DIR", "").strip()
+        equipo = montar_equipo(DEFAULT_DB_PATH, store=store,
+                               medicos_dir=Path(medicos_dir).expanduser() if medicos_dir else None)
+    build_server(store, limites_fc=lambda: historial_fc_de(DEFAULT_DB_PATH).limites, equipo=equipo).run("stdio")
 
 
 if __name__ == "__main__":

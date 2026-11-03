@@ -117,7 +117,7 @@ def test_server_registers_read_only_tools(store):
     assert all(t.annotations.read_only_hint for t in tools)
 
 
-def test_server_with_the_team_adds_its_two_tools(tmp_path, store):  # unit 065: R-186, R-187
+def test_server_with_the_team_adds_its_tools(tmp_path, store):  # unit 065 R-186; unit 066 R-190, G-55 (R8)
     from tridata.conversaciones.desde_pc import montar_equipo
     from tridata.nutricion.asistente import texto_acciones
 
@@ -125,10 +125,18 @@ def test_server_with_the_team_adds_its_two_tools(tmp_path, store):  # unit 065: 
     tools = {t.name: t for t in asyncio.run(build_server(store, equipo=equipo).list_tools())}
     assert set(tools) == {
         "list_activities", "get_activity", "get_daily_metrics", "get_training_load", "get_weekly_summary",
-        "get_records", "get_contexto", "proponer_cambio",
-    }
-    assert tools["get_contexto"].annotations.read_only_hint
-    proponer = tools["proponer_cambio"]
-    assert not proponer.annotations.read_only_hint and not proponer.annotations.destructive_hint
-    assert texto_acciones() in proponer.description  # the same catalogue the team of the app sees
-    assert set(proponer.input_schema["required"]) == {"papel", "cambio"}
+        "get_records", "get_contexto", "preparar_cambio", "hacer_cambio", "apuntar_comida", "apuntar_peso",
+    }  # `proponer_cambio` (065) is gone: no card is left anywhere
+    escriben = {"hacer_cambio", "apuntar_comida", "apuntar_peso"}
+    assert {n for n, t in tools.items() if not t.annotations.read_only_hint} == escriben
+    preparar = tools["preparar_cambio"]
+    assert texto_acciones() in preparar.description  # the same catalogue the team of the app sees
+    assert set(preparar.input_schema["required"]) == {"cambio"}
+    assert set(tools["hacer_cambio"].input_schema["required"]) == {"papel", "cambio", "huella"}
+    assert set(tools["apuntar_comida"].input_schema["required"]) == {"papel", "dia", "alimentos"}
+    assert set(tools["apuntar_peso"].input_schema["required"]) == {"papel", "kg", "dia"}
+    for nombre in escriben:  # each one says: show it to Andrés and wait for his «sí»
+        descripcion = tools[nombre].description
+        assert "«sí»" in descripcion and "Andrés" in descripcion, nombre
+    assert "preparar_cambio" in tools["hacer_cambio"].description
+    assert "«sí»" in preparar.description and "hacer_cambio" in preparar.description

@@ -9,11 +9,12 @@ stretch much further.
 Every Garmin tool is read-only and renders through the existing exporters, so
 the output looks exactly like the Markdown files people are used to.
 
-Unit 065 (REC-28, R-186 to R-190): with the team (`equipo`, `conversaciones/desde_pc.py`), two more tools for the
-coach, the nutritionist and the physio of `~/tridata-equipo`: `get_contexto`, the same context the team of the app
-sees (read-only, never transcribing a medical PDF), and `proponer_cambio`, which leaves a card in the conversation
-«Desde el PC» of the Asistente. That card is the ONLY thing the server writes: nothing changes until Andrés confirms
-it in the app.
+Unit 065 (REC-28, R-186): with the team (`equipo`, `conversaciones/desde_pc.py`), `get_contexto` for the coach, the
+nutritionist and the physio of `~/tridata-equipo`: the same context the team of the app sees (read-only, never
+transcribing a medical PDF). Unit 066 (REC-29, R-190 to R-197): `preparar_cambio` says what a change would do
+(read-only) and, with Andrés's «sí», `hacer_cambio` makes it as if he had confirmed its card in the app (Google
+Calendar and the watch included); `apuntar_comida` and `apuntar_peso` log a meal or a weight as the dictation does.
+Those three are the ONLY ones that write, and each one leaves a message in the conversation «Desde el PC».
 
 Run it with `tridata-mcp` (stdio transport) and register that command in
 your MCP client, e.g. for Claude Code:
@@ -87,8 +88,10 @@ metrics, sleep, HRV, training load) of one triathlete.
   was finalized; don't treat them as real totals.
 - get_contexto (when present) gives the same context the team of the app
   sees: foods, weight, objective, trainings, sleep, HR, HRV, the plan in
-  course, races and incidents. proponer_cambio leaves a card that Andrés
-  confirms in the app: never say a change is done.
+  course, races and incidents. To change anything: show Andrés what
+  preparar_cambio returns (or the estimated meal, or the weight) and wait
+  for his «sí» before hacer_cambio, apuntar_comida or apuntar_peso; say it
+  is done only when the tool says «Hecho».
 """
 
 
@@ -303,7 +306,7 @@ def get_records(store: DataStore) -> str:
 def build_server(store: DataStore, limites_fc: Callable[[], LimitesDelDia | None] | None = None, *,
                  equipo: Equipo | None = None) -> MCPServer:
     """`limites_fc()` gives, on every call, the HR of each day confirmed in Ajustes (unit 031); None: .env only.
-    Unit 065: with `equipo` (`conversaciones.desde_pc.montar_equipo`), also `get_contexto` and `proponer_cambio`."""
+    Unit 065/066: with `equipo` (`conversaciones.desde_pc.montar_equipo`), also the team's tools."""
     server = MCPServer(name="tridata", instructions=INSTRUCTIONS)
     read_only = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
@@ -355,8 +358,9 @@ def build_server(store: DataStore, limites_fc: Callable[[], LimitesDelDia | None
 
 
 def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
-    """Unit 065 (R-186, R-187): the two tools of the team on the PC."""
-    from .conversaciones.desde_pc import PAPELES_PC, proponer_desde_pc, texto_contexto
+    """Unit 065 (R-186) and 066 (R-190 to R-197): the tools of the team on the PC."""
+    from .conversaciones.desde_pc import (PAPELES_PC, TITULO, apuntar_comida_desde_pc, apuntar_peso_desde_pc,
+                                          hacer_desde_pc, preparar_desde_pc, texto_contexto)
     from .nutricion.asistente import texto_acciones
 
     @server.tool(name="get_contexto", annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
@@ -368,21 +372,67 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         objective of today; races; HR zones; the plan in course with its sessions and incidents). Read-only."""
         return texto_contexto(equipo)
 
-    descripcion = (
-        "Propose ONE change to Andrés's data or plan. It is NOT applied: it becomes a card in the conversation "
-        "«Desde el PC» of the Asistente tab of the app, in a message of `papel` with `texto`, and Andrés confirms "
-        "or discards it there. Never say it is done; say you left it in a card.\n"
-        f"papel: one of {', '.join(PAPELES_PC)}. texto: what goes with the card (in Spanish, plain text).\n"
-        "cambio: an object with `accion` (an id of the list below) and the fields that action uses: objeto, campo, "
-        "valor, valores, texto, cantidad, unidad, kcal_estimadas, lineas, dia, desde, fecha (dates YYYY-MM-DD), "
-        "antes_dicho, falta; the rest omitted or null.\n\n" + texto_acciones())
+    papeles = f"papel: who you are, one of {', '.join(PAPELES_PC)}."
+    registro = (f"When it is done, it leaves a message of `papel` in the conversation «{TITULO}» of the Asistente tab "
+                "of the app. Say it is done only if the answer starts with «Hecho»; otherwise tell Andrés what it "
+                "says: nothing was done.")
+    forma = ("cambio: an object with `accion` (an id of the list below) and the fields that action uses: objeto, "
+             "campo, valor, valores, texto, cantidad, unidad, kcal_estimadas, lineas, dia, desde, fecha (dates "
+             "YYYY-MM-DD), antes_dicho, falta; the rest omitted or null.")
+    preparar_desc = (
+        "Say what ONE change to Andrés's data or plan would do, exactly as the app would do it (its text, before and "
+        "after, where, the lines for the watch and its warnings), and its fingerprint (`Huella`). It changes "
+        "NOTHING. Show Andrés that result as it is and ask him; only after his «sí» call hacer_cambio with the same "
+        "`cambio` and that `huella`. If he says no, do nothing. If he corrects it, prepare it again.\n"
+        f"{forma} texto (optional): what Andrés asked, in his words.\n\n" + texto_acciones())
 
-    @server.tool(name="proponer_cambio", description=descripcion,
+    @server.tool(name="preparar_cambio", description=preparar_desc,
+                 annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False), structured_output=False)
+    def preparar_cambio_tool(cambio: dict[str, Any], texto: str = "") -> str:
+        return preparar_desde_pc(equipo, cambio, texto)
+
+    hacer_desc = (
+        "Make ONE change that preparar_cambio already showed and Andrés answered «sí» to: it is applied as if he "
+        "confirmed its card in the app (Google Calendar updated; `mandar_a_garmin` sends the session to his watch). "
+        "NEVER call it without showing him the result of preparar_cambio and getting his «sí» first. "
+        "If the data changed since it was prepared, nothing is done and the new version comes back: show it to "
+        f"him again.\n{papeles} cambio: the same object given to preparar_cambio. huella: the `Huella` it returned. "
+        f"texto (optional): a short line for Andrés, in Spanish.\n{registro}")
+
+    @server.tool(name="hacer_cambio", description=hacer_desc,
+                 annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False,
+                                             open_world_hint=True),
+                 structured_output=False)
+    def hacer_cambio_tool(papel: str, cambio: dict[str, Any], huella: str, texto: str = "") -> str:
+        return hacer_desde_pc(equipo, papel, cambio, huella, texto)
+
+    comida_desc = (
+        "Log what Andrés ate (told, or estimated by you from a photo) on one day, as the dictation of the app logs "
+        "it (no section). FIRST show him each food with its quantity and kcal and ask; only with his «sí» call "
+        "this. If one food does not pass the checks, none is logged and the answer says why.\n"
+        f"{papeles} dia: YYYY-MM-DD. alimentos: a list of objects with nombre, cantidad (> 0), unidad "
+        "(g, ml or unidad), kcal (>= 0; required with a quantity), and optionally proteina_g, hidratos_g, grasa_g "
+        "and estimado (true if you estimated it). texto (optional): what he said, in Spanish.\n" + registro)
+
+    @server.tool(name="apuntar_comida", description=comida_desc,
                  annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
                                              open_world_hint=False),
                  structured_output=False)
-    def proponer_cambio_tool(papel: str, cambio: dict[str, Any], texto: str = "") -> str:
-        return proponer_desde_pc(equipo, papel, cambio, texto)
+    def apuntar_comida_tool(papel: str, dia: str, alimentos: list[dict[str, Any]], texto: str = "") -> str:
+        return apuntar_comida_desde_pc(equipo, papel, dia, alimentos, texto)
+
+    peso_desc = (
+        "Log Andrés's weight of one day (today or a past day), as the weight piece of the dictation: it replaces the "
+        "one of that day. FIRST tell him the kg and the day and ask; only with his «sí» call this. A weight out of "
+        f"range is not logged and the answer says why.\n{papeles} kg: the kilos. dia: YYYY-MM-DD. "
+        "nota (optional).\n" + registro)
+
+    @server.tool(name="apuntar_peso", description=peso_desc,
+                 annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                             open_world_hint=False),
+                 structured_output=False)
+    def apuntar_peso_tool(papel: str, kg: float, dia: str, nota: str | None = None) -> str:
+        return apuntar_peso_desde_pc(equipo, papel, kg, dia, nota)
 
 
 def main() -> None:
@@ -394,7 +444,7 @@ def main() -> None:
     try:  # unit 065: the team's tools need the `app` extra; without it, the Garmin tools as before
         from .conversaciones.desde_pc import montar_equipo
     except ImportError as exc:
-        log.warning("get_contexto and proponer_cambio are off: install the `app` extra (%s)", exc)
+        log.warning("the team's tools are off: install the `app` extra (%s)", exc)
     else:
         medicos_dir = os.environ.get("TRIDATA_MEDICOS_DIR", "").strip()
         equipo = montar_equipo(DEFAULT_DB_PATH, store=store,

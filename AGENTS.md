@@ -86,9 +86,21 @@ PR, al entrar en `master` y cada lunes). Dependabot propone las actualizaciones.
 - `src/tridata/`: un módulo por pieza — `cli.py` (comando `tridata`), `garmin_client.py` y
   `sync.py` (Garmin Connect → SQLite), `storage.py` (`~/.tridata/data.sqlite3`),
   `metrics.py` (TSS/CTL/ATL/TSB), `exporters.py` (Markdown/JSON), `mcp_server.py`
-  (`tridata-mcp`, solo lectura), `calendario/` (Google Calendar: `__init__.py` el permiso y la
+  (`tridata-mcp`: las herramientas de Garmin, de solo lectura, y las del equipo del PC, ver
+  abajo), `calendario/` (Google Calendar: `__init__.py` el permiso y la
   API, `sincronizar.py` qué se crea, cambia o borra) y `web/` (`tridata web`; `web/calendario.py`
   Ajustes › Google Calendar y el hilo que lo actualiza).
+- **El MCP y el equipo del PC (unidad 065)**: además de `list_activities`, `get_activity`,
+  `get_daily_metrics`, `get_training_load`, `get_weekly_summary` y `get_records`, `tridata-mcp`
+  da `get_contexto` (el mismo contexto que ve el equipo de la pestaña Asistente, de
+  `conversaciones.contexto.montar`; solo lectura y sin transcribir ningún PDF médico: usa las
+  transcripciones ya hechas) y `proponer_cambio` (`papel` entrenador, nutricionista o fisio,
+  `texto` y el `cambio` con la forma de `CambioInterpretado`): deja una tarjeta en la
+  conversación «Desde el PC» del Asistente y es lo ÚNICO que escribe el MCP; nada cambia hasta
+  que Andrés la confirma en la app. La pieza vive en `conversaciones/desde_pc.py` y lee la carpeta
+  médica de `TRIDATA_MEDICOS_DIR`. Estas dos necesitan el extra `app` (anthropic) en el entorno
+  del MCP (`pip install -e ".[mcp,app]"`); sin él, el MCP arranca con las de Garmin y lo avisa
+  por stderr.
 - `tests/` con `tests/fixtures/` (datos inventados); `scripts/ci/` las comprobaciones;
   `daily_update.sh` y `.config/systemd/user/` la rutina diaria.
 

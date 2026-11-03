@@ -115,3 +115,20 @@ def test_server_registers_read_only_tools(store):
         "get_training_load", "get_weekly_summary", "get_records",
     }
     assert all(t.annotations.read_only_hint for t in tools)
+
+
+def test_server_with_the_team_adds_its_two_tools(tmp_path, store):  # unit 065: R-186, R-187
+    from tridata.conversaciones.desde_pc import montar_equipo
+    from tridata.nutricion.asistente import texto_acciones
+
+    equipo = montar_equipo(tmp_path / "test.sqlite3", store=store, token=tmp_path / "google-token.json")
+    tools = {t.name: t for t in asyncio.run(build_server(store, equipo=equipo).list_tools())}
+    assert set(tools) == {
+        "list_activities", "get_activity", "get_daily_metrics", "get_training_load", "get_weekly_summary",
+        "get_records", "get_contexto", "proponer_cambio",
+    }
+    assert tools["get_contexto"].annotations.read_only_hint
+    proponer = tools["proponer_cambio"]
+    assert not proponer.annotations.read_only_hint and not proponer.annotations.destructive_hint
+    assert texto_acciones() in proponer.description  # the same catalogue the team of the app sees
+    assert set(proponer.input_schema["required"]) == {"papel", "cambio"}

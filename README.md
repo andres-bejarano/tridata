@@ -55,7 +55,7 @@ And everywhere:
 - **Daily Garmin sync** at 08:00, retrying every hour until 14:00, backing off when Garmin rate-limits; the app warns
   when Garmin is behind and can catch up on demand.
 - **Installable on the phone** (it is a web app served by your PC; reach it from outside through Tailscale).
-- **MCP server** so Claude Code or Claude Desktop can query the same data, read-only.
+- **MCP server** so Claude Code or Claude Desktop can query the same data (read-only) and, with the `app` extra, the coach, nutritionist and physio on the PC can make changes once Andrés says «sí».
 
 ## Privacy and cost
 
@@ -87,7 +87,7 @@ tridata web                      # http://127.0.0.1:8765 — this PC only by def
 |---|---|
 | `app` | `tridata web`: the Claude API client and the web server. |
 | `voz` | Local dictation: faster-whisper on an NVIDIA GPU (~3 GB to download the first time, no system CUDA needed). |
-| `mcp` | `tridata-mcp`, the read-only MCP server. |
+| `mcp` | `tridata-mcp`, the MCP server (with `app` too, the team's tools). |
 | `dev` | Tests, linters and the security checks. |
 | `e2e` | End-to-end tests of the phone screen in a real Chromium (Playwright). |
 
@@ -108,7 +108,7 @@ repository; the token is saved in `~/.tridata/google-token.json`).
 | `tridata show-laps` | Per-lap splits of one activity. |
 | `tridata importar-deficit` · `importar-recetas` · `importar-detalle` | One-off imports from a previous Markdown food diary, reviewing the dubious lines first. |
 | `tridata comprobar-privados` | Counts appearances of your private health values in the repo, its history and the logs (never prints them). |
-| `tridata-mcp` | The MCP server: `list_activities`, `get_activity`, `get_daily_metrics`, `get_training_load`, `get_weekly_summary`, `get_records`. |
+| `tridata-mcp` | The MCP server: `list_activities`, `get_activity`, `get_daily_metrics`, `get_training_load`, `get_weekly_summary`, `get_records` (read-only); with the `app` extra, `get_contexto` and `preparar_cambio` (read-only), and `hacer_cambio`, `apuntar_comida`, `apuntar_peso`, which write only after Andrés's «sí» and leave a message in «Desde el PC». |
 
 ## Daily sync
 

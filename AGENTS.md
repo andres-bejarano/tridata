@@ -90,17 +90,23 @@ PR, al entrar en `master` y cada lunes). Dependabot propone las actualizaciones.
   abajo), `calendario/` (Google Calendar: `__init__.py` el permiso y la
   API, `sincronizar.py` qué se crea, cambia o borra) y `web/` (`tridata web`; `web/calendario.py`
   Ajustes › Google Calendar y el hilo que lo actualiza).
-- **El MCP y el equipo del PC (unidad 065)**: además de `list_activities`, `get_activity`,
+- **El MCP y el equipo del PC (unidades 065 y 066)**: además de `list_activities`, `get_activity`,
   `get_daily_metrics`, `get_training_load`, `get_weekly_summary` y `get_records`, `tridata-mcp`
   da `get_contexto` (el mismo contexto que ve el equipo de la pestaña Asistente, de
   `conversaciones.contexto.montar`; solo lectura y sin transcribir ningún PDF médico: usa las
-  transcripciones ya hechas) y `proponer_cambio` (`papel` entrenador, nutricionista o fisio,
-  `texto` y el `cambio` con la forma de `CambioInterpretado`): deja una tarjeta en la
-  conversación «Desde el PC» del Asistente y es lo ÚNICO que escribe el MCP; nada cambia hasta
-  que Andrés la confirma en la app. La pieza vive en `conversaciones/desde_pc.py` y lee la carpeta
-  médica de `TRIDATA_MEDICOS_DIR`. Estas dos necesitan el extra `app` (anthropic) en el entorno
-  del MCP (`pip install -e ".[mcp,app]"`); sin él, el MCP arranca con las de Garmin y lo avisa
-  por stderr.
+  transcripciones ya hechas) y, desde la 066, los cambios con el «sí» de Andrés y sin tarjetas:
+  `preparar_cambio` (solo lectura: el `cambio` con la forma de `CambioInterpretado` → lo que se
+  haría, como la tarjeta de la app, y su `Huella`), `hacer_cambio` (`papel` entrenador,
+  nutricionista o fisio, el mismo `cambio` y esa `huella`: lo aplica con `proponer` + `confirmar`
+  como la tarjeta confirmada en la app, Google Calendar y el reloj incluidos; si la base cambió
+  desde que se preparó, no hace nada), `apuntar_comida` (`papel`, `dia`, `alimentos` con cantidad
+  y kcal: como el dictado, sin sección, todos o ninguno) y `apuntar_peso` (`papel`, `kg`, `dia`:
+  como la pieza peso). Esas tres son lo ÚNICO que escribe el MCP, y cada cosa hecha deja un
+  mensaje de su papel en la conversación «Desde el PC» del Asistente. `proponer_cambio` (065) ya
+  no existe. La pieza vive en `conversaciones/desde_pc.py` y lee la carpeta médica de
+  `TRIDATA_MEDICOS_DIR`. Las del equipo necesitan el extra `app` (anthropic) en el entorno del
+  MCP (`pip install -e ".[mcp,app]"`); sin él, el MCP arranca con las de Garmin y lo avisa por
+  stderr.
 - `tests/` con `tests/fixtures/` (datos inventados); `scripts/ci/` las comprobaciones;
   `daily_update.sh` y `.config/systemd/user/` la rutina diaria.
 

@@ -13,6 +13,9 @@ from `Planes.incidencias`, given or read from the same SQLite as `store` (the ap
 
 Unit 059 (R4): under the table of the races goes the strategy of each one that has it («Estrategia de Behobia:» and
 a line per stretch), and a time written by hand is its «Estado» («✅ 1:12:30»), so imported again it still wins.
+
+Unit 067 (R-204): a plan with phases writes the phase of each week in a last column «Fase» of the table of the weeks;
+a plan without them, the same table as before.
 """
 from __future__ import annotations
 
@@ -92,9 +95,11 @@ def _apartado(plan: dict, i: int, store: DataStore | None, hoy: date, vivas: lis
         bloques += ["\n".join([f"Estrategia de {_celda(c['nombre'])}:", *(f"- {_celda(x)}" for x in c["estrategia"])])
                     for c in de["carreras"] if c.get("estrategia")]
     if de["semanas"]:
-        bloques.append(_tabla(("Semana", "Desde", "Hasta", "Previsto", "Clave", "Hecho", "Km"),
-                              [(s["n"], s["desde"], s["hasta"], hmm(s["previsto_s"]), s["clave"], *_hecho(s, store, hoy))
-                               for s in de["semanas"]]))
+        con_fases = bool(plan.get("fases"))
+        cabecera = ("Semana", "Desde", "Hasta", "Previsto", "Clave", "Hecho", "Km") + (("Fase",) if con_fases else ())
+        bloques.append(_tabla(cabecera, [
+            (s["n"], s["desde"], s["hasta"], hmm(s["previsto_s"]), s["clave"], *_hecho(s, store, hoy),
+             *((semanas_del_plan.fase_de(plan, s["n"]),) if con_fases else ())) for s in de["semanas"]]))
     for s in de["sesiones"]:
         bloques.append("\n".join([f"### {s['fecha']} · {_celda(s['titulo'])}", *(f"- {b}" for b in s["bloques"])]))
     if de["nutricion"]:

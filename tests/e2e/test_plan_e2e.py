@@ -150,3 +150,87 @@ def test_si_la_ia_falla_se_puede_reintentar(servidor, abrir, ir_a, monkeypatch):
     expect(plan).to_contain_text("Importa tu plan")  # nothing saved
     p.get_by_role("button", name="Reintentar").click()
     expect(p.locator("#plan-importar")).to_be_visible()
+
+
+@TEMAS
+def test_el_plan_a_mano(servidor, abrir, capturar, oscuro):  # unit 067 · REC-30, C-247, C-249, C-250, C-253
+    """A new plan built by hand on the screen: two weeks, the phase «Base» over them, a session added on Friday,
+    changed, moved to Saturday and deleted (confirming); nothing goes through the team."""
+    sufijo = "-oscuro" if oscuro else "-claro"
+    p = abrir(servidor, "/#fitness/plan", oscuro=oscuro, esperar=False)
+    vista = p.locator("#plan-vista")
+    expect(vista).to_contain_text("Importa tu plan")
+    p.locator("#plan-nuevo-boton").click()
+    nuevo = p.locator("#plan-nuevo-form")
+    nuevo.locator("input[name=plan-nombre]").fill("Prueba a mano 27")
+    nuevo.locator("input[name=carrera-nombre]").fill("Media de prueba")
+    nuevo.locator("input[name=carrera-fecha]").fill("2027-03-07")
+    nuevo.get_by_role("button", name="Crear plan").click()
+    expect(p.locator("#plan-nombre")).to_have_text("Prueba a mano 27")
+    expect(vista).to_contain_text("Este plan no tiene semanas.")
+
+    # two weeks, the second one with the dates it proposes (the day after the first)
+    p.locator("#plan-anadir-semana").click()
+    semana = p.locator("#plan-anadir-semana-form")
+    semana.locator("input[name=semana-desde]").fill("2026-10-19")
+    semana.locator("input[name=semana-desde]").dispatch_event("change")
+    expect(semana.locator("input[name=semana-hasta]")).to_have_value("2026-10-25")
+    semana.locator("input[name=semana-previsto]").fill("4:30")
+    semana.get_by_role("button", name="Añadir semana").click()
+    expect(p.locator("#plan-semanas .semana")).to_have_count(1)
+    p.locator("#plan-anadir-semana").click()
+    expect(p.locator("#plan-anadir-semana-form input[name=semana-n]")).to_have_value("2")
+    expect(p.locator("#plan-anadir-semana-form input[name=semana-desde]")).to_have_value("2026-10-26")
+    p.locator("#plan-anadir-semana-form").get_by_role("button", name="Añadir semana").click()
+    expect(p.locator("#plan-semanas .semana")).to_have_count(2)
+
+    # the phase «Base» over both
+    p.locator("#plan-anadir-fase").click()
+    fase = p.locator("#plan-anadir-fase-form")
+    fase.locator("input[name=fase-nombre]").fill("Base")
+    fase.locator("input[name=fase-hasta]").fill("2")
+    fase.get_by_role("button", name="Añadir fase").click()
+    expect(p.locator("#plan-semanas .fase-plan")).to_have_count(1)
+    expect(p.locator("#plan-semanas .fase-plan")).to_contain_text("Base · S1–S2")
+    _sin_scroll(p, "plan-a-mano")
+
+    # a session on Friday 23/10, at once
+    p.locator("#plan-semanas .semana").filter(has_text="S1").click()
+    s1 = p.locator("#plan-semana")
+    expect(s1.locator("h2")).to_contain_text("S1 · 19–25/10 · Base")
+    dias = s1.locator(".dia-plan")
+    expect(dias).to_have_count(7)
+    expect(dias.nth(0).locator(".anadir-sesion")).to_have_count(0)  # Monday is over: no «Añadir sesión»
+    viernes = dias.nth(4)
+    viernes.locator(".anadir-sesion").click()
+    viernes.locator("input[name=sesion-titulo]").fill("Rodaje")
+    viernes.locator("textarea[name=sesion-bloques]").fill("45' a 5:30")
+    viernes.get_by_role("button", name="Guardar sesión").click()
+    expect(dias.nth(4)).to_contain_text("Vie 23/10 · Rodaje")
+    expect(dias.nth(4)).to_contain_text("45' a 5:30")
+
+    # changed to 50' and moved to Saturday: the same session, the Friday free
+    dias.nth(4).locator(".cambiar-sesion").click()
+    dias.nth(4).locator(".form-cambiar-sesion textarea").fill("50' a 5:30")
+    dias.nth(4).get_by_role("button", name="Guardar cambios").click()
+    expect(dias.nth(4)).to_contain_text("50' a 5:30")
+    dias.nth(4).locator(".mover-sesion").click()
+    dias.nth(4).locator(".form-mover-sesion input[name=sesion-dia]").fill("2026-10-24")
+    dias.nth(4).locator(".form-mover-sesion button[type=submit]").click()
+    expect(dias.nth(5)).to_contain_text("Sáb 24/10 · Rodaje")
+    expect(dias.nth(5)).to_contain_text("50' a 5:30")
+    expect(dias.nth(4)).to_contain_text("sin sesión prevista")
+    _sin_scroll(p, "semana-a-mano")
+    capturar(p, f"plan-a-mano-semana{sufijo}", completa=True)
+
+    # deleted: cancelling keeps it, confirming takes it out
+    p.once("dialog", lambda d: d.dismiss())
+    dias.nth(5).locator(".borrar-sesion").click()
+    expect(dias.nth(5)).to_contain_text("Rodaje")
+    p.once("dialog", lambda d: d.accept())
+    dias.nth(5).locator(".borrar-sesion").click()
+    expect(dias.nth(5)).to_contain_text("sin sesión prevista")
+
+    s1.get_by_role("button", name="Volver al plan").click()
+    expect(p.locator("#plan-semanas .fase-plan")).to_contain_text("Base")
+    capturar(p, f"plan-a-mano{sufijo}", completa=True)

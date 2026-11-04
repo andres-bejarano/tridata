@@ -596,3 +596,82 @@ def test_la_sesion_se_describe_como_la_lee_el_reloj():  # bug 055 · R3
     for ident in ("plan_cambiar_sesion", "plan_anadir_sesion"):
         linea = next(x for x in texto.splitlines() if x.startswith(f"- {ident}:"))
         assert "dos puntos" in linea and "«rec»" in linea and "nunca en valor" in linea, ident
+
+
+# -- unit 067 · R8, R10 (R-206, R-208 · C-255, C-257): a session deleted by hand leaves Garmin, and a card of the team
+# whose session was changed by hand is redone -----------------------------------------------------------------------
+
+def _mandada(web, planes: Planes, plan_id: int) -> int:
+    ident = _id_del(planes, plan_id, "2026-10-28")
+    tarjeta = web.cliente.post(f"/api/plan/sesion/{ident}/garmin").json()["tarjeta"]
+    assert web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta}).status_code == 200
+    return ident
+
+
+def _pasada_de_garmin(planes: Planes, plan_id: int, garmin) -> None:
+    """The next sync from Garmin (061) with what the double has scheduled."""
+    from tridata.plan.desde_garmin import Programado, cambios
+
+    programados = [Programado(programado=s, entreno=w, fecha=dia.isoformat(), deporte="carrera",
+                              titulo=garmin.entrenos[w]["workoutName"], bloques=("20' a 5:30",), actualizado="x")
+                   for s, (w, dia) in garmin.programados.items() if w in garmin.entrenos]
+    planes.aplicar_garmin(plan_id, cambios(planes.sesiones_garmin(plan_id, date(2026, 10, 21), date(2026, 11, 30)),
+                                           programados))
+
+
+def test_borrar_una_sesion_mandada_la_quita_de_garmin_y_no_vuelve(tmp_path, garmin):  # R8 · R-206, C-255
+    web, planes, plan_id = _web_con_series(tmp_path)
+    ident = _mandada(web, planes, plan_id)
+    assert garmin.del_dia(MIERCOLES)  # in Garmin
+    r = web.cliente.post("/api/plan/sesion/borrar", json={"sesion": ident})
+    assert r.status_code == 200, r.text
+    assert "aviso" not in r.json()
+    assert garmin.del_dia(MIERCOLES) == [] and garmin.entrenos == {}  # Garmin was told to remove it
+    assert [ll[0] for ll in garmin.llamadas[-2:]] == ["quitar_programado", "borrar_entreno"]
+    assert _sesiones(planes.leer(plan_id), "2026-10-28") == []
+    _pasada_de_garmin(planes, plan_id, garmin)
+    assert _sesiones(planes.leer(plan_id), "2026-10-28") == []  # the sync from Garmin does not bring it back
+
+
+def test_sin_quitarla_de_garmin_la_pasada_la_volveria_a_meter(tmp_path, garmin):  # R8: why it is removed from Garmin
+    web, planes, plan_id = _web_con_series(tmp_path)
+    ident = _mandada(web, planes, plan_id)
+    with planes._connect() as conn:  # deleted without telling Garmin
+        conn.execute("DELETE FROM plan_sesion WHERE rowid = ?", (ident,))
+    _pasada_de_garmin(planes, plan_id, garmin)
+    assert [t for t, _ in _sesiones(planes.leer(plan_id), "2026-10-28")] == ["Series de prueba 3×2000"]
+
+
+def test_con_garmin_caido_se_borra_igual_y_avisa(tmp_path, garmin):  # R8 · C-255
+    from tridata.garmin_client import GarminWorkoutError
+
+    web, planes, plan_id = _web_con_series(tmp_path)
+    ident = _mandada(web, planes, plan_id)
+    garmin.falla_en, garmin.error = "quitar_programado", GarminWorkoutError("Garmin Connect did not answer")
+    r = web.cliente.post("/api/plan/sesion/borrar", json={"sesion": ident})
+    assert r.status_code == 200, r.text
+    assert "sigue en tu reloj: bórrala allí" in r.json()["aviso"]
+    assert planes.sesion(ident) is None and _sesiones(planes.leer(plan_id), "2026-10-28") == []
+
+
+def test_borrar_una_semana_quita_de_garmin_sus_sesiones_mandadas(tmp_path, garmin):  # R5 + R8
+    web, planes, plan_id = _web_con_series(tmp_path)
+    _mandada(web, planes, plan_id)
+    r = web.cliente.post("/api/plan/semana/borrar", json={"id": plan_id, "semana": 10})
+    assert r.status_code == 200, r.text
+    assert r.json()["borradas"] == 1 and garmin.entrenos == {}
+
+
+def test_la_tarjeta_del_equipo_se_rehace_si_la_cambiaste_a_mano(b):  # R10 · R-208, C-257 (G-41)
+    t = b.uno(accion="plan_cambiar_sesion", dia=MIERCOLES, texto=NUEVA)
+    assert t["tipo"] == "propuesta", t
+    ident = _id_del(b.planes, b.plan_id, "2026-10-28")
+    b.planes.cambiar_sesion(ident, "Series de prueba 3×2000", ["50' suave"], HOY)  # by hand, before the «sí»
+    with pytest.raises(Cambiado) as exc:
+        confirmar(t, b.ctx)
+    assert exc.value.tarjeta["tipo"] == "propuesta" and "50' suave" in exc.value.tarjeta["antes"]
+    assert _sesiones(b.plan(), "2026-10-28") == [("Series de prueba 3×2000", ["50' suave"])]  # nothing applied blind
+    b.planes.mover_sesion(ident, "2026-10-29", HOY)  # moved by hand: the card of that day says it is not there
+    t2 = b.uno(accion="plan_cambiar_sesion", dia=MIERCOLES, texto=NUEVA)
+    t3 = b.uno(accion="plan_quitar_sesion", dia=date(2026, 10, 29))
+    assert t2["tipo"] == "no" and t3["tipo"] == "propuesta"

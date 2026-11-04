@@ -557,8 +557,13 @@ def _actividad_corta(a: dict) -> dict:
 
 
 def _parecida(cambio: Any, ctx: Contexto) -> dict | None:
-    """The activity of the last 14 days like the one he names (its kind and/or its day); the latest if several."""
+    """The activity of the last 14 days like the one he names (its kind and/or its day); the latest if several.
+    Unit 070: `objeto` may be the id of one of them (the team sees it in its context), and then it is that one, even
+    if another of the same day has the same name."""
     candidatas = list(ctx.recientes())
+    por_id = next((a for a in candidatas if cambio.objeto and str(a.get("activity_id")) == cambio.objeto.strip()), None)
+    if por_id is not None:
+        return por_id
     if cambio.fecha is not None:
         candidatas = [a for a in candidatas if a.get("activity_date") == cambio.fecha.isoformat()]
     buscado = normalizar(cambio.objeto)
@@ -686,7 +691,7 @@ ACCIONES = [
            _proponer_objetivo, _rehacer_objetivo, _aplicar_objetivo),
     Accion("entreno_previsto", "poner un entreno previsto de hoy o de un día que aún no ha llegado (se suma a los que "
            "ya haya; solo sustituye al de la misma actividad) como uno de los últimos días («hoy además tantos minutos de bici como el del domingo»). objeto: qué entreno es, como lo "
-           "dice; cantidad: los minutos; fecha: el día del entreno parecido si lo dice; dia: el día del que habla, o "
+           "dice, o el id de la actividad si hay dos que se llaman igual; cantidad: los minutos; fecha: el día del entreno parecido si lo dice; dia: el día del que habla, o "
            "null.",
            _proponer_entreno, _rehacer_entreno, _aplicar_entreno),
 ]

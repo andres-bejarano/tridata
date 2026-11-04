@@ -51,6 +51,7 @@ from ..hoy import _deporte
 from ..metrics import compute_pmc, daily_tss, pmc_hasta
 from ..nutricion.ajustes import DESDE_SIEMPRE, Ajustes
 from ..nutricion.asistente import texto_acciones
+from ..nutricion.objetivo_dia import ObjetivosDia
 from ..nutricion.peso import RegistroPeso
 from ..nutricion.registro import RegistroComidas
 from ..ia.modelos import nombre_de
@@ -91,7 +92,8 @@ con lo previsto en segundos, su fase si la tiene y lo hecho según Garmin, sus f
 "incidencias", sus molestias y lesiones apuntadas en el plan: las abiertas (estado abierta) siguen ahí, tenlas en \
 cuenta antes de proponerle cualquier sesión; las cerradas de su plan en curso, con su lección; cada una con sus \
 visitas al fisio o al médico (fecha, quién y qué le dijo); las que no dicen estado vienen de su .md; \
-"google_calendar", si su Google Calendar está conectado y qué lleva su calendario «TriData». Tú no puedes poner ni \
+"entrenos_previstos", los entrenos previstos que tiene apuntados (con «entreno previsto») de hoy a 14 días, \
+cada día con su nombre, sus minutos y sus kcal; "google_calendar", si su Google Calendar está conectado y qué lleva su calendario «TriData». Tú no puedes poner ni \
 quitar nada allí: lo pone la app sola. Si te pregunta si algo está en el calendario, contesta con lo que dice \
 "google_calendar" y nunca que «debería aparecer»; si algo falta, puede tocar «Sincronizar ahora» en Ajustes › \
 Google Calendar.
@@ -247,6 +249,22 @@ def _incidencias(planes: Planes, plan_id: int) -> list[dict]:
     return salida
 
 
+DIAS_PREVISTOS = 14  # unit 071: the planned trainings from today to two weeks ahead
+
+
+def _entrenos_previstos(objetivos: ObjetivosDia, hoy: date) -> list[dict[str, Any]]:
+    """Unit 071: the planned trainings of each day from `hoy` to `hoy + DIAS_PREVISTOS`, only the days with any."""
+    salida = []
+    for i in range(DIAS_PREVISTOS + 1):
+        dia = hoy + timedelta(days=i)
+        previstos = (objetivos.del_dia(dia) or {}).get("previstos") or []
+        if previstos:
+            salida.append({"fecha": dia.isoformat(), "dia": _dia(dia.isoformat()),
+                           "previstos": [{"nombre": p.get("nombre"), "minutos": p.get("minutos"), "kcal": _r(p.get("kcal"), 0)}
+                                         for p in previstos]})
+    return salida
+
+
 def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, store: DataStore | None,
            transcripciones: list[dict[str, Any]], aviso_medico: str | None, hoy: date,
            planes: Planes | None = None, calendario_conectado: bool = False) -> Contexto:
@@ -342,6 +360,9 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
         "google_calendar": {"conectado": calendario_conectado,
                             "lleva": CALENDARIO_CONECTADO if calendario_conectado else CALENDARIO_SIN_CONECTAR},
     }
+    previstos = _entrenos_previstos(ObjetivosDia(registro.db_path), hoy)  # unit 071: the same SQLite
+    if previstos:
+        datos_json["entrenos_previstos"] = previstos
     plan, incidencias = plan_en_curso(planes, store, hoy)
     if plan is not None:
         datos_json["plan"] = plan

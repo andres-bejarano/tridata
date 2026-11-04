@@ -135,15 +135,18 @@ def test_anadir_seccion_ofrece_las_que_faltan_y_la_vacia_desaparece(servidor, ab
     assert _secciones(p) == ["Comida", "Sin sección"]  # Merienda emptied: gone
 
     p.locator("#anadir-seccion").click()
-    assert _textos(p.locator("#opciones-seccion button")) == ["Desayuno", "Media mañana", "Merienda", "Cena"]
+    assert _textos(p.locator("#opciones-seccion button")) == ["Desayuno", "Media mañana", "Merienda", "Cena",
+                                                              "Nutrición en carrera"]
     p.locator(".cancelar-seccion").click()
-    for nombre in ("Cena", "Desayuno", "Media mañana", "Merienda"):
+    for nombre in ("Cena", "Desayuno", "Media mañana", "Merienda", "Nutrición en carrera"):
         _anadir_seccion(p, nombre)
-    assert _secciones(p) == ["Desayuno", "Media mañana", "Comida", "Merienda", "Cena", "Sin sección"]
+    assert _secciones(p) == ["Desayuno", "Media mañana", "Comida", "Merienda", "Cena", "Nutrición en carrera",
+                           "Sin sección"]
     p.locator("#anadir-seccion").click()
-    expect(p.locator(".pie-secciones")).to_contain_text("Ya están las cinco secciones.")
+    expect(p.locator(".pie-secciones")).to_contain_text("Ya están las seis secciones.")
     expect(p.locator("#opciones-seccion")).to_have_count(0)
-    assert _secciones(p) == ["Desayuno", "Media mañana", "Comida", "Merienda", "Cena", "Sin sección"]
+    assert _secciones(p) == ["Desayuno", "Media mañana", "Comida", "Merienda", "Cena", "Nutrición en carrera",
+                           "Sin sección"]
 
     # S-45: the empty ones only live on this screen while the day is on it
     p.locator("#anterior").click()

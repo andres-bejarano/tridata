@@ -34,6 +34,7 @@ from ..nutricion import Ajustes, Alimento, Cierres, ObjetivosDia, Recetario, Reg
 from ..nutricion.asistente import (Cambiado, Contexto as ContextoAsistente, NoValida, Peticion, TarjetaMal,
                                    confirmar, descripcion_alimento, numero, proponer)
 from ..nutricion.peso import peso_valido
+from ..nutricion.registro import validar_seccion
 from ..plan import Planes
 from ..storage import DataStore
 from ..web.app import DIAS_RECIENTES
@@ -233,8 +234,13 @@ def hacer_desde_pc(equipo: Equipo, papel: str, entrada: Any, huella_vista: str, 
     return hecho + aviso
 
 
-def apuntar_comida_desde_pc(equipo: Equipo, papel: str, dia: Any, alimentos: Any, texto: str = "") -> str:
-    """The foods logged on `dia` as the dictation logs them, without section (R-194): all of them or none."""
+def apuntar_comida_desde_pc(equipo: Equipo, papel: str, dia: Any, alimentos: Any, texto: str = "",
+                            seccion: Any = None) -> str:
+    """The foods logged on `dia` as the dictation logs them (R-194): all of them or none.
+
+    Unit 074 (R-214): with `seccion` (one of `registro.SECCIONES`) all of them go into that section of that day;
+    without it, «Sin sección» as before. A section that is not one logs nothing and says which ones are valid.
+    """
     if papel not in PAPELES_PC:
         return papel_no_valido(papel)
     try:
@@ -244,6 +250,7 @@ def apuntar_comida_desde_pc(equipo: Equipo, papel: str, dia: Any, alimentos: Any
     if not isinstance(alimentos, list) or not alimentos:
         return "No se ha apuntado nada: no hay nada que apuntar (alimentos, con su cantidad y sus kcal)."
     try:
+        validar_seccion(seccion)
         lista = [Alimento.desde_dict({**a, "dia": el_dia.isoformat()} if isinstance(a, dict) else a)
                  for a in alimentos]
         equipo.asistente.registro.validar(lista)
@@ -251,9 +258,10 @@ def apuntar_comida_desde_pc(equipo: Equipo, papel: str, dia: Any, alimentos: Any
         return f"No se ha apuntado nada: {exc}."
     a = equipo.asistente
     guardados = a.registro.guardar(lista, hoy=a.hoy(), texto=texto.strip() or f"{TITULO} ({papel})",
-                                   sin_cambios=False)
+                                   sin_cambios=False, seccion=seccion)
     que = "; ".join(descripcion_alimento({**g, "creado": None}) for g in guardados)
-    hecho = f"Hecho: apuntado el {el_dia.isoformat()}: {que}."
+    donde = f" en la sección {seccion}" if seccion else ""
+    hecho = f"Hecho: apuntado el {el_dia.isoformat()}{donde}: {que}."
     _apuntar(equipo, papel, texto, hecho)
     return hecho
 

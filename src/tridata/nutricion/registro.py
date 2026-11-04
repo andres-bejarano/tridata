@@ -47,7 +47,14 @@ _COLUMNAS = (
 # unit 035 (R-121, R-126, G-51): the meal of the day a food belongs to, chosen by Andrés by dragging it;
 # NULL («Sin sección») for everything logged and for what was already in the store.
 _COLUMNAS_NUEVAS = (("origen", "TEXT"), ("provisional", "INTEGER NOT NULL DEFAULT 0"), ("seccion", "TEXT"))
-SECCIONES = ("desayuno", "media_manana", "comida", "merienda", "cena")
+# unit 074 (R-212, S-71): «Nutrición en carrera» (`carrera`), the sixth one, after dinner
+SECCIONES = ("desayuno", "media_manana", "comida", "merienda", "cena", "carrera")
+
+
+def validar_seccion(seccion: object) -> None:
+    """One of `SECCIONES` or None («Sin sección»); otherwise ValueError saying which ones are valid."""
+    if seccion is not None and not (isinstance(seccion, str) and seccion in SECCIONES):
+        raise ValueError(f"«{seccion}» no es una sección: tiene que ser una de {', '.join(SECCIONES)}")
 
 
 def _estado(dia: date, hoy: date) -> str:
@@ -161,13 +168,18 @@ class RegistroComidas:
             if a.cantidad is not None and a.kcal is None:
                 raise ValueError(f"«{a.nombre}» tiene cantidad pero no kcal")
 
-    def guardar(self, alimentos: list[Alimento], hoy: date, texto: str, sin_cambios: bool) -> list[dict]:
+    def guardar(self, alimentos: list[Alimento], hoy: date, texto: str, sin_cambios: bool,
+                seccion: str | None = None) -> list[dict]:
         """Save a confirmed list, food by food, plus its interpretation. All or nothing.
+
+        Unit 074 (R-214): with `seccion` (one of `SECCIONES`) every food goes into it; without it, «Sin sección» as
+        the dictation and «Añadir a mano» always do (S-42). A section that is not one is a ValueError, nothing saved.
 
         A food for a later day is `planeado` there; today (or a past day) it is `comido`. The list
         may be empty (a confirmation with only a weight or an objective, unit 007): the
         interpretation is saved all the same.
         """
+        validar_seccion(seccion)
         self.validar(alimentos)
         ahora = datetime.now().isoformat(timespec="seconds")
         with self._connect() as conn:
@@ -180,12 +192,12 @@ class RegistroComidas:
                 conn.execute(
                     "INSERT INTO alimento_apuntado (dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, "
                     "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado, origen, "
-                    "provisional) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "provisional, seccion) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         a.dia.isoformat(), a.nombre, a.cantidad, a.unidad, a.kcal, a.proteina_g, a.hidratos_g,
                         a.grasa_g, _estado(a.dia, hoy), int(a.estimado),
                         json.dumps(a.supuestos, ensure_ascii=False), int(a.pendiente_cantidad),
-                        interpretacion_id, ahora, a.origen, int(a.provisional),
+                        interpretacion_id, ahora, a.origen, int(a.provisional), seccion,
                     ),
                 )
             filas = conn.execute(
@@ -194,12 +206,16 @@ class RegistroComidas:
             ).fetchall()
         return [self._fila(f) for f in filas]
 
-    def cambiar(self, alimento_id: int, datos: dict, hoy: date | None = None) -> dict:
+    def cambiar(self, alimento_id: int, datos: dict, hoy: date | None = None,
+                de_lo_guardado: bool = False) -> dict:
         """Change name, quantity, unit and kcal of a saved food, and its day if `datos` brings one.
 
         Moving to another day sets the state by the same rule as `guardar` (needs `hoy`); without
         a day, or with the same one, day and state stay as they were. New kcal stop being
         `estimado`, and lose `origen` and `provisional` (unit 016). KeyError if the id does not exist, ValueError if invalid.
+        Unit 074 (R-213): `de_lo_guardado` is a saved recipe or ingredient chosen on the change card, already worked
+        out by the server: its `origen` and `provisional` are kept and the macros of the food it was are dropped. The
+        section never changes here.
         """
         with self._connect() as conn:
             fila = self._leer(conn, alimento_id)
@@ -217,6 +233,10 @@ class RegistroComidas:
             # unit 016 (R7): kcal written by hand no longer come from the recipe, nor are provisional
             origen = fila["origen"] if mismas_kcal else None
             provisional = bool(fila["provisional"]) and mismas_kcal
+            if de_lo_guardado:
+                estimado, origen, provisional = False, nuevo.origen, nuevo.provisional
+                conn.execute("UPDATE alimento_apuntado SET proteina_g = NULL, hidratos_g = NULL, grasa_g = NULL "
+                             "WHERE id = ?", (alimento_id,))
             conn.execute(
                 "UPDATE alimento_apuntado SET nombre = ?, cantidad = ?, unidad = ?, kcal = ?, estimado = ?, "
                 "pendiente_cantidad = ?, dia = ?, estado = ?, origen = ?, provisional = ? WHERE id = ?",
@@ -250,13 +270,12 @@ class RegistroComidas:
             return self._fila(self._leer(conn, alimento_id))
 
     def mover_seccion(self, alimento_id: int, seccion: str | None) -> dict:
-        """Unit 035 (R-123, G-52): put a food in one of the five sections, or back «Sin sección» with None.
+        """Unit 035 (R-123, G-52): put a food in one of the six sections (074), or back «Sin sección» with None.
 
         Only the section changes: kcal, quantity and state stay as they were. ValueError if `seccion` is not one
         of `SECCIONES` nor None, KeyError if the food does not exist; in both cases nothing changes.
         """
-        if seccion is not None and not (isinstance(seccion, str) and seccion in SECCIONES):
-            raise ValueError(f"«{seccion}» no es una sección: tiene que ser una de {', '.join(SECCIONES)}")
+        validar_seccion(seccion)
         with self._connect() as conn:
             self._leer(conn, alimento_id)
             conn.execute("UPDATE alimento_apuntado SET seccion = ? WHERE id = ?", (seccion, alimento_id))

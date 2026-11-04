@@ -15,7 +15,8 @@
     POST /api/alimento            add a food by hand (no AI, no interpretation); body with `dia`; unit 019:
                                   or chosen from the saved ones (`guardado`, see below)
     POST /api/alimento/N          change a saved food (name, quantity, unit, kcal; `dia` optional
-                                  moves it, with the planned/eaten rule)
+                                  moves it, with the planned/eaten rule); unit 074: or into one chosen
+                                  from the saved ones (`guardado`, see below), same row and section
     POST /api/alimento/N/borrar   delete a saved food; only with {"confirmado": true} (R-11)
     POST /api/alimento/N/comido   mark a planned food as eaten (today or a past day only)
     GET  /api/dia                 the day table, total, expenditure, margins and plan (?fecha=AAAA-MM-DD),
@@ -141,10 +142,11 @@ and fixed foods (`Recetario.resolver`): `origen` («de tu receta …»), `provis
 was said and the saved one proposed, when it is only alike) and `kcal_estimada` (Claude's, to go
 back to it). /api/confirmar keeps `origen` and `provisional` in the row, and /api/dia shows them.
 
-Unit 019 (R-93, R-57): a food of /api/alimento or /api/confirmar chosen from the saved ones carries
-`guardado: {"tipo": "receta"|"fijo", "id": N}` with its `cantidad` and `unidad` ("g", "unidad", or "receta" for a
-fraction of a recipe). It goes through `Recetario.para_apuntar` before anything else: its name, quantity, unit,
-kcal, origin and provisional are the server's (never the page's kcal), not estimated nor doubtful; its day stays.
+Unit 019 (R-93, R-57): a food of /api/alimento, /api/alimento/N (unit 074) or /api/confirmar chosen from the
+saved ones carries `guardado: {"tipo": "receta"|"fijo", "id": N}` with its `cantidad` and `unidad` ("g", "unidad",
+or "receta" for a fraction of a recipe). It goes through `Recetario.para_apuntar` before anything else: its name,
+quantity, unit, kcal, origin and provisional are the server's (never the page's kcal), not estimated nor doubtful;
+its day stays (and, in a change, its row and section).
 Gone is 422 «"…" ya no está guardado», one that cannot be worked out is 422 with why, a malformed one is 400, and
 nothing is saved (in /api/confirmar, nothing of the list: every one is resolved before writing). A `guardado` that
 is not an object (the name Claude matched, unit 011) is not a choice and is ignored as before.
@@ -860,13 +862,19 @@ def crear_app(
 
     async def cambiar(request: Request) -> Response:
         cuerpo = await _cuerpo(request) or {}
+        # unit 074 (R-213): a saved recipe or ingredient chosen on the change card, worked out as in the add
+        de_lo_guardado = isinstance(cuerpo, dict) and isinstance(cuerpo.get("guardado"), dict)
+        try:
+            cuerpo = _con_lo_guardado(recetario, cuerpo)
+        except NoSeGuarda as exc:
+            return _error(str(exc), exc.estado)
         try:
             Alimento.desde_dict({**cuerpo, "dia": cuerpo.get("dia") or hoy().isoformat()})
         except ValueError as exc:
             return _error(str(exc), 400)
         try:
             origen = registro.alimento(request.path_params["id"])
-            cambiado = registro.cambiar(request.path_params["id"], cuerpo, hoy=hoy())
+            cambiado = registro.cambiar(request.path_params["id"], cuerpo, hoy=hoy(), de_lo_guardado=de_lo_guardado)
         except KeyError:
             return _error(NO_ESTA, 404)
         except ValueError as exc:

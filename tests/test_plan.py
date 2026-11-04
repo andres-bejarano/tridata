@@ -815,3 +815,41 @@ def test_movida_a_mano_la_siguiente_pasada_de_garmin_no_la_devuelve(tmp_path):  
     planes.aplicar_garmin(ident, cambios(planes.sesiones_garmin(ident, HOY, date(2026, 11, 1)), [movida]))
     assert planes.sesion(sesion)["fecha"] == "2026-10-25"
     assert next(s["estado"] for s in planes.sesiones_reloj(ident) if s["id"] == sesion) == "al_dia"
+
+
+# -- unit 072: weeks that do not overlap, and phases that never point at weeks that are not there ----------------------
+
+def test_una_semana_que_pisa_otra_no_se_guarda_y_dice_cual(tmp_path):  # 072 · R1
+    planes, ident = _con_semanas(tmp_path, 3)  # weeks 1-3: 2026-10-19 to 2026-11-08, one after the other
+    antes = planes.leer(ident)
+    with pytest.raises(ValueError, match="pisa la semana 2"):
+        planes.anadir_semana(ident, {"n": 9, "desde": "2026-10-30", "hasta": "2026-11-05"})
+    with pytest.raises(ValueError, match="pisa la semana 3"):
+        planes.cambiar_semana(ident, 2, {"hasta": "2026-11-02"})  # one day into week 3 is already overlapping
+    assert planes.leer(ident) == antes
+    planes.anadir_semana(ident, {"n": 4, "desde": "2026-11-09", "hasta": "2026-11-15"})  # the next day: fine
+    planes.cambiar_semana(ident, 4, {"previsto": "5h"})  # changing a week against itself: fine
+    assert [s["n"] for s in planes.leer(ident)["semanas"]] == [1, 2, 3, 4]
+
+
+def test_borrar_la_ultima_semana_de_una_fase_la_encoge(tmp_path):  # 072 · R2
+    planes, ident = _con_semanas(tmp_path, 8)
+    base = planes.anadir_fase(ident, "Base", 1, 4)
+    sola = planes.anadir_fase(ident, "Puente", 5, 5)
+    especifico = planes.anadir_fase(ident, "Específico", 6, 8)
+    planes.borrar_semana(ident, 4)
+    planes.borrar_semana(ident, 5)  # the only week of «Puente»
+    planes.borrar_semana(ident, 6)  # the first week of «Específico»
+    assert planes.leer(ident)["fases"] == [{"id": base, "nombre": "Base", "desde_n": 1, "hasta_n": 3},
+                                           {"id": especifico, "nombre": "Específico", "desde_n": 7, "hasta_n": 8}]
+    assert sola not in [f["id"] for f in planes.leer(ident)["fases"]]
+    assert [s["n"] for s in planes.leer(ident)["semanas"]] == [1, 2, 3, 7, 8]  # the weeks are only the deleted ones
+
+
+def test_renumerar_una_semana_de_una_fase_la_ajusta(tmp_path):  # 072 · R2
+    planes, ident = _con_semanas(tmp_path, 4)
+    base = planes.anadir_fase(ident, "Base", 1, 2)
+    planes.cambiar_semana(ident, 2, {"n": 12})  # week 2 is now 12: «Base» keeps week 1 only
+    assert planes.leer(ident)["fases"] == [{"id": base, "nombre": "Base", "desde_n": 1, "hasta_n": 1}]
+    planes.cambiar_semana(ident, 3, {"previsto": "6h"})  # a change that keeps the number does not touch phases
+    assert planes.leer(ident)["fases"] == [{"id": base, "nombre": "Base", "desde_n": 1, "hasta_n": 1}]

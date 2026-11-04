@@ -668,6 +668,26 @@ class Planes:
                             (plan_id, semana["n"], rowid or -1)).fetchone()
         if otra is not None:
             raise ValueError(f"Ya hay una semana {semana['n']} en el plan")
+        pisada = conn.execute("SELECT n, desde, hasta FROM plan_semana WHERE plan_id = ? AND rowid != ? AND desde <= ? "
+                              "AND hasta >= ? ORDER BY desde LIMIT 1",
+                              (plan_id, rowid or -1, semana["hasta"], semana["desde"])).fetchone()
+        if pisada is not None:  # unit 072: deleting one of two overlapping weeks would take sessions of the other
+            raise ValueError(f"Esa semana pisa la semana {pisada[0]} (del {pisada[1]} al {pisada[2]}): una semana "
+                             "no comparte días con otra del plan")
+
+    @staticmethod
+    def _ajustar_fases(conn: sqlite3.Connection, plan_id: int) -> None:
+        """Unit 072: each phase keeps the weeks it still has inside its stretch (first and last number), or goes if it
+        has none; called after a week is deleted or renumbered. The weeks themselves are not touched."""
+        tiene = sorted(int(f[0]) for f in conn.execute("SELECT n FROM plan_semana WHERE plan_id = ?", (plan_id,)))
+        for fase in conn.execute("SELECT rowid, desde_n, hasta_n FROM plan_fase WHERE plan_id = ?",
+                                 (plan_id,)).fetchall():
+            dentro = [n for n in tiene if fase[1] <= n <= fase[2]]
+            if not dentro:
+                conn.execute("DELETE FROM plan_fase WHERE rowid = ?", (fase[0],))
+            elif (dentro[0], dentro[-1]) != (fase[1], fase[2]):
+                conn.execute("UPDATE plan_fase SET desde_n = ?, hasta_n = ? WHERE rowid = ?",
+                             (dentro[0], dentro[-1], fase[0]))
 
     def anadir_semana(self, plan_id: int, datos: dict[str, Any]) -> None:
         """A week (`{n, desde, hasta, previsto, clave}`; `previsto` as «4:30», «4h30» or «270'») of that plan, also of
@@ -697,6 +717,8 @@ class Planes:
             conn.execute("UPDATE plan_semana SET n = ?, desde = ?, hasta = ?, previsto_s = ?, clave = ? WHERE rowid = ?",
                          (semana["n"], semana["desde"], semana["hasta"], semana["previsto_s"], semana["clave"],
                           fila["id"]))
+            if semana["n"] != fila["n"]:
+                self._ajustar_fases(conn, plan_id)
 
     def sesiones_de_semana(self, plan_id: int, n: int) -> int:
         """How many sessions week `n` of that plan has (what goes with it if it is deleted). LookupError without it."""
@@ -708,12 +730,13 @@ class Planes:
 
     def borrar_semana(self, plan_id: int, n: int) -> int:
         """Week `n` out of that plan with its sessions, in one transaction; how many sessions went with it (R-203). Its
-        phase stays. Garmin is not touched here (`web/plan.py` removes the sent ones first). LookupError without it."""
+        phase stays, shrunk to the weeks it still has (unit 072). Garmin is not touched here (`web/plan.py` removes the sent ones first). LookupError without it."""
         with self._connect() as conn:
             fila = self._fila_semana(conn, plan_id, n)
             borradas = conn.execute("DELETE FROM plan_sesion WHERE plan_id = ? AND fecha BETWEEN ? AND ?",
                                     (plan_id, fila["desde"], fila["hasta"])).rowcount
             conn.execute("DELETE FROM plan_semana WHERE rowid = ?", (fila["id"],))
+            self._ajustar_fases(conn, plan_id)
         return int(borradas)
 
     @staticmethod

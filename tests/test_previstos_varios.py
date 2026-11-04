@@ -385,3 +385,41 @@ def test_el_asistente_no_pasa_de_diez(a):  # R6
     assert t["tipo"] == "no" or t["error"]
     assert "10" in (t.get("error") or t["texto"])
     assert len(a.objetivos.del_dia(HOY)["previstos"]) == 10
+
+
+# -- unit 070: the team names the reference by its id when two of the same day share the name ------------------------
+
+GEMELAS = [_actividad("p-rodaje-1", 1, "running", "Rodaje de prueba", 40, 400),
+           _actividad("p-rodaje-2", 1, "running", "Rodaje de prueba", 60, 660)]  # the same day, the same name
+
+
+@pytest.fixture
+def g(tmp_path):
+    asistente = Asistente(tmp_path)
+    recientes = [_como_reciente(x) for x in [*ACTIVIDADES[:3], *GEMELAS]]
+    asistente.ctx = Contexto(registro=asistente.registro, objetivos=asistente.objetivos, ajustes=asistente.ajustes,
+                             pesos=asistente.pesos, recetario=asistente.recetario, hoy=lambda: HOY,
+                             recientes=lambda: recientes)
+    return asistente
+
+
+def test_por_su_id_elige_esa_aunque_otra_se_llame_igual(g):  # 070 · R1
+    t = g.proponer("p-rodaje-1", 30)
+    assert t["tipo"] == "propuesta" and t["error"] is None, t
+    confirmar(t, g.ctx)
+    (previsto,) = g.objetivos.del_dia(HOY)["previstos"]
+    assert previsto["actividad_id"] == "p-rodaje-1"
+    assert previsto["kcal"] == 300  # 30 min of the 40 min one (400 kcal), not of the 60 min one
+
+
+def test_por_su_nombre_sigue_siendo_la_ultima(g):  # 070 · R2: naming it as today does not change
+    t = g.proponer("rodaje", 30)
+    confirmar(t, g.ctx)
+    assert g.previstos() == [("p-rodaje-2", 30)]
+
+
+@pytest.mark.parametrize("ident", ["p-no-existe", "p-vieja"])  # p-vieja: 20 days ago, outside the last 14
+def test_un_id_que_no_esta_no_elige_otra(g, ident):  # 070 · R2
+    t = g.proponer(ident, 30)
+    assert t["tipo"] == "no"
+    assert g.objetivos.del_dia(HOY) is None

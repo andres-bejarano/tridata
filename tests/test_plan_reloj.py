@@ -124,6 +124,32 @@ def test_por_distancia_y_por_tiempo_en_horas():  # R1 · C-199
     assert esfuerzo["targetType"]["workoutTargetTypeKey"] == "no.target"  # «por esfuerzo»: no target
 
 
+# Garmin Connect keeps the id of an end condition and drops the key: 1 is the lap button, 2 time, 3 distance, 7 the
+# iterations of a repeat. A step sent with the id of the lap button waits on the watch until it is pressed.
+_ID_DE_GARMIN = {"lap.button": 1, "time": 2, "distance": 3, "iterations": 7}
+
+
+def _todos_los_pasos(pasos: list[dict]) -> list[dict]:
+    salida = []
+    for paso in pasos:
+        salida.append(paso)
+        salida += _todos_los_pasos(paso.get("workoutSteps") or [])
+    return salida
+
+
+def test_cada_paso_acaba_solo_por_su_tiempo_o_su_distancia():  # bug 068 · R1, R2
+    sesion = {"id": 9, "fecha": "2026-11-05", "titulo": "Series de prueba",
+              "bloques": ["20' a 5:30", "4×1000 a 3:50 (2' rec)", "5 km a 4:30", "400 m suave", "20' a 5:30"]}
+    pasos = _todos_los_pasos(a_garmin(sesion)["workoutSegments"][0]["workoutSteps"])
+    fines = [p["endCondition"] for p in pasos]
+    assert [f["conditionTypeKey"] for f in fines] == ["time", "iterations", "distance", "time", "distance",
+                                                      "distance", "time"]
+    for fin in fines:  # R1, R2: the id is the one of its key, so Garmin keeps it
+        assert fin["conditionTypeId"] == _ID_DE_GARMIN[fin["conditionTypeKey"]]
+        assert fin["displayOrder"] == fin["conditionTypeId"]
+    assert _ID_DE_GARMIN["lap.button"] not in [f["conditionTypeId"] for f in fines]  # R2: no step waits for a lap
+
+
 def test_una_sola_linea_es_un_bloque_de_trabajo():  # R1
     (bloque,) = a_garmin({"id": 9, "fecha": "2026-10-29", "titulo": "Rodaje", "bloques": ["40' a 5:40"]}
                          )["workoutSegments"][0]["workoutSteps"]

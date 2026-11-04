@@ -62,7 +62,8 @@ _PARENTESIS = re.compile(r"\(([^)]*)\)")
 
 _PASO = {"warmup": (1, "Calentamiento"), "cooldown": (2, "Vuelta a la calma"), "interval": (3, "Bloque"),
          "recovery": (4, "Recuperación"), "repeat": (6, "Repetición")}
-_FIN = {"distance": {"conditionTypeId": 1, "conditionTypeKey": "distance", "displayOrder": 1, "displayable": True},
+# Garmin keeps the id and drops the key: 1 is the lap button (bug 068), so distance has to be 3.
+_FIN = {"distance": {"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": True},
         "time": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": True},
         "iterations": {"conditionTypeId": 7, "conditionTypeKey": "iterations", "displayOrder": 7,
                        "displayable": False}}

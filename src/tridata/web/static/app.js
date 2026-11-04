@@ -101,9 +101,10 @@ const porCien = new WeakMap(); // unit 013: the kcal/100 g typed on a review car
 let pestanaVista = null; // the place on screen, to reload the day when coming back to Día (unit 013)
 let parteFitness = null; // unit 040: "forma" or "plan", the part of Fitness on screen
 let diaPedido = null; // unit 017: a day tapped in Balance, opened when Día shows up
-// unit 035: the five sections in the order of the day; "" is «Sin sección», always last
+// unit 035: the sections in the order of the day; "" is «Sin sección», always last. Unit 074 (R-212, S-71): the
+// sixth, «Nutrición en carrera», after dinner
 const SECCIONES = [["desayuno", "Desayuno"], ["media_manana", "Media mañana"], ["comida", "Comida"],
-  ["merienda", "Merienda"], ["cena", "Cena"]];
+  ["merienda", "Merienda"], ["cena", "Cena"], ["carrera", "Nutrición en carrera"]];
 const NOMBRE_SECCION = Object.fromEntries([...SECCIONES, ["", "Sin sección"]]);
 let seccionesNuevas = new Set(); // unit 035 (S-45): sections just created, still empty, of the day on screen
 let eligiendoSeccion = false; // unit 035: «Añadir sección» open: false · "elegir" · "todas"
@@ -473,7 +474,7 @@ function pieSecciones(faltan) {
   const cerrar = el("button", { type: "button", className: "cancelar-seccion", textContent: eligiendoSeccion === "todas" ? "Vale" : "Cancelar" });
   cerrar.addEventListener("click", () => { eligiendoSeccion = false; pintarLista(ultimoDia); });
   if (eligiendoSeccion === "todas" || !faltan.length) {
-    pie.append(el("p", { className: "suave", textContent: "Ya están las cinco secciones." }), cerrar);
+    pie.append(el("p", { className: "suave", textContent: "Ya están las seis secciones." }), cerrar);
     return pie;
   }
   const opciones = el("div", { className: "opciones-seccion", id: "opciones-seccion" });
@@ -920,10 +921,12 @@ async function simularRevision() {
 }
 
 // Inputs of a saved-food card; `leer()` takes what is typed at that moment (R7).
-// Unit 019: with `buscar` («Añadir a mano», not the card to change one) the name is the search box; once a saved
-// thing is chosen, quantity, unit, kcal and kcal/100 g give way to only how much of it, and `leer()` says
-// `guardado: {tipo, id}` (the kcal it sends are only shown: the server works them out again).
-function camposFicha(a, { buscar = false } = {}) {
+// Unit 019: with `buscar` («Añadir a mano», and since unit 074 the card to change one) the name is the search box;
+// once a saved thing is chosen, quantity, unit, kcal and kcal/100 g give way to only how much of it, and `leer()`
+// says `guardado: {tipo, id}` (the kcal it sends are only shown: the server works them out again). Until one is
+// chosen the card works as without it (bug 025 included). Unit 074 (R-213): with `conservarCantidad` (the change
+// card) the chosen one starts with the quantity typed, when it is in its own unit.
+function camposFicha(a, { buscar = false, conservarCantidad = false } = {}) {
   const nombre = campo("Alimento", a.nombre, "text");
   const cant = campo("Cantidad", a.cantidad, "number", null, { step: "any", min: "0", inputMode: "decimal" });
   const unidad = campo("Unidad", a.unidad, "text");
@@ -958,7 +961,9 @@ function camposFicha(a, { buscar = false } = {}) {
     lista = buscador({
       entrada: nombre.entrada,
       alElegir: ({ tipo, cosa }) => {
-        elegido = { tipo, cosa, caja: cajaElegida({ tipo, cosa, alSoltar: soltar }) };
+        const c = comoNumero(cant.entrada.value);
+        const tenia = conservarCantidad && c > 0 ? { cantidad: c, unidad: unidad.entrada.value.trim() || "g" } : {};
+        elegido = { tipo, cosa, caja: cajaElegida({ tipo, cosa, ...tenia, alSoltar: soltar }) };
         nombre.entrada.readOnly = true;
         cuanto.replaceChildren(elegido.caja.caja);
         elegido.caja.foco();
@@ -1017,9 +1022,10 @@ function ficha({ campos, textoGuardar, enviar, alCancelar }) {
   return { tarjeta, acciones, avisar };
 }
 
-// Change card of a saved food: name, quantity, unit, kcal and day; delete with confirmation.
+// Change card of a saved food: name, quantity, unit, kcal and day; delete with confirmation. Unit 074 (R-213): the
+// name searches the saved recipes and ingredients; one chosen changes this same row (same id, day and section).
 function fichaCambio(a) {
-  const campos = camposFicha(a);
+  const campos = camposFicha(a, { buscar: true, conservarCantidad: true });
   const cerrar = () => { editando = null; mensaje(""); pintarDia(ultimoDia); };
   const { tarjeta, acciones, avisar } = ficha({
     campos, textoGuardar: "Guardar cambios", alCancelar: cerrar,

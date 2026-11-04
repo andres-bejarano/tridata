@@ -40,6 +40,7 @@ from .exporters import (
 )
 from .metrics import LimitesDelDia, compute_pmc, daily_tss, pmc_hasta, trimp_for_activity
 from .nutricion.ajustes import historial_fc_de
+from .nutricion.registro import SECCIONES
 from .storage import DEFAULT_DB_PATH, DataStore
 from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES
 
@@ -408,18 +409,23 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
 
     comida_desc = (
         "Log what Andrés ate (told, or estimated by you from a photo) on one day, as the dictation of the app logs "
-        "it (no section). FIRST show him each food with its quantity and kcal and ask; only with his «sí» call "
-        "this. If one food does not pass the checks, none is logged and the answer says why.\n"
+        "it. FIRST show him each food with its quantity and kcal (and the section, if any) and ask; only with his "
+        "«sí» call this. If one food does not pass the checks, none is logged and the answer says why.\n"
         f"{papeles} dia: YYYY-MM-DD. alimentos: a list of objects with nombre, cantidad (> 0), unidad "
         "(g, ml or unidad), kcal (>= 0; required with a quantity), and optionally proteina_g, hidratos_g, grasa_g "
-        "and estimado (true if you estimated it). texto (optional): what he said, in Spanish.\n" + registro)
+        "and estimado (true if you estimated it). texto (optional): what he said, in Spanish.\n"
+        f"seccion (optional): use it when Andrés says which meal it goes in («en el desayuno», «un gel en la "
+        f"carrera»), and all the foods go into that section of the day: one of {', '.join(SECCIONES)} "
+        "(media_manana is «media mañana», carrera is «Nutrición en carrera», for gels and drinks of a race or a long "
+        "training). If he does not say it, omit it: they go «Sin sección». Another value logs nothing.\n" + registro)
 
     @server.tool(name="apuntar_comida", description=comida_desc,
                  annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
                                              open_world_hint=False),
                  structured_output=False)
-    def apuntar_comida_tool(papel: str, dia: str, alimentos: list[dict[str, Any]], texto: str = "") -> str:
-        return apuntar_comida_desde_pc(equipo, papel, dia, alimentos, texto)
+    def apuntar_comida_tool(papel: str, dia: str, alimentos: list[dict[str, Any]], texto: str = "",
+                            seccion: str | None = None) -> str:
+        return apuntar_comida_desde_pc(equipo, papel, dia, alimentos, texto, seccion)
 
     peso_desc = (
         "Log Andrés's weight of one day (today or a past day), as the weight piece of the dictation: it replaces the "

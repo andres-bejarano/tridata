@@ -373,3 +373,51 @@ def test_solo_se_escribe_con_las_de_r2_a_r5(mundo):  # R8
     tools = {t.name for t in asyncio.run(mundo.server.list_tools())}
     assert "proponer_cambio" not in tools
     assert {"preparar_cambio", "hacer_cambio", "apuntar_comida", "apuntar_peso"} <= tools
+
+
+# -- 074 · R2 (load-bearing) · R-214, C-264: the coach logs in the section Andrés says ------------------------------
+
+GEL = {"nombre": "gel inventado", "cantidad": 1, "unidad": "unidad", "kcal": 100}
+SEIS = ("desayuno", "media_manana", "comida", "merienda", "cena", "carrera")
+
+
+def _del_dia(mundo, nombre: str) -> list[dict]:
+    return [a for a in RegistroComidas(mundo.db).apuntes_del_dia(HOY) if a["nombre"] == nombre]
+
+
+@pytest.mark.parametrize("seccion", SEIS)
+def test_apuntar_comida_en_una_seccion_los_deja_todos_ahi(mundo, seccion):  # R2 · C-264
+    respuesta = mundo.llamar("apuntar_comida", {"papel": "nutricionista", "dia": HOY.isoformat(),
+                                                "alimentos": [GEL, {**GEL, "nombre": "otro gel inventado"}],
+                                                "seccion": seccion, "texto": "Dos geles en la carrera."})
+    assert respuesta.startswith("Hecho"), respuesta
+    geles = _del_dia(mundo, "gel inventado") + _del_dia(mundo, "otro gel inventado")
+    assert [(g["seccion"], g["dia"]) for g in geles] == [(seccion, HOY.isoformat())] * 2
+    assert _del_dia(mundo, "gachas inventadas")[0]["seccion"] is None  # what was there stays where it was
+
+
+def test_apuntar_comida_sin_seccion_queda_sin_seccion(mundo):  # R2: as before (R-194)
+    respuesta = mundo.llamar("apuntar_comida", {"papel": "nutricionista", "dia": HOY.isoformat(), "alimentos": [GEL]})
+    assert respuesta.startswith("Hecho")
+    assert [g["seccion"] for g in _del_dia(mundo, "gel inventado")] == [None]
+
+
+@pytest.mark.parametrize("mala", ["brunch", "Nutrición en carrera", "Desayuno", ""])
+def test_apuntar_comida_en_una_seccion_que_no_existe_no_apunta_nada(mundo, mala):  # R2
+    antes = mundo.volcado()
+    respuesta = mundo.llamar("apuntar_comida", {"papel": "nutricionista", "dia": HOY.isoformat(),
+                                                "alimentos": [GEL], "seccion": mala})
+    assert "No se ha apuntado nada" in respuesta
+    for clave in SEIS:  # it says which ones are valid
+        assert clave in respuesta
+    assert mundo.volcado() == antes
+    assert mundo.mensajes_pc() == []
+
+
+def test_la_descripcion_dice_cuando_usar_la_seccion(mundo):  # R2
+    herramienta = next(t for t in asyncio.run(mundo.server.list_tools()) if t.name == "apuntar_comida")
+    assert "seccion" in herramienta.input_schema["properties"]
+    assert "seccion" not in herramienta.input_schema.get("required", [])
+    for clave in SEIS:
+        assert clave in herramienta.description
+    assert "says which meal" in herramienta.description

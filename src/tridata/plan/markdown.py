@@ -100,7 +100,7 @@ def _apartado(plan: dict, i: int, store: DataStore | None, hoy: date, vivas: lis
         bloques.append(_tabla(cabecera, [
             (s["n"], s["desde"], s["hasta"], hmm(s["previsto_s"]), s["clave"], *_hecho(s, store, hoy),
              *((semanas_del_plan.fase_de(plan, s["n"]),) if con_fases else ())) for s in de["semanas"]]))
-    for s in de["sesiones"]:
+    for s in sorted(de["sesiones"], key=lambda s: s["fecha"]):  # unit 073: a moved one in its day (stable sort)
         bloques.append("\n".join([f"### {s['fecha']} · {_celda(s['titulo'])}", *(f"- {b}" for b in s["bloques"])]))
     if de["nutricion"]:
         bloques.append(_tabla(("Producto", "Pauta"), [(n["producto"], n["pauta"]) for n in de["nutricion"]]))

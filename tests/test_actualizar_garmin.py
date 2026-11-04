@@ -188,3 +188,34 @@ def test_cmd_web_pasa_el_store_de_la_misma_base(tmp_path, monkeypatch):  # R1
     DataStore(db).save_daily_stats(DailyStats(stat_date=date.today(), steps=12000))
     dia = TestClient(arrancado.call_args.args[0]).get("/api/dia").json()
     assert dia["gasto"]["desglose"]["pasos_hechos"] == 12000
+
+
+# -- unit 069: the button also brings the laps and the weather of the new trainings, as the 08:00 routine ----------
+
+def _actualizar_con(servicio_doble, dia):
+    """Press the button with Garmin and the sync service as doubles (both kept while it runs)."""
+    with patch("tridata.cli.GarminClient"), patch("tridata.cli.SyncService", return_value=servicio_doble):
+        cli._actualizador_garmin(MagicMock(), {"GARMIN_EMAIL": "persona@example.invalid",
+                                               "GARMIN_PASSWORD": "inventada"})(dia)
+
+
+def test_actualizar_trae_tambien_las_vueltas_y_el_tiempo(monkeypatch):  # 069 · R1
+    monkeypatch.setattr(cli, "desde_para_actualizar", lambda estado, dia: dia)
+    servicio = MagicMock()
+    _actualizar_con(servicio, date(2026, 11, 5))
+    nombres = [c[0] for c in servicio.method_calls]
+    assert nombres == ["sync", "sync_laps", "sync_weather"]  # the days first, then what hangs from them
+    servicio.sync_laps.assert_called_once_with(limit=5)
+    servicio.sync_weather.assert_called_once_with(limit=5)
+
+
+@pytest.mark.parametrize("falla", ["sync_laps", "sync_weather"])
+def test_si_fallan_las_vueltas_o_el_tiempo_los_dias_se_quedan(monkeypatch, caplog, falla):  # 069 · R2
+    monkeypatch.setattr(cli, "desde_para_actualizar", lambda estado, dia: dia)
+    servicio = MagicMock()
+    getattr(servicio, falla).side_effect = RuntimeError("Garmin Connect is limiting the requests (429)")
+    with caplog.at_level("WARNING"):
+        _actualizar_con(servicio, date(2026, 11, 5))  # no error for the button
+    servicio.sync.assert_called_once()
+    servicio.sync_weather.assert_called_once()  # a failure in the laps does not skip the weather
+    assert any("429" in r.getMessage() for r in caplog.records)

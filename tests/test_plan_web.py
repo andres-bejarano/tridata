@@ -391,3 +391,100 @@ def test_anadir_quitar_pasar_y_hacer_principal_desde_la_web(web):  # R4, R5, R6,
     assert not any(c["principal"] for c in r.json()["plan"]["carreras"])
     assert [(p["id"], p["en_curso"]) for p in r.json()["planes"]] == [(ejemplo, False), (medio, True)]
     assert web.cliente.post("/api/plan/carrera/quitar", content=b"no es json").status_code == 400
+
+
+# -- unit 067: the plan by hand from Fitness › Plan — sessions, weeks and phases (R1-R6, R9 · C-247..C-253, C-256).
+# Every plan, week and session is invented. ---------------------------------------------------------------------------
+
+def _plan_con_semanas(web: Web) -> int:
+    medio = _nuevo(web).json()["plan"]["id"]
+    for n, desde, hasta in ((1, "2026-10-19", "2026-10-25"), (2, "2026-10-26", "2026-11-01")):
+        r = _post(web, "/api/plan/semana/anadir", id=medio, n=n, desde=desde, hasta=hasta, previsto="4:30",
+                  clave="")
+        assert r.status_code == 200, r.text
+    return medio
+
+
+def _dia(web: Web, plan_id: int, n: int, fecha: str) -> dict:
+    r = web.cliente.get(f"/api/plan/semana/{n}?id={plan_id}")
+    assert r.status_code == 200, r.text
+    return next(d for d in r.json()["dias"] if d["fecha"] == fecha)
+
+
+def test_sesiones_a_mano_desde_la_web(web):  # R1, R2, R3, R4 · C-247..C-250
+    medio = _plan_con_semanas(web)
+    r = _post(web, "/api/plan/sesion/anadir", id=medio, fecha="2026-10-23", titulo="Rodaje", bloques="45' a 5:30\n")
+    assert r.status_code == 200, r.text
+    assert r.json()["plan"]["id"] == medio  # answered like GET /api/plan, with that plan
+    dia = _dia(web, medio, 1, "2026-10-23")
+    assert dia["sesiones"] == [{"titulo": "Rodaje", "bloques": ["45' a 5:30"], "clave": False}]
+    (reloj,) = dia["reloj"]
+    sesion = reloj["id"]
+
+    r = _post(web, "/api/plan/sesion/cambiar", sesion=sesion, titulo="Rodaje", bloques=["50' a 5:30"])
+    assert r.status_code == 200, r.text
+    assert _dia(web, medio, 1, "2026-10-23")["sesiones"][0]["bloques"] == ["50' a 5:30"]
+    r = _post(web, "/api/plan/sesion/mover", sesion=sesion, fecha="2026-10-27")
+    assert r.status_code == 200, r.text
+    assert _dia(web, medio, 1, "2026-10-23")["sesiones"] == []
+    movida = _dia(web, medio, 2, "2026-10-27")
+    assert movida["sesiones"][0]["bloques"] == ["50' a 5:30"] and movida["reloj"][0]["id"] == sesion  # the same one
+
+    r = _post(web, "/api/plan/sesion/borrar", sesion=sesion)
+    assert r.status_code == 200, r.text
+    assert "aviso" not in r.json()  # it was never in Garmin
+    assert _dia(web, medio, 2, "2026-10-27")["sesiones"] == []
+    assert _post(web, "/api/plan/sesion/borrar", sesion=sesion).status_code == 404
+
+
+def test_sesiones_a_mano_dicen_por_que_no_se_guardan(web):  # R1, R9 · C-256
+    medio = _plan_con_semanas(web)
+    r = _post(web, "/api/plan/sesion/anadir", id=medio, fecha="2026-10-20", titulo="Ayer", bloques=["30'"])
+    assert r.status_code == 400 and "Ese día ya pasó" in r.json()["error"]
+    r = _post(web, "/api/plan/sesion/anadir", id=medio, fecha="2026-10-23", titulo=" ", bloques=["30'"])
+    assert r.status_code == 400 and "título" in r.json()["error"]
+    assert _post(web, "/api/plan/sesion/anadir", id=999, fecha="2026-10-23", titulo="X", bloques=[]).status_code == 404
+    assert _post(web, "/api/plan/sesion/cambiar", sesion=999, titulo="X", bloques=[]).status_code == 404
+    assert _post(web, "/api/plan/sesion/mover", sesion=999, fecha="2026-10-23").status_code == 404
+    assert _post(web, "/api/plan/sesion/mover", sesion="1", fecha="2026-10-23").status_code == 404
+    assert web.cliente.post("/api/plan/sesion/anadir", content=b"no es json").status_code == 400
+    _post(web, "/api/plan/sesion/anadir", id=medio, fecha="2026-10-23", titulo="Rodaje", bloques=["30'"])
+    sesion = _dia(web, medio, 1, "2026-10-23")["reloj"][0]["id"]
+    r = _post(web, "/api/plan/sesion/mover", sesion=sesion, fecha="2026-10-19")
+    assert r.status_code == 400 and "Ese día ya pasó" in r.json()["error"]
+
+
+def test_semanas_y_fases_desde_la_web(web):  # R5, R6 · C-251..C-253
+    medio = _plan_con_semanas(web)
+    r = _post(web, "/api/plan/semana/anadir", id=medio, n=3, desde="2026-11-08", hasta="2026-11-02", previsto="",
+              clave="")
+    assert r.status_code == 400 and "hasta" in r.json()["error"]
+    r = _post(web, "/api/plan/semana/cambiar", id=medio, semana=2, clave="tirada 1h30", previsto="5:00")
+    assert r.status_code == 200, r.text
+    s2 = r.json()["plan"]["semanas"][1]
+    assert (s2["n"], s2["clave"], s2["previsto_s"]) == (2, "tirada 1h30", 5 * 3600)
+
+    r = _post(web, "/api/plan/fase/anadir", id=medio, nombre="Base", desde=1, hasta=2)
+    assert r.status_code == 200, r.text
+    plan = r.json()["plan"]
+    (fase,) = plan["fases"]
+    assert (fase["nombre"], fase["desde_n"], fase["hasta_n"]) == ("Base", 1, 2)
+    assert [s.get("fase") for s in plan["semanas"]] == ["Base", "Base"]
+    r = _post(web, "/api/plan/fase/anadir", id=medio, nombre="Otra", desde=2, hasta=2)
+    assert r.status_code == 400 and "Base" in r.json()["error"]
+    r = _post(web, "/api/plan/fase/cambiar", id=medio, fase=fase["id"], nombre="Base aeróbica", desde=1, hasta=1)
+    assert r.status_code == 200 and r.json()["plan"]["fases"][0]["nombre"] == "Base aeróbica"
+    assert "| 1 | 2026-10-19 | 2026-10-25 | 4:30 |  |  |  | Base aeróbica |" in web.cliente.get(
+        f"/api/plan/{medio}.md").text
+    r = _post(web, "/api/plan/fase/borrar", id=medio, fase=fase["id"])
+    assert r.status_code == 200 and not r.json()["plan"].get("fases")
+    assert _post(web, "/api/plan/fase/borrar", id=medio, fase=fase["id"]).status_code == 404
+
+    _post(web, "/api/plan/sesion/anadir", id=medio, fecha="2026-10-27", titulo="Rodaje", bloques=["30'"])
+    _post(web, "/api/plan/sesion/anadir", id=medio, fecha="2026-10-28", titulo="Series", bloques=["30'"])
+    r = _post(web, "/api/plan/semana/borrar", id=medio, semana=2)
+    assert r.status_code == 200, r.text
+    assert r.json()["borradas"] == 2 and [s["n"] for s in r.json()["plan"]["semanas"]] == [1]
+    assert Planes(web.db).leer(medio)["sesiones"] == []
+    assert _post(web, "/api/plan/semana/borrar", id=medio, semana=2).status_code == 404
+    assert _post(web, "/api/plan/semana/anadir", id=999, n=1, desde="2026-10-19", hasta="2026-10-25").status_code == 404

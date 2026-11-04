@@ -536,3 +536,282 @@ def test_borrar_un_plan_no_deja_ninguna_fila_suya(tmp_path):  # R3 · R-135
     assert planes.notas_del_dia(medio) == {"2026-10-21": ["otra nota inventada"]}
     with pytest.raises(LookupError):
         planes.borrar(completo)
+
+
+# -- unit 067: the plan by hand in Fitness › Plan — sessions added, changed, moved and deleted, weeks and phases
+# (R1-R7, R9 · R-199..R-205, R-207, C-247..C-254, C-256, S-69, S-70). Every plan, week and session is invented. ------
+
+AHORA_067 = datetime(2026, 10, 21, 9)
+LUNES = date(2026, 10, 19)  # Monday of the week of HOY
+
+
+def _plan_vacio(tmp_path) -> tuple[Planes, int]:
+    planes = Planes(tmp_path / "data.sqlite3")
+    ident = planes.nuevo("Prueba a mano 27", {"nombre": "Media de prueba", "fecha": "2027-03-07",
+                                              "objetivo": "1:30"}, AHORA_067)
+    return planes, ident
+
+
+def _con_semanas(tmp_path, cuantas: int = 2) -> tuple[Planes, int]:
+    from datetime import timedelta
+
+    planes, ident = _plan_vacio(tmp_path)
+    for n in range(1, cuantas + 1):
+        desde = LUNES + timedelta(weeks=n - 1)
+        planes.anadir_semana(ident, {"n": n, "desde": desde.isoformat(),
+                                     "hasta": (desde + timedelta(days=6)).isoformat(), "previsto": "4:30",
+                                     "clave": f"clave {n}"})
+    return planes, ident
+
+
+def _fila(planes: Planes, ident: int) -> tuple:
+    with planes._connect() as conn:
+        f = conn.execute("SELECT rowid, plan_id, orden, apartado, fecha, titulo, bloques FROM plan_sesion "
+                         "WHERE rowid = ?", (ident,)).fetchone()
+    return tuple(f) if f is not None else None
+
+
+def test_una_sesion_se_anade_se_cambia_y_se_mueve_en_su_misma_fila(tmp_path):  # R1, R2, R3 (portante) · C-247..C-249
+    planes, ident = _con_semanas(tmp_path)
+    sesion = planes.anadir_sesion(ident, "2026-10-23", " Rodaje ", ["45' a 5:30", "  ", " 10' suave "], HOY)
+    otra = planes.anadir_sesion(ident, "2026-10-29", "Tirada", ["1h30"], HOY)  # after it: a new row would show
+    plan = planes.leer(ident)
+    assert [(s["fecha"], s["titulo"], s["bloques"]) for s in plan["sesiones"]] == [
+        ("2026-10-23", "Rodaje", ["45' a 5:30", "10' suave"]), ("2026-10-29", "Tirada", ["1h30"])]
+    assert plan["sesiones"][0]["apartado"] == 2  # «Sesiones clave», the sessions of a plan made by hand
+    dias = {d["fecha"]: d for d in semanas.semana(plan, 1, None, HOY)["dias"]}
+    assert dias["2026-10-23"]["sesiones"][0]["titulo"] == "Rodaje"  # seen at once
+
+    antes = _fila(planes, sesion)
+    planes.cambiar_sesion(sesion, "Rodaje", ["50' a 5:30"], HOY)
+    assert planes.sesion(sesion)["bloques"] == ["50' a 5:30"]
+    planes.mover_sesion(sesion, "2026-10-27", HOY)  # to the next week
+    despues = _fila(planes, sesion)
+    # the same row (its rowid and its `orden`, the key of Google Calendar `<plan>-<orden>`), on the new day
+    assert (despues[0], despues[1], despues[2]) == (antes[0], antes[1], antes[2])
+    assert despues[4] == "2026-10-27" and despues[6] == '["50\' a 5:30"]'
+    plan = planes.leer(ident)
+    assert [s["titulo"] for s in plan["sesiones"]] == ["Rodaje", "Tirada"]  # still first: the same row, not a new one
+    assert [s["id"] for s in planes.sesiones_reloj(ident)] == [sesion, otra]
+    assert [d["sesiones"] for d in semanas.semana(plan, 1, None, HOY)["dias"] if d["sesiones"]] == []  # the old day free
+    dia = next(d for d in semanas.semana(plan, 2, None, HOY)["dias"] if d["fecha"] == "2026-10-27")
+    assert dia["sesiones"] == [{"titulo": "Rodaje", "bloques": ["50' a 5:30"], "clave": False}]
+
+
+def test_lo_que_no_cuadra_de_una_sesion_no_se_guarda(tmp_path):  # R1, R2, R3
+    planes, ident = _con_semanas(tmp_path)
+    with pytest.raises(ValueError, match="título"):
+        planes.anadir_sesion(ident, "2026-10-23", "  ", ["45'"], HOY)
+    with pytest.raises(ValueError, match="fecha"):
+        planes.anadir_sesion(ident, "2026-10-32", "Rodaje", ["45'"], HOY)
+    with pytest.raises(LookupError):
+        planes.anadir_sesion(999, "2026-10-23", "Rodaje", ["45'"], HOY)
+    sesion = planes.anadir_sesion(ident, "2026-10-23", "Rodaje", ["45'"], HOY)
+    with pytest.raises(ValueError, match="título"):
+        planes.cambiar_sesion(sesion, " ", ["45'"], HOY)
+    with pytest.raises(ValueError, match="fecha"):
+        planes.mover_sesion(sesion, "mañana", HOY)
+    for falta in (lambda: planes.cambiar_sesion(999, "X", [], HOY), lambda: planes.mover_sesion(999, "2026-10-23", HOY),
+                  lambda: planes.borrar_sesion(999, HOY)):
+        with pytest.raises(LookupError):
+            falta()
+    assert planes.sesion(sesion)["titulo"] == "Rodaje"
+
+
+def test_un_dia_pasado_no_se_cambia_pero_se_mueve_a_un_dia_que_viene(tmp_path):  # R9 · R-207, C-256
+    planes, ident = _con_semanas(tmp_path)
+    ayer = planes.anadir_sesion(ident, "2026-10-22", "Series de ayer", ["20' suave"], date(2026, 10, 22))
+    hoy = date(2026, 10, 23)
+    for intento in (lambda: planes.cambiar_sesion(ayer, "Otra", ["30'"], hoy), lambda: planes.borrar_sesion(ayer, hoy),
+                    lambda: planes.anadir_sesion(ident, "2026-10-22", "Otra", ["30'"], hoy),
+                    lambda: planes.mover_sesion(ayer, "2026-10-21", hoy)):
+        with pytest.raises(ValueError, match="Ese día ya pasó: lo hecho lo trae Garmin"):
+            intento()
+    assert planes.sesion(ayer)["titulo"] == "Series de ayer"
+    planes.mover_sesion(ayer, "2026-10-24", hoy)  # to a day to come: yes
+    assert planes.sesion(ayer)["fecha"] == "2026-10-24"
+    planes.mover_sesion(ayer, "2026-10-23", hoy)  # to today: yes
+    assert planes.sesion(ayer)["fecha"] == "2026-10-23"
+
+
+def test_borrar_una_sesion_la_saca_del_plan(tmp_path):  # R4 · C-250
+    planes, ident = _con_semanas(tmp_path)
+    una = planes.anadir_sesion(ident, "2026-10-23", "Rodaje", ["45'"], HOY)
+    otra = planes.anadir_sesion(ident, "2026-10-24", "Tirada", ["1h30"], HOY)
+    planes.borrar_sesion(una, HOY)
+    assert planes.sesion(una) is None
+    assert [s["titulo"] for s in planes.leer(ident)["sesiones"]] == ["Tirada"]
+    assert planes.sesion(otra)["titulo"] == "Tirada"
+
+
+def test_mover_una_sesion_deja_un_solo_evento_en_google_calendar(tmp_path):  # R3, R7 · R-201, R-205, C-249
+    from test_calendario import AHORA as AHORA_CAL, HOY as HOY_CAL, RODAJE, SERIES, Base, plan_inventado
+
+    from tridata.calendario.sincronizar import sincronizar
+
+    b = Base(tmp_path)
+    plan_id = b.planes.crear(plan_inventado([SERIES, RODAJE]), AHORA_CAL)
+    b.conectar()
+    sincronizar(b.planes, b.calendario, HOY_CAL)
+    # the first of the two (`orden` 0): a session made again at the end would be another event
+    (series,) = [s for s in b.planes.sesiones_reloj(plan_id) if s["fecha"] == "2026-10-28"]
+    (antes,) = [e for e in b.google.de(b.cal()) if e["start"].get("date") == "2026-10-28"]
+
+    b.planes.mover_sesion(series["id"], "2026-10-31", HOY_CAL)
+    b.planes.cambiar_sesion(series["id"], "Series 3×10'", ["20' suave", "3×10' a 4:00 (2' rec)"], HOY_CAL)
+    assert sincronizar(b.planes, b.calendario, HOY_CAL) == {"creados": 0, "cambiados": 1, "borrados": 0}
+    de_las_series = [e for e in b.google.de(b.cal()) if "Series" in e["summary"]]
+    assert len(de_las_series) == 1  # never two events of the same session
+    (evento,) = de_las_series
+    assert evento["id"] == antes["id"]  # the same event, on the new day
+    assert evento["start"] == {"date": "2026-10-31"} and evento["summary"] == "🏃 Series 3×10'"
+    assert [e["start"].get("date") for e in b.google.de(b.cal())].count("2026-10-28") == 0
+
+
+def test_las_semanas_de_un_plan_vacio_y_borrar_una_con_sus_sesiones(tmp_path):  # R5 · R-203, C-251, C-252
+    planes, ident = _con_semanas(tmp_path, 12)
+    plan = planes.leer(ident)
+    assert [s["n"] for s in plan["semanas"]] == list(range(1, 13))
+    assert {s["apartado"] for s in plan["semanas"]} == {1}  # the «Previsto» section of a plan made by hand
+    assert (plan["semanas"][0]["desde"], plan["semanas"][0]["hasta"]) == ("2026-10-19", "2026-10-25")
+    assert plan["semanas"][0]["previsto_s"] == 4 * 3600 + 30 * 60 and plan["semanas"][0]["clave"] == "clave 1"
+    assert [s["n"] for s in semanas.vista(plan, None, HOY)["semanas"]] == list(range(1, 13))
+
+    planes.cambiar_semana(ident, 3, {"previsto": "5h15", "clave": "tirada 1h45", "hasta": "2026-11-08"})
+    s3 = next(s for s in planes.leer(ident)["semanas"] if s["n"] == 3)
+    assert (s3["previsto_s"], s3["clave"], s3["desde"], s3["hasta"]) == (5 * 3600 + 15 * 60, "tirada 1h45",
+                                                                          "2026-11-02", "2026-11-08")
+    for dia in ("2026-11-02", "2026-11-04", "2026-11-06", "2026-11-08"):
+        planes.anadir_sesion(ident, dia, f"Sesión del {dia}", ["40' suave"], HOY)
+    planes.anadir_sesion(ident, "2026-11-09", "De la semana 4", ["40' suave"], HOY)
+    assert planes.sesiones_de_semana(ident, 3) == 4
+    assert planes.borrar_semana(ident, 3) == 4
+    plan = planes.leer(ident)
+    assert 3 not in [s["n"] for s in plan["semanas"]] and len(plan["semanas"]) == 11
+    assert [s["titulo"] for s in plan["sesiones"]] == ["De la semana 4"]  # its 4 sessions went with it
+
+    # dates that do not fit, a repeated number or a week that is not there: nothing saved, and why
+    antes = planes.leer(ident)
+    with pytest.raises(ValueError, match="hasta"):
+        planes.anadir_semana(ident, {"n": 13, "desde": "2027-01-11", "hasta": "2027-01-10"})
+    with pytest.raises(ValueError, match="hasta"):
+        planes.cambiar_semana(ident, 4, {"hasta": "2026-11-08"})
+    with pytest.raises(ValueError, match="semana 4"):
+        planes.anadir_semana(ident, {"n": 4, "desde": "2027-01-11", "hasta": "2027-01-17"})
+    with pytest.raises(ValueError, match="semana 5"):
+        planes.cambiar_semana(ident, 4, {"n": 5})
+    with pytest.raises(ValueError, match="fecha"):
+        planes.anadir_semana(ident, {"n": 13, "desde": "", "hasta": "2027-01-17"})
+    with pytest.raises(ValueError, match="previsto"):
+        planes.anadir_semana(ident, {"n": 13, "desde": "2027-01-11", "hasta": "2027-01-17", "previsto": "mucho"})
+    with pytest.raises(ValueError, match="número"):
+        planes.anadir_semana(ident, {"n": 0, "desde": "2027-01-11", "hasta": "2027-01-17"})
+    for falta in (lambda: planes.cambiar_semana(ident, 3, {"clave": "x"}), lambda: planes.borrar_semana(ident, 3),
+                  lambda: planes.anadir_semana(999, {"n": 1, "desde": "2027-01-11", "hasta": "2027-01-17"})):
+        with pytest.raises(LookupError):
+            falta()
+    assert planes.leer(ident) == antes
+
+
+def test_una_semana_anadida_a_un_plan_importado_va_con_las_suyas(tmp_path):  # R5
+    planes = Planes(tmp_path / "data.sqlite3")
+    datos = plan_de_prueba()
+    datos.pop("id")
+    ident = planes.crear(datos, AHORA_067)
+    planes.anadir_semana(ident, {"n": 11, "desde": "2026-11-02", "hasta": "2026-11-08", "previsto": "",
+                                 "clave": ""})
+    s11 = planes.leer(ident)["semanas"][-1]
+    assert (s11["n"], s11["apartado"], s11["previsto_s"], s11["clave"]) == (11, 1, None, "")
+
+
+def test_las_fases_sobre_tramos_de_semanas(tmp_path):  # R6 · R-204, C-253, S-70
+    from tridata.conversaciones.contexto import plan_en_curso
+    from tridata.plan.markdown import escribir
+
+    planes, ident = _con_semanas(tmp_path, 12)
+    base = planes.anadir_fase(ident, " Base ", 1, 4)
+    with pytest.raises(ValueError, match="Base"):  # one week in one phase or in none
+        planes.anadir_fase(ident, "Específico", 3, 6)
+    especifico = planes.anadir_fase(ident, "Específico", 5, 8)
+    for mala, dice in (((" ", 9, 10), "nombre"), (("Puesta a punto", 11, 10), "hasta"),
+                       (("Puesta a punto", 11, 14), "semana 14"), (("Puesta a punto", 8, 9), "Específico")):
+        with pytest.raises(ValueError, match=dice):
+            planes.anadir_fase(ident, *mala)
+    plan = planes.leer(ident)
+    assert plan["fases"] == [{"id": base, "nombre": "Base", "desde_n": 1, "hasta_n": 4},
+                             {"id": especifico, "nombre": "Específico", "desde_n": 5, "hasta_n": 8}]
+    vista = semanas.vista(plan, None, HOY)
+    assert [s.get("fase") for s in vista["semanas"]] == ["Base"] * 4 + ["Específico"] * 4 + [None] * 4
+    assert vista["fases"] == plan["fases"]
+    assert semanas.semana(plan, 2, None, HOY)["fase"] == "Base"
+    md = escribir(plan, None, HOY)
+    assert "| Semana | Desde | Hasta | Previsto | Clave | Hecho | Km | Fase |" in md
+    assert "| 1 | 2026-10-19 | 2026-10-25 | 4:30 | clave 1 |  |  | Base |" in md
+    assert "| 9 | 2026-12-14 | 2026-12-20 | 4:30 | clave 9 |  |  |  |" in md
+    # what the team reads
+    equipo, _ = plan_en_curso(planes, None, HOY)
+    assert [f["nombre"] for f in equipo["fases"]] == ["Base", "Específico"]
+    assert equipo["semanas"][0]["fase"] == "Base" and "fase" not in equipo["semanas"][8]
+
+    planes.cambiar_fase(base, "Base aeróbica", 1, 3)
+    with pytest.raises(ValueError, match="Específico"):
+        planes.cambiar_fase(base, "Base aeróbica", 1, 5)
+    planes.borrar_fase(especifico)
+    plan = planes.leer(ident)
+    assert plan["fases"] == [{"id": base, "nombre": "Base aeróbica", "desde_n": 1, "hasta_n": 3}]
+    assert len(plan["semanas"]) == 12  # its weeks stay
+    for falta in (lambda: planes.cambiar_fase(999, "X", 1, 2), lambda: planes.borrar_fase(999),
+                  lambda: planes.anadir_fase(999, "X", 1, 2)):
+        with pytest.raises(LookupError):
+            falta()
+    planes.borrar(ident)  # deleting the plan deletes its phases
+    with planes._connect() as conn:
+        assert tuple(conn.execute("SELECT COUNT(*) FROM plan_fase").fetchone()) == (0,)
+
+
+def test_un_plan_sin_fases_se_lee_y_se_baja_como_antes(tmp_path):  # R6: nothing changes without phases
+    from tridata.plan.markdown import escribir
+
+    planes, ident = _con_semanas(tmp_path, 2)
+    plan = planes.leer(ident)
+    assert "fases" not in plan
+    assert "fase" not in semanas.vista(plan, None, HOY)["semanas"][0]
+    assert "| Semana | Desde | Hasta | Previsto | Clave | Hecho | Km |\n" in escribir(plan, None, HOY)
+
+
+def test_cambiada_a_mano_desde_que_la_mandaste(tmp_path):  # R7 · R-205, C-254
+    planes, ident = _con_semanas(tmp_path)
+    sesion = planes.anadir_sesion(ident, "2026-10-23", "Rodaje", ["45' a 5:30"], HOY)
+    planes.marcar_garmin(sesion, 501, 601, AHORA_067, "Rodaje: 45' a 5:30")
+    estado = lambda: next(s["estado"] for s in planes.sesiones_reloj(ident) if s["id"] == sesion)  # noqa: E731
+    assert estado() == "al_dia"
+    planes.cambiar_sesion(sesion, "Rodaje", ["50' a 5:30"], HOY)
+    assert estado() == "cambiada"
+    planes.cambiar_sesion(sesion, "Rodaje", ["45' a 5:30"], HOY)
+    assert estado() == "al_dia"
+    planes.mover_sesion(sesion, "2026-10-24", HOY)  # moved: Garmin still has it on the 23rd
+    assert estado() == "cambiada"
+    planes.mover_sesion(sesion, "2026-10-23", HOY)
+    assert estado() == "al_dia"
+
+
+def test_movida_a_mano_la_siguiente_pasada_de_garmin_no_la_devuelve(tmp_path):  # R3, R7 with 061 («Garmin manda»)
+    from tridata.plan.desde_garmin import Programado, cambios
+
+    planes, ident = _con_semanas(tmp_path)
+    sesion = planes.anadir_sesion(ident, "2026-10-23", "Rodaje", ["45' a 5:30"], HOY)
+    planes.marcar_garmin(sesion, 501, 601, AHORA_067, "Rodaje: 45' a 5:30")
+    planes.aplicar_garmin(ident, cambios(planes.sesiones_garmin(ident, HOY, date(2026, 11, 1)), [
+        Programado(601, 501, "2026-10-23", "carrera", "Rodaje", ("45' a 5:30",), "2026-10-21T09:00:00")]))
+    planes.mover_sesion(sesion, "2026-10-24", HOY)
+
+    en_garmin = Programado(601, 501, "2026-10-23", "carrera", "Rodaje", ("45' a 5:30",), "2026-10-21T09:00:00")
+    planes.aplicar_garmin(ident, cambios(planes.sesiones_garmin(ident, HOY, date(2026, 11, 1)), [en_garmin]))
+    assert planes.sesion(sesion)["fecha"] == "2026-10-24"  # Garmin still where it was sent: the move by hand stays
+    assert len(planes.leer(ident)["sesiones"]) == 1
+
+    # dragged in Garmin to another day afterwards: Garmin wins, as in 061
+    movida = Programado(601, 501, "2026-10-25", "carrera", "Rodaje", ("45' a 5:30",), "2026-10-21T09:00:00")
+    planes.aplicar_garmin(ident, cambios(planes.sesiones_garmin(ident, HOY, date(2026, 11, 1)), [movida]))
+    assert planes.sesion(sesion)["fecha"] == "2026-10-25"
+    assert next(s["estado"] for s in planes.sesiones_reloj(ident) if s["id"] == sesion) == "al_dia"

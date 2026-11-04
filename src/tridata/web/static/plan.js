@@ -28,6 +28,14 @@
 // (POST /api/plan/carrera/anadir); the form of a race also has «Hacer principal», «Pasar a otro plan» (a select with
 // the other plans) and «Quitar del plan» (with a confirm()): /api/plan/carrera/{principal,mover,quitar}. A plan
 // without a main race says «Sin carrera principal».
+// Unit 067 (REC-30): the plan by hand, saved at once (no card). In a week, each day of today or to come has
+// «➕ Añadir sesión» (title and blocks, one line per block: POST /api/plan/sesion/anadir); each session «Cambiar»
+// (/sesion/cambiar), «Mover» (choose the day: /sesion/mover, the same session in its row, so Google Calendar keeps one
+// event) and «Borrar» after a confirm() (/sesion/borrar; if it was in Garmin and Garmin fails, «… sigue en tu reloj»).
+// A session of a day that is over only has «Mover» (to today or a day to come). The week has «Cambiar semana» and
+// «Borrar semana» (its confirm() says how many sessions go with it); the plan «➕ Añadir semana» (also an empty plan)
+// and «➕ Añadir fase» (name and weeks from–to, /api/plan/fase/*), and each phase is a header over its weeks with
+// «Editar» (rename, other weeks, «Borrar fase»: its weeks stay).
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -229,13 +237,105 @@ function pintarPlan(datos) {
     anadirCarrera(plan),
     el("h3", { className: "titulo-bloque titulo-semanas", textContent: "Semanas · previsto frente a hecho" }),
     plan.semanas.length
-      ? el("ul", { id: "plan-semanas", className: "tarjeta lista-plan" }, ...plan.semanas.map(filaSemana))
+      ? el("ul", { id: "plan-semanas", className: "tarjeta lista-plan" }, ...filasSemanas(plan))
       : el("p", { className: "tarjeta suave", textContent: "Este plan no tiene semanas." }),
+    gestionSemanas(plan),
     el("p", { className: "suave nota-plan", textContent: "Lo hecho sale de Garmin: tiempo en movimiento y km de carrera a pie. Bici, natación y gimnasio, dentro de cada semana." }),
     el("div", { className: "acciones-plan" }, botonImportar(), ...nuevoPlan(),
       el("a", { id: "plan-bajar", className: "boton", href: `/api/plan/${plan.id}.md`, download: "", textContent: "📄 Bajar .md" }),
       el("button", { type: "button", id: "plan-incidencias-boton", textContent: `⚠️ Incidencias${plan.abiertas ? ` (${plan.abiertas})` : ""}`,
         onclick: () => abrirIncidencias(plan.id) }))].filter(Boolean));
+}
+
+// -- unit 067: weeks and phases by hand ------------------------------------------------------------------------------
+
+const unDia = 24 * 3600 * 1000;
+const masDias = (iso, n) => new Date(fecha(iso).getTime() + n * unDia).toISOString().slice(0, 10);
+// «4:30» from seconds, as the week's planned time is typed
+const hmm = (s) => (s ? `${Math.floor(s / 3600)}:${String(Math.round((s % 3600) / 60)).padStart(2, "0")}` : "");
+
+// the weeks of the plan, each phase a header over its weeks
+function filasSemanas(plan) {
+  const fases = plan.fases ?? [];
+  const filas = [];
+  for (const s of plan.semanas) {
+    const fase = fases.find((f) => f.desde_n === s.n);
+    if (fase) filas.push(filaFase(plan, fase));
+    filas.push(filaSemana(s));
+  }
+  return filas;
+}
+
+function filaFase(plan, f) {
+  const [nombre, lNombre] = campo("Nombre de la fase", { type: "text", required: true, value: f.nombre, name: "fase-nombre" });
+  const [desde, lDesde] = campo("Desde la semana", { type: "number", min: 1, required: true, value: String(f.desde_n), name: "fase-desde" });
+  const [hasta, lHasta] = campo("Hasta la semana", { type: "number", min: 1, required: true, value: String(f.hasta_n), name: "fase-hasta" });
+  const error = cajaError();
+  const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar fase" });
+  const borrar = el("button", { type: "button", className: "enlace-boton borrar-fase", textContent: "Borrar fase" });
+  borrar.style.color = "var(--peligro)";
+  borrar.addEventListener("click", () => {
+    if (window.confirm(`¿Borrar la fase «${f.nombre}»? Sus semanas se quedan en el plan.`)) {
+      enviar("/api/plan/fase/borrar", { id: plan.id, fase: f.id }, error, borrar);
+    }
+  });
+  const formulario = el("form", { className: "cerrar-incid form-fase", hidden: true }, lNombre, lDesde, lHasta, error,
+    filaAcciones(guardar, borrar));
+  formulario.addEventListener("submit", (evento) => {
+    evento.preventDefault();
+    enviar("/api/plan/fase/cambiar", { id: plan.id, fase: f.id, nombre: nombre.value, desde: Number(desde.value),
+      hasta: Number(hasta.value) }, error, guardar);
+  });
+  const editar = el("button", { type: "button", className: "enlace-boton editar-fase", textContent: "Editar",
+    ariaLabel: `Editar la fase ${f.nombre}`, onclick: () => { formulario.hidden = !formulario.hidden; } });
+  const cab = el("div", {}, el("strong", { className: "nombre-fase", textContent: f.nombre }),
+    el("small", { className: "suave", textContent: ` · S${f.desde_n}–S${f.hasta_n}` }), " ", editar);
+  return el("li", { className: "fase-plan" }, cab, formulario);
+}
+
+// «➕ Añadir semana» and «➕ Añadir fase» under the weeks of the plan seen
+function gestionSemanas(plan) {
+  const ultima = plan.semanas[plan.semanas.length - 1];
+  const sigue = ultima ? masDias(ultima.hasta, 1) : (ultimo?.hoy ?? "");
+  const [n, lN] = campo("Número", { type: "number", min: 1, required: true, name: "semana-n",
+    value: String(ultima ? Math.max(...plan.semanas.map((s) => s.n)) + 1 : 1) });
+  const [desde, lDesde] = campo("Desde", { type: "date", required: true, name: "semana-desde", value: sigue });
+  const [hasta, lHasta] = campo("Hasta", { type: "date", required: true, name: "semana-hasta", value: sigue ? masDias(sigue, 6) : "" });
+  desde.addEventListener("change", () => { if (desde.value) hasta.value = masDias(desde.value, 6); });
+  const [previsto, lPrevisto] = campo("Previsto (h:mm)", { type: "text", name: "semana-previsto", placeholder: "4:30" });
+  const [clave, lClave] = campo("Sesiones clave", { type: "text", name: "semana-clave", placeholder: "series + tirada" });
+  const error = cajaError();
+  const guardar = el("button", { type: "submit", className: "principal", textContent: "Añadir semana" });
+  const formSemana = el("form", { id: "plan-anadir-semana-form", className: "tarjeta cerrar-incid", hidden: true },
+    lN, lDesde, lHasta, lPrevisto, lClave, error, guardar);
+  formSemana.addEventListener("submit", (evento) => {
+    evento.preventDefault();
+    enviar("/api/plan/semana/anadir", { id: plan.id, n: Number(n.value), desde: desde.value, hasta: hasta.value,
+      previsto: previsto.value, clave: clave.value }, error, guardar);
+  });
+  const botonSemana = el("button", { type: "button", className: "enlace-boton", id: "plan-anadir-semana", textContent: "➕ Añadir semana",
+    onclick: () => { formSemana.hidden = !formSemana.hidden; if (!formSemana.hidden) n.focus(); } });
+  const caja = el("div", { className: "anadir-carrera gestion-semanas" }, filaAcciones(botonSemana), formSemana);
+  if (!plan.semanas.length) return caja;
+
+  const [nombre, lNombre] = campo("Nombre de la fase", { type: "text", required: true, name: "fase-nombre", placeholder: "Base" });
+  const primera = Math.min(...plan.semanas.map((s) => s.n));
+  const [faseDesde, lFaseDesde] = campo("Desde la semana", { type: "number", min: 1, required: true, name: "fase-desde", value: String(primera) });
+  const [faseHasta, lFaseHasta] = campo("Hasta la semana", { type: "number", min: 1, required: true, name: "fase-hasta", value: String(primera) });
+  const errorFase = cajaError();
+  const guardarFase = el("button", { type: "submit", className: "principal", textContent: "Añadir fase" });
+  const formFase = el("form", { id: "plan-anadir-fase-form", className: "tarjeta cerrar-incid", hidden: true },
+    lNombre, lFaseDesde, lFaseHasta, errorFase, guardarFase);
+  formFase.addEventListener("submit", (evento) => {
+    evento.preventDefault();
+    enviar("/api/plan/fase/anadir", { id: plan.id, nombre: nombre.value, desde: Number(faseDesde.value),
+      hasta: Number(faseHasta.value) }, errorFase, guardarFase);
+  });
+  const botonFase = el("button", { type: "button", className: "enlace-boton", id: "plan-anadir-fase", textContent: "➕ Añadir fase",
+    onclick: () => { formFase.hidden = !formFase.hidden; if (!formFase.hidden) nombre.focus(); } });
+  caja.firstChild.append(botonFase);
+  caja.append(formFase);
+  return caja;
 }
 
 function filaCarrera(c) {
@@ -414,12 +514,14 @@ function filaDia(d) {
     nodo.append(el("ul", { className: "sesiones-dia" }, ...d.sesiones.map((s, i) => el("li", { className: "sesion-plan" },
       el("span", { className: "titulo-sesion", textContent: s.titulo }),
       s.bloques.length ? el("ul", { className: "bloques" }, ...s.bloques.map((b) => el("li", { textContent: b }))) : null,
-      reloj[i] ? filaReloj(d, reloj[i]) : null))));
+      reloj[i] ? filaReloj(d, reloj[i]) : null,
+      reloj[i] ? accionesSesion(d, s, reloj[i]) : null))));
   } else {
     const bloques = d.sesiones[0]?.bloques ?? [];
     if (bloques.length) nodo.append(el("ul", { className: "bloques" }, ...bloques.map((b) => el("li", { textContent: b }))));
-    if (reloj[0]) nodo.append(filaReloj(d, reloj[0]));
+    if (reloj[0]) nodo.append(filaReloj(d, reloj[0]), accionesSesion(d, d.sesiones[0], reloj[0]));
   }
+  if (diaQueViene(d)) nodo.append(anadirSesion(d));
   for (const a of d.actividades) nodo.append(...lineaHecha(a));
   for (const n of d.notas ?? []) nodo.append(el("p", { className: "nota-dia", textContent: `📝 ${n}` }));
   if (!d.actividades.length) {
@@ -427,6 +529,123 @@ function filaDia(d) {
     nodo.append(el("span", { className: `estado-dia ${d.estado}`, textContent: texto }));
   }
   return nodo;
+}
+
+// -- unit 067: sessions and the week by hand -----------------------------------------------------------------------
+
+const diaQueViene = (d) => !ultimo?.hoy || d.fecha >= ultimo.hoy; // today or a day to come: it can be changed
+
+// POST `ruta` and, ok, repaint the plan and the week `n` (by default the one seen; null: back to the plan)
+async function enSemana(ruta, cuerpo, error, boton, n = undefined) {
+  if (boton) boton.disabled = true;
+  const { ok, datos } = await api(ruta, cuerpo);
+  if (boton) boton.disabled = false;
+  if (!ok) { error.hidden = false; error.textContent = datos.error ?? "No he podido guardarlo."; return; }
+  pintarPlan(datos);
+  const destino = n === undefined ? semanaVista : n;
+  if (destino === null) { volverAlPlan(); } else { await abrirSemana(destino); }
+  if (datos.aviso) aviso(datos.aviso);
+}
+
+// title and blocks of a session: [title input, blocks textarea, their labels]
+function camposSesion(titulo = "", bloques = []) {
+  const [entrada, lTitulo] = campo("Título", { type: "text", required: true, value: titulo, name: "sesion-titulo", placeholder: "Rodaje" });
+  const texto = el("textarea", { rows: 3, name: "sesion-bloques", value: bloques.join("\n"), placeholder: "45' a 5:30" });
+  texto.value = bloques.join("\n");
+  const lBloques = el("label", {}, el("small", { className: "suave", textContent: "Bloques (uno por línea)" }), texto);
+  return [entrada, texto, lTitulo, lBloques];
+}
+
+function anadirSesion(d) {
+  const [titulo, bloques, lTitulo, lBloques] = camposSesion();
+  const error = cajaError();
+  const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar sesión" });
+  const formulario = el("form", { className: "cerrar-incid form-anadir-sesion", hidden: true }, lTitulo, lBloques, error, guardar);
+  formulario.addEventListener("submit", (evento) => {
+    evento.preventDefault();
+    enSemana("/api/plan/sesion/anadir", { id: ultimo.plan.id, fecha: d.fecha, titulo: titulo.value, bloques: bloques.value },
+      error, guardar);
+  });
+  const boton = el("button", { type: "button", className: "enlace-boton anadir-sesion", textContent: "➕ Añadir sesión",
+    ariaLabel: `Añadir sesión el ${diaMes(d.fecha)}`,
+    onclick: () => { formulario.hidden = !formulario.hidden; if (!formulario.hidden) titulo.focus(); } });
+  return el("div", { className: "anadir-sesion-dia" }, boton, formulario);
+}
+
+// «Cambiar», «Mover» and «Borrar» of a session (a day that is over: only «Mover», to today or a day to come)
+function accionesSesion(d, s, r) {
+  const error = cajaError();
+  const caja = el("div", { className: "acciones-sesion" });
+  const acciones = filaAcciones();
+  const viene = diaQueViene(d);
+  let formCambiar = null;
+  if (viene) {
+    const [titulo, bloques, lTitulo, lBloques] = camposSesion(s.titulo, s.bloques);
+    const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar cambios" });
+    formCambiar = el("form", { className: "cerrar-incid form-cambiar-sesion", hidden: true }, lTitulo, lBloques, guardar);
+    formCambiar.addEventListener("submit", (evento) => {
+      evento.preventDefault();
+      enSemana("/api/plan/sesion/cambiar", { sesion: r.id, titulo: titulo.value, bloques: bloques.value }, error, guardar);
+    });
+    acciones.append(el("button", { type: "button", className: "enlace-boton cambiar-sesion", textContent: "Cambiar",
+      onclick: () => { formCambiar.hidden = !formCambiar.hidden; formMover.hidden = true; } }));
+  }
+  const [dia, lDia] = campo("Nuevo día", { type: "date", required: true, name: "sesion-dia", value: viene ? d.fecha : (ultimo?.hoy ?? ""),
+    min: ultimo?.hoy ?? "" });
+  const mover = el("button", { type: "submit", className: "principal", textContent: "Mover" });
+  const formMover = el("form", { className: "cerrar-incid form-mover-sesion", hidden: true }, lDia, mover);
+  formMover.addEventListener("submit", (evento) => {
+    evento.preventDefault();
+    enSemana("/api/plan/sesion/mover", { sesion: r.id, fecha: dia.value }, error, mover);
+  });
+  acciones.append(el("button", { type: "button", className: "enlace-boton mover-sesion", textContent: "Mover",
+    onclick: () => { formMover.hidden = !formMover.hidden; if (formCambiar) formCambiar.hidden = true; } }));
+  if (viene) {
+    const borrar = el("button", { type: "button", className: "enlace-boton borrar-sesion", textContent: "Borrar" });
+    borrar.style.color = "var(--peligro)";
+    borrar.addEventListener("click", () => {
+      const garmin = r.estado ? " También se quita de tu Garmin." : "";
+      if (window.confirm(`¿Borrar «${s.titulo}» del ${DIAS[fecha(d.fecha).getUTCDay()]} ${diaMes(d.fecha)}?${garmin}`)) {
+        enSemana("/api/plan/sesion/borrar", { sesion: r.id }, error, borrar);
+      }
+    });
+    acciones.append(borrar);
+  }
+  caja.append(acciones, formCambiar, formMover, error);
+  return caja;
+}
+
+// «Cambiar semana» (number, dates, planned time, key sessions) and «Borrar semana» of the week seen
+function gestionSemana(s) {
+  const plan = ultimo.plan;
+  const [n, lN] = campo("Número", { type: "number", min: 1, required: true, value: String(s.n), name: "semana-n" });
+  const [desde, lDesde] = campo("Desde", { type: "date", required: true, value: s.desde, name: "semana-desde" });
+  const [hasta, lHasta] = campo("Hasta", { type: "date", required: true, value: s.hasta, name: "semana-hasta" });
+  const [previsto, lPrevisto] = campo("Previsto (h:mm)", { type: "text", value: hmm(s.previsto_s), name: "semana-previsto", placeholder: "4:30" });
+  const [clave, lClave] = campo("Sesiones clave", { type: "text", value: s.clave ?? "", name: "semana-clave" });
+  const error = cajaError();
+  const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar semana" });
+  const formulario = el("form", { id: "plan-cambiar-semana-form", className: "cerrar-incid", hidden: true },
+    lN, lDesde, lHasta, lPrevisto, lClave, guardar);
+  formulario.addEventListener("submit", (evento) => {
+    evento.preventDefault();
+    enSemana("/api/plan/semana/cambiar", { id: plan.id, semana: s.n, n: Number(n.value), desde: desde.value,
+      hasta: hasta.value, previsto: previsto.value, clave: clave.value }, error, guardar, Number(n.value));
+  });
+  const cambiar = el("button", { type: "button", className: "enlace-boton", id: "plan-cambiar-semana", textContent: "Cambiar semana",
+    onclick: () => { formulario.hidden = !formulario.hidden; } });
+  const borrar = el("button", { type: "button", className: "enlace-boton", id: "plan-borrar-semana", textContent: "Borrar semana" });
+  borrar.style.color = "var(--peligro)";
+  borrar.addEventListener("click", () => {
+    const sesiones = s.dias.reduce((total, d) => total + d.sesiones.length, 0);
+    const con = sesiones ? ` Se van ${plural(sesiones, "sesión", "sesiones")} con ella.` : "";
+    if (window.confirm(`¿Borrar la semana ${s.n} del plan «${plan.nombre}»?${con}`)) {
+      enSemana("/api/plan/semana/borrar", { id: plan.id, semana: s.n }, error, borrar, null);
+    }
+  });
+  const caja = el("div", { className: "gestion-plan gestion-semana" }, filaAcciones(cambiar, borrar), formulario, error);
+  caja.style.margin = "0 4px 10px";
+  return caja;
 }
 
 // -- unit 042: the session to the watch -------------------------------------------------------------------------
@@ -486,8 +705,9 @@ function tarjetaReloj(id, t, caja, nota = null, fallo = null) {
 
 function pintarSemana(s) {
   $("plan-semana").replaceChildren(
-    cabecera(`S${s.n} · ${rango(s.desde, s.hasta)}`, volverAlPlan),
+    cabecera(`S${s.n} · ${rango(s.desde, s.hasta)}${s.fase ? ` · ${s.fase}` : ""}`, volverAlPlan),
     resumenSemana(s),
+    gestionSemana(s),
     el("ul", { className: "tarjeta lista-plan dias" }, ...s.dias.map(filaDia)),
     el("p", { className: "suave nota-plan", textContent: "Un día pasado sin nada en Garmin dice «no hecho», nunca un 0." }));
 }

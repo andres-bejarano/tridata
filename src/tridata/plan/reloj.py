@@ -20,6 +20,9 @@ swimming are out of scope).
 
 `mandar` replaces what was sent before (R-160): unschedule and delete the old one, then upload and schedule the new
 one; if scheduling fails, the new one is deleted too. Nothing here logs a text of the plan.
+
+Unit 067 (R-206): `quitar` is the first half of `mandar` on its own — unschedule and delete what was sent of a session —
+for a session deleted by hand, so the next pass of «Garmin manda» does not bring it back to the plan.
 """
 from __future__ import annotations
 
@@ -519,6 +522,39 @@ def cliente_garmin(entorno: Mapping[str, str] | None = None) -> GarminClient:
     return cliente
 
 
+def _no_llega(exc: Exception, generico: str) -> GarminNoLlega:
+    """What Garmin failing is, in Andrés's words (R-159)."""
+    if isinstance(exc, SinCredenciales):
+        return GarminNoLlega("faltan tus datos de Garmin (GARMIN_EMAIL y GARMIN_PASSWORD en .env)")
+    if isinstance(exc, GarminRateLimitError):
+        return GarminNoLlega("Garmin está limitando las peticiones (429): inténtalo más tarde")
+    if isinstance(exc, GarminAuthError):
+        return GarminNoLlega("no he podido entrar en tu Garmin Connect")
+    log.warning("Garmin did not answer (%s)", type(exc).__name__)
+    return GarminNoLlega(generico)
+
+
+def _quitar_viejo(cliente: Any, sesion: Mapping[str, Any]) -> bool:
+    """Unschedules and deletes what was sent of that session; whether there was anything."""
+    viejo_programado, viejo = sesion.get("garmin_schedule_id"), sesion.get("garmin_workout_id")
+    if viejo_programado:
+        cliente.quitar_programado(int(viejo_programado))
+    if viejo:
+        cliente.borrar_entreno(int(viejo))
+    return bool(viejo or viejo_programado)
+
+
+def quitar(sesion: Mapping[str, Any], conectar: Callable[[], Any]) -> None:
+    """Removes from Garmin Connect what was sent of that session (`garmin_schedule_id`, `garmin_workout_id`): never
+    sent, Garmin is not called. GarminNoLlega, saying why, if Garmin fails (unit 067, R-206)."""
+    if not (sesion.get("garmin_schedule_id") or sesion.get("garmin_workout_id")):
+        return
+    try:
+        _quitar_viejo(conectar(), sesion)
+    except Exception as exc:  # noqa: BLE001 - whatever it is, the session is deleted and the warning says it
+        raise _no_llega(exc, "Garmin no responde") from None
+
+
 def mandar(sesion: Mapping[str, Any], conectar: Callable[[], Any],
            al_quitar: Callable[[], None] | None = None) -> tuple[int, int]:
     """Uploads the session and schedules it on its day: (workoutId, workoutScheduleId).
@@ -530,12 +566,7 @@ def mandar(sesion: Mapping[str, Any], conectar: Callable[[], Any],
     dia = date.fromisoformat(str(sesion["fecha"]))
     try:
         cliente = conectar()
-        viejo_programado, viejo = sesion.get("garmin_schedule_id"), sesion.get("garmin_workout_id")
-        if viejo_programado:
-            cliente.quitar_programado(int(viejo_programado))
-        if viejo:
-            cliente.borrar_entreno(int(viejo))
-        if (viejo or viejo_programado) and al_quitar is not None:
+        if _quitar_viejo(cliente, sesion) and al_quitar is not None:
             al_quitar()
         workout_id = cliente.subir_entreno(entreno)
         try:
@@ -546,17 +577,10 @@ def mandar(sesion: Mapping[str, Any], conectar: Callable[[], Any],
             except Exception:  # noqa: BLE001 - the first error is the one that is said
                 log.warning("could not delete the workout that was not scheduled")
             raise
-    except SinCredenciales:
-        raise GarminNoLlega("faltan tus datos de Garmin (GARMIN_EMAIL y GARMIN_PASSWORD en .env)") from None
-    except GarminRateLimitError:
-        raise GarminNoLlega("Garmin está limitando las peticiones (429): inténtalo más tarde") from None
-    except GarminAuthError:
-        raise GarminNoLlega("no he podido entrar en tu Garmin Connect") from None
     except Exception as exc:  # noqa: BLE001 - refused, no connection: the card says it and offers the file
-        log.warning("Garmin did not take the workout (%s)", type(exc).__name__)
-        raise GarminNoLlega("Garmin no la ha aceptado o no responde") from None
+        raise _no_llega(exc, "Garmin no la ha aceptado o no responde") from None
     return workout_id, schedule_id
 
 
 __all__ = ["GarminNoLlega", "NoTraducible", "SinCredenciales", "a_garmin", "cliente_garmin", "de_garmin", "fit_local",
-           "lineas", "mandar"]
+           "lineas", "mandar", "quitar"]

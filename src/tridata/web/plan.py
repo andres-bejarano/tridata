@@ -37,6 +37,24 @@
                                       name, a bad date, the same plan), 404 without that plan, race or destination
     POST /api/plan/incidencia/ID/cerrar  unit 044: {leccion}: closes it by hand with its lesson (R-148) and answers
                                       like GET /api/plan/incidencias; 400 without a lesson, 404 without it, 409 closed
+    POST /api/plan/sesion/anadir      unit 067: {id, fecha, titulo, bloques}: a session that day (`bloques` a list, or
+                                      a text with a line per block)
+    POST /api/plan/sesion/cambiar     unit 067: {sesion, titulo, bloques}: another title and blocks, in its row
+    POST /api/plan/sesion/mover       unit 067: {sesion, fecha}: to another day, in its row (its `orden` stays: Google
+                                      Calendar keeps one event, R-201)
+    POST /api/plan/sesion/borrar      unit 067: {sesion}: out of the plan; sent to Garmin, it is removed from Garmin
+                                      first (`plan.reloj.quitar`, R-206); if Garmin fails it is deleted anyway and the
+                                      answer brings `aviso` «… sigue en tu reloj: bórrala allí»
+    POST /api/plan/semana/anadir      unit 067: {id, n, desde, hasta, previsto, clave}: a week of that plan
+    POST /api/plan/semana/cambiar     unit 067: {id, semana, n?, desde?, hasta?, previsto?, clave?}
+    POST /api/plan/semana/borrar      unit 067: {id, semana}: the week with its sessions (the sent ones out of Garmin
+                                      first); the answer brings `borradas`, how many went with it
+    POST /api/plan/fase/anadir        unit 067: {id, nombre, desde, hasta}: a phase over weeks desde..hasta
+    POST /api/plan/fase/cambiar       unit 067: {id, fase, nombre, desde, hasta}
+    POST /api/plan/fase/borrar        unit 067: {id, fase}: the phase, its weeks stay
+                                      The ten answer like GET /api/plan with the plan of that session, week or phase;
+                                      400 with why (a day that is over, dates that do not fit, phases that overlap),
+                                      404 without that plan, session, week or phase
 
 Unit 042: each day of GET /api/plan/semana/N also brings `reloj`, one per session of `sesiones` and in its order:
 {id, estado: "al_dia" | "cambiada" | None, enviada}, whether it is in the watch as it is now. Unit 061: and its
@@ -74,7 +92,7 @@ from ..plan import ABIERTA, Planes, semanas
 from ..plan.acciones import tarjeta_garmin
 from ..plan.importar import confirmar, proponer
 from ..plan.markdown import escribir
-from ..plan.reloj import NoTraducible, fit_local
+from ..plan.reloj import GarminNoLlega, NoTraducible, fit_local, quitar
 from ..storage import DataStore
 
 log = logging.getLogger(__name__)
@@ -238,6 +256,146 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
     async def hacer_principal(request: Request) -> Response:
         return await _de_carrera(request, lambda c, i: planes.hacer_principal(i, c["carrera"]))
 
+    # -- unit 067: the plan by hand: sessions, weeks and phases ---------------------------------------------------------
+
+    def _de_garmin(sesiones: list[dict]) -> str | None:
+        """Removes from Garmin what was sent of those sessions (R-206); the warning if Garmin failed, else None."""
+        fallos = []
+        for sesion in sesiones:
+            try:
+                quitar(sesion, planes.garmin)
+            except GarminNoLlega as exc:
+                fallos.append((sesion, exc))
+        if not fallos:
+            return None
+        if len(fallos) == 1:
+            return f"«{fallos[0][0]['titulo']}» sigue en tu reloj: bórrala allí ({fallos[0][1]})"
+        return f"{len(fallos)} sesiones siguen en tu reloj: bórralas allí ({fallos[0][1]})"
+
+    async def _de_sesion(request: Request, accion: Callable[[dict, dict], Any]) -> Response:
+        cuerpo = await _cuerpo(request)
+        if cuerpo is None:
+            return _error("Lo enviado no se entiende: no se ha guardado nada.", 400)
+        ident = cuerpo.get("sesion")
+        sesion = None
+        if isinstance(ident, int) and not isinstance(ident, bool):
+            sesion = await run_in_threadpool(planes.sesion, ident)
+        if sesion is None:
+            return _error("Esa sesión ya no está en el plan.", 404)
+        extra: dict[str, Any] = {}
+        respuesta = await _hacer(lambda: _juntar(extra, accion(cuerpo, sesion)),
+                                 lambda: planes.leer(sesion["plan_id"]), "Esa sesión ya no está en el plan.")
+        return _con(respuesta, extra)
+
+    def _juntar(extra: dict[str, Any], resultado: Any) -> None:
+        if isinstance(resultado, dict):
+            extra.update(resultado)
+
+    def _con(respuesta: Response, extra: dict[str, Any]) -> Response:
+        """The answer of `_hacer` with `extra` (a warning, a count) added when it went well."""
+        if respuesta.status_code != 200 or not extra:
+            return respuesta
+        return JSONResponse({**json.loads(bytes(respuesta.body)), **extra})
+
+    async def anadir_sesion(request: Request) -> Response:
+        cuerpo = await _cuerpo(request)
+        if cuerpo is None:
+            return _error("Lo enviado no se entiende: no se ha guardado nada.", 400)
+        ident = cuerpo.get("id")
+        if not isinstance(ident, int) or isinstance(ident, bool) or await run_in_threadpool(planes.leer, ident) is None:
+            return _error(NO_ESTA, 404)
+        return await _hacer(lambda: planes.anadir_sesion(ident, _texto(cuerpo, "fecha"), _texto(cuerpo, "titulo"),
+                                                         _bloques(cuerpo), hoy()),
+                            lambda: planes.leer(ident), NO_ESTA)
+
+    def _bloques(cuerpo: dict) -> list[str] | str:
+        valor = cuerpo.get("bloques")
+        if isinstance(valor, list):
+            return [b for b in valor if isinstance(b, str)]
+        return valor if isinstance(valor, str) else []
+
+    async def cambiar_sesion(request: Request) -> Response:
+        return await _de_sesion(request, lambda c, s: planes.cambiar_sesion(s["id"], _texto(c, "titulo"), _bloques(c),
+                                                                            hoy()))
+
+    async def mover_sesion(request: Request) -> Response:
+        return await _de_sesion(request, lambda c, s: planes.mover_sesion(s["id"], _texto(c, "fecha"), hoy()))
+
+    def _borrar_sesion(cuerpo: dict, sesion: dict) -> dict[str, Any]:
+        if date.fromisoformat(sesion["fecha"]) < hoy():
+            planes.borrar_sesion(sesion["id"], hoy())  # says why (R-207) before Garmin is touched
+        aviso = _de_garmin([sesion])
+        planes.borrar_sesion(sesion["id"], hoy())
+        return {"aviso": aviso} if aviso else {}
+
+    async def borrar_sesion(request: Request) -> Response:
+        return await _de_sesion(request, _borrar_sesion)
+
+    async def _del_plan(request: Request, accion: Callable[[dict, int], Any], falta: str) -> Response:
+        cuerpo = await _cuerpo(request)
+        if cuerpo is None:
+            return _error("Lo enviado no se entiende: no se ha guardado nada.", 400)
+        ident = cuerpo.get("id")
+        if not isinstance(ident, int) or isinstance(ident, bool) or await run_in_threadpool(planes.leer, ident) is None:
+            return _error(NO_ESTA, 404)
+        extra: dict[str, Any] = {}
+        respuesta = await _hacer(lambda: _juntar(extra, accion(cuerpo, ident)), lambda: planes.leer(ident), falta)
+        return _con(respuesta, extra)
+
+    _SEMANA = ("n", "desde", "hasta", "previsto", "clave")
+
+    def _semana_de(cuerpo: dict) -> dict[str, Any]:
+        return {c: cuerpo[c] for c in _SEMANA if c in cuerpo and isinstance(cuerpo[c], (str, int))
+                and not isinstance(cuerpo[c], bool)}
+
+    def _n(cuerpo: dict, clave: str) -> int:
+        valor = cuerpo.get(clave)
+        if not isinstance(valor, int) or isinstance(valor, bool):
+            raise LookupError(valor)
+        return valor
+
+    async def anadir_semana(request: Request) -> Response:
+        return await _del_plan(request, lambda c, i: planes.anadir_semana(i, _semana_de(c)), NO_ESTA)
+
+    async def cambiar_semana(request: Request) -> Response:
+        return await _del_plan(request, lambda c, i: planes.cambiar_semana(i, _n(c, "semana"), _semana_de(c)),
+                               "Esa semana ya no está en el plan.")
+
+    def _borrar_semana(cuerpo: dict, ident: int) -> dict[str, Any]:
+        n = _n(cuerpo, "semana")
+        plan = planes.leer(ident) or {}
+        semana = next((s for s in plan.get("semanas", []) if s["n"] == n), None)
+        if semana is None:
+            raise LookupError(n)
+        mandadas = [s for s in planes.sesiones_garmin(ident, date.fromisoformat(semana["desde"]),
+                                                      date.fromisoformat(semana["hasta"]))
+                    if s["garmin_workout_id"] is not None or s["garmin_schedule_id"] is not None]
+        aviso = _de_garmin(mandadas)
+        borradas = planes.borrar_semana(ident, n)
+        return {"borradas": borradas, **({"aviso": aviso} if aviso else {})}
+
+    async def borrar_semana(request: Request) -> Response:
+        return await _del_plan(request, _borrar_semana, "Esa semana ya no está en el plan.")
+
+    def _de_fase(cuerpo: dict, ident: int) -> int:
+        fase = _n(cuerpo, "fase")
+        encontrada = planes.fase(fase)
+        if encontrada is None or encontrada["plan_id"] != ident:
+            raise LookupError(fase)
+        return fase
+
+    async def anadir_fase(request: Request) -> Response:
+        return await _del_plan(request, lambda c, i: planes.anadir_fase(i, _texto(c, "nombre"), c.get("desde"),
+                                                                        c.get("hasta")), NO_ESTA)
+
+    async def cambiar_fase(request: Request) -> Response:
+        return await _del_plan(request, lambda c, i: planes.cambiar_fase(_de_fase(c, i), _texto(c, "nombre"),
+                                                                         c.get("desde"), c.get("hasta")),
+                               "Esa fase ya no está en el plan.")
+
+    async def borrar_fase(request: Request) -> Response:
+        return await _del_plan(request, lambda c, i: planes.borrar_fase(_de_fase(c, i)), "Esa fase ya no está en el plan.")
+
     def _incidencias(plan: dict | None) -> dict[str, Any]:
         if plan is None:
             return {"plan": None, "incidencias": []}
@@ -369,6 +527,16 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         Route("/api/plan/carrera/quitar", quitar_carrera, methods=["POST"]),
         Route("/api/plan/carrera/mover", mover_carrera, methods=["POST"]),
         Route("/api/plan/carrera/principal", hacer_principal, methods=["POST"]),
+        Route("/api/plan/sesion/anadir", anadir_sesion, methods=["POST"]),
+        Route("/api/plan/sesion/cambiar", cambiar_sesion, methods=["POST"]),
+        Route("/api/plan/sesion/mover", mover_sesion, methods=["POST"]),
+        Route("/api/plan/sesion/borrar", borrar_sesion, methods=["POST"]),
+        Route("/api/plan/semana/anadir", anadir_semana, methods=["POST"]),
+        Route("/api/plan/semana/cambiar", cambiar_semana, methods=["POST"]),
+        Route("/api/plan/semana/borrar", borrar_semana, methods=["POST"]),
+        Route("/api/plan/fase/anadir", anadir_fase, methods=["POST"]),
+        Route("/api/plan/fase/cambiar", cambiar_fase, methods=["POST"]),
+        Route("/api/plan/fase/borrar", borrar_fase, methods=["POST"]),
         Route("/api/plan/incidencias", ver_incidencias),
         Route("/api/plan/incidencia/{id:int}/cerrar", cerrar_incidencia, methods=["POST"]),
     ]

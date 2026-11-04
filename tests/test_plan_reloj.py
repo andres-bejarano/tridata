@@ -478,3 +478,33 @@ def test_lo_que_el_texto_no_sabe_decir_es_titulo_duracion_y_descripcion(leido): 
 def test_sin_descripcion_ni_duracion_queda_el_titulo():  # 061 · R4
     leido = entreno_leido("Fuerza inventada", deporte="strength_training", duracion=None)
     assert reloj.de_garmin(leido) == ("Fuerza inventada", [])
+
+
+# -- unit 067 · R8 (R-206, C-255): a session deleted by hand leaves Garmin too (`quitar`, the first half of `mandar`) --
+
+def test_quitar_desprograma_y_borra_su_entreno():  # R8
+    garmin = GarminDoble()
+    workout_id, schedule_id = mandar(SERIES, lambda: garmin)
+    reloj.quitar({**SERIES, "garmin_workout_id": workout_id, "garmin_schedule_id": schedule_id}, lambda: garmin)
+    assert garmin.llamadas[2:] == [("quitar_programado", schedule_id), ("borrar_entreno", workout_id)]
+    assert garmin.entrenos == {} and garmin.programados == {}
+
+
+def test_quitar_una_que_nunca_se_mando_no_llama_a_garmin():  # R8
+    garmin = GarminDoble()
+    reloj.quitar({**SERIES, "garmin_workout_id": None, "garmin_schedule_id": None}, lambda: garmin)
+    reloj.quitar(SERIES, lambda: garmin)
+    assert garmin.llamadas == []
+
+
+@pytest.mark.parametrize(("error", "dice"), [
+    (GarminRateLimitError("429"), "limitando"),
+    (GarminWorkoutError("no answer"), "no responde"),
+], ids=["429", "sin-respuesta"])
+def test_si_garmin_falla_al_quitar_lo_dice(error, dice):  # R8
+    garmin = GarminDoble(falla_en="quitar_programado", error=error)
+    with pytest.raises(GarminNoLlega) as exc:
+        reloj.quitar({**SERIES, "garmin_workout_id": 5, "garmin_schedule_id": 6}, lambda: garmin)
+    assert dice in str(exc.value)
+    with pytest.raises(GarminNoLlega, match="GARMIN_EMAIL"):
+        reloj.quitar({**SERIES, "garmin_workout_id": 5, "garmin_schedule_id": 6}, lambda: reloj.cliente_garmin({}))

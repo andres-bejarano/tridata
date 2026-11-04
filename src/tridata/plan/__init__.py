@@ -52,10 +52,23 @@ transaction). A race is added (`anadir_carrera`), removed (`quitar_carrera`), mo
 one `UPDATE` of its row, so its target, result and strategy go with it) or made the main one (`hacer_principal`, one
 per plan). A plan can be left without a main race (removing or moving it never picks another one): it then does not
 count for the current plan, which is still the one of the next main race (`en_curso`).
+
+Unit 067 (REC-30, R-199..R-208): the plan by hand. A session is added (`anadir_sesion`, in the section of the session
+closest before it, as the cards of `plan.acciones` do), changed (`cambiar_sesion`), moved to another day
+(`mover_sesion`) and deleted (`borrar_sesion`), each one an `UPDATE` or `DELETE` of its row IN PLACE: its `orden`
+never moves, so Google Calendar (`<plan>-<orden>`) and the team keep it as the same session. A day that is over is
+history (`YA_PASO`): its session is not changed nor deleted, only moved to today or a day to come. A sent session
+keeps the day Garmin has it on (`garmin_fecha`): moved by hand it says «cambiada» until it is sent again, and the
+next pass of «Garmin manda» does not take it back to that day (`aplicar_garmin`). Weeks are added
+(`anadir_semana`, to the section of the weeks, or the «previsto» one of a plan made by hand), changed
+(`cambiar_semana`) and deleted with their sessions (`borrar_semana`). The phases (`plan_fase`: name and the weeks it
+spans, `desde_n`..`hasta_n`) are added, changed and deleted without touching their weeks; two phases never share a
+week. `leer` gives `fases` only when the plan has them, so a plan without them reads as before.
 """
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -131,6 +144,13 @@ CREATE TABLE IF NOT EXISTS plan_nota_dia (
     texto TEXT NOT NULL,
     creada TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS plan_fase (
+    plan_id INTEGER NOT NULL REFERENCES plan(id),
+    orden INTEGER NOT NULL,
+    nombre TEXT NOT NULL,
+    desde_n INTEGER NOT NULL,
+    hasta_n INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS plan_nota (
     plan_id INTEGER NOT NULL REFERENCES plan(id),
     orden INTEGER NOT NULL,
@@ -156,6 +176,8 @@ _RELOJ = (("garmin_workout_id", "INTEGER"), ("garmin_schedule_id", "INTEGER"), (
           ("garmin_texto", "TEXT"))
 # unit 061: Garmin's `updatedDate` of a paired session and the warning of the last pass
 _DESDE_GARMIN = (("garmin_actualizado", "TEXT"), ("garmin_aviso", "TEXT"))
+# unit 067: the day Garmin has a sent session on, to tell a move by hand from a move in Garmin
+_EN_GARMIN = (("garmin_fecha", "TEXT"),)
 _COLUMNAS_GARMIN = {"titulo", "bloques", "fecha", "garmin_workout_id", "garmin_schedule_id", "garmin_actualizado",
                     "garmin_texto"}
 # unit 044: the columns of a live incident, added to an older base without them
@@ -171,7 +193,7 @@ HECHA = "✅"
 APARTADOS_NUEVO = ({"titulo": "Objetivos", "parte": "objetivos"}, {"titulo": "Previsto", "parte": "previsto"},
                    {"titulo": "Sesiones clave", "parte": "sesiones_clave"})
 _TABLAS_DEL_PLAN = ("plan_carrera", "plan_semana", "plan_sesion", "plan_nutricion", "plan_incidencia", "plan_nota",
-                    "plan_nota_dia")
+                    "plan_nota_dia", "plan_fase")
 ABIERTA, CERRADA = "abierta", "cerrada"
 
 
@@ -204,7 +226,8 @@ class Planes:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
             for tabla, columnas in (("plan_sesion", _RELOJ), ("plan_incidencia", _VIVA), ("plan_carrera", _ESTRATEGIA),
-                                    ("plan_carrera", _RESULTADO), ("plan_sesion", _DESDE_GARMIN)):
+                                    ("plan_carrera", _RESULTADO), ("plan_sesion", _DESDE_GARMIN),
+                                    ("plan_sesion", _EN_GARMIN)):
                 tiene = {f["name"] for f in conn.execute(f"PRAGMA table_info({tabla})")}
                 for columna, tipo in columnas:
                     if columna not in tiene:
@@ -249,6 +272,9 @@ class Planes:
                 plan[clave] = [{c: _de_la_base(tabla, c, f[c]) for c in columnas} for f in filas]
             extra = conn.execute("SELECT estrategia, resultado FROM plan_carrera WHERE plan_id = ? ORDER BY orden",
                                  (ident,)).fetchall()
+            fases = self._fases(conn, ident)
+        if fases:  # unit 067: only when it has them
+            plan["fases"] = fases
         for carrera, f in zip(plan["carreras"], extra, strict=True):  # unit 059: only when it has them
             if f["estrategia"] and json.loads(f["estrategia"]):
                 carrera["estrategia"] = json.loads(f["estrategia"])
@@ -299,7 +325,8 @@ class Planes:
             estado = None
             if f["garmin_workout_id"] is not None:
                 ahora = texto_sesion(f["titulo"], json.loads(f["bloques"]))
-                estado = "al_dia" if f["garmin_texto"] == ahora else "cambiada"
+                movida = f["garmin_fecha"] is not None and f["garmin_fecha"] != f["fecha"]  # unit 067
+                estado = "al_dia" if f["garmin_texto"] == ahora and not movida else "cambiada"
             salida.append({"id": f["id"], "fecha": f["fecha"], "titulo": f["titulo"], "estado": estado,
                            "enviada": f["garmin_enviada"] if estado else None, "aviso": f["garmin_aviso"]})
         return salida
@@ -309,9 +336,10 @@ class Planes:
         """What is in Garmin of that session now (all None: nothing)."""
         with self._connect() as conn:
             conn.execute("UPDATE plan_sesion SET garmin_workout_id = ?, garmin_schedule_id = ?, garmin_enviada = ?, "
-                         "garmin_texto = ? WHERE rowid = ?",
+                         "garmin_texto = ?, garmin_fecha = CASE WHEN ? IS NULL THEN NULL ELSE fecha END "
+                         "WHERE rowid = ?",
                          (workout_id, schedule_id, enviada.isoformat(timespec="seconds") if enviada else None,
-                          texto, ident))
+                          texto, workout_id, ident))
 
     # -- unit 061: «Garmin manda» --------------------------------------------------------------------------------
 
@@ -341,6 +369,14 @@ class Planes:
         with self._connect() as conn:
             for ident, campos in cambios.actualizar.items():
                 valores = {c: _a_la_base("plan_sesion", c, v) for c, v in campos.items() if c in _COLUMNAS_GARMIN}
+                if "fecha" in valores:  # unit 067: a session moved by hand, Garmin still on the day it was sent
+                    fila = conn.execute("SELECT fecha, garmin_fecha FROM plan_sesion WHERE rowid = ? AND plan_id = ?",
+                                        (ident, plan_id)).fetchone()
+                    if fila is not None and fila["garmin_fecha"] is not None and fila["fecha"] != fila["garmin_fecha"] \
+                            and valores["fecha"] == fila["garmin_fecha"]:
+                        del valores["fecha"]
+                    else:
+                        valores["garmin_fecha"] = valores["fecha"]
                 if valores:
                     conn.execute(f"UPDATE plan_sesion SET {', '.join(f'{c} = ?' for c in valores)} "  # noqa: S608
                                  "WHERE rowid = ? AND plan_id = ?", (*valores.values(), ident, plan_id))
@@ -356,10 +392,12 @@ class Planes:
                     apartado = max(len(json.loads(apartados)) - 1, 0)
                 for i, nueva in enumerate(cambios.anadir):
                     columnas = [c for c in nueva if c in _COLUMNAS_GARMIN]
-                    conn.execute(
+                    nueva_id = conn.execute(
                         f"INSERT INTO plan_sesion (plan_id, orden, apartado, clave, {', '.join(columnas)}) "  # noqa: S608
                         f"VALUES (?, ?, ?, 0, {', '.join('?' * len(columnas))})",
-                        (plan_id, orden + i, apartado, *(_a_la_base("plan_sesion", c, nueva[c]) for c in columnas)))
+                        (plan_id, orden + i, apartado, *(_a_la_base("plan_sesion", c, nueva[c]) for c in columnas))
+                    ).lastrowid
+                    conn.execute("UPDATE plan_sesion SET garmin_fecha = fecha WHERE rowid = ?", (nueva_id,))
             for ident, aviso in cambios.avisos.items():
                 conn.execute("UPDATE plan_sesion SET garmin_aviso = ? WHERE rowid = ? AND plan_id = ?",
                              (aviso, ident, plan_id))
@@ -536,6 +574,213 @@ class Planes:
             fila = self._fila_carrera(conn, plan_id, carrera)
             conn.execute("UPDATE plan_carrera SET principal = (rowid = ?) WHERE plan_id = ?", (fila, plan_id))
 
+
+    # -- unit 067: the plan by hand — sessions, weeks and phases ----------------------------------------------------
+
+    @staticmethod
+    def _plan_existe(conn: sqlite3.Connection, plan_id: int) -> None:
+        if conn.execute("SELECT 1 FROM plan WHERE id = ?", (plan_id,)).fetchone() is None:
+            raise LookupError(plan_id)
+
+    @staticmethod
+    def _fila_sesion(conn: sqlite3.Connection, ident: int) -> sqlite3.Row:
+        fila = conn.execute("SELECT rowid AS id, * FROM plan_sesion WHERE rowid = ?", (ident,)).fetchone()
+        if fila is None:
+            raise LookupError(ident)
+        return fila
+
+    def anadir_sesion(self, plan_id: int, fecha: str, titulo: str, bloques: list[str] | str, hoy: date) -> int:
+        """A session on that day (R-199), with its blocks (one line each, the empty ones left out), in the section of
+        the session closest before it; its id. ValueError, with why, for a bad date, a day that is over (`YA_PASO`) or
+        an empty title; LookupError without that plan."""
+        from .acciones import _sitio
+
+        dia, limpio, lineas = _dia_que_viene(fecha, hoy), _titulo(titulo), _bloques_limpios(bloques)
+        with self._connect() as conn:
+            self._plan_existe(conn, plan_id)
+            apartado, orden = _sitio(conn, "plan_sesion", plan_id, dia)
+            cursor = conn.execute("INSERT INTO plan_sesion (plan_id, orden, apartado, fecha, titulo, bloques, clave) "
+                                  "VALUES (?, ?, ?, ?, ?, ?, 0)",
+                                  (plan_id, orden, apartado, dia, limpio, json.dumps(lineas, ensure_ascii=False)))
+            return int(cursor.lastrowid or 0)
+
+    def cambiar_sesion(self, ident: int, titulo: str, bloques: list[str] | str, hoy: date) -> None:
+        """Another title and blocks for that session, in its row (R-200). ValueError for an empty title or a day that
+        is over (R-207); LookupError without it."""
+        limpio, lineas = _titulo(titulo), _bloques_limpios(bloques)
+        with self._connect() as conn:
+            fila = self._fila_sesion(conn, ident)
+            _no_pasado(fila["fecha"], hoy)
+            conn.execute("UPDATE plan_sesion SET titulo = ?, bloques = ? WHERE rowid = ?",
+                         (limpio, json.dumps(lineas, ensure_ascii=False), ident))
+
+    def mover_sesion(self, ident: int, fecha: str, hoy: date) -> None:
+        """That session to another day, with its blocks, in ONE `UPDATE` of its row: its `orden` stays, so Google
+        Calendar and the team keep it as the same session (R-201). A session of a day that is over can be moved to
+        today or a day to come, never to a day that is over (R-207). Sent to Garmin, it keeps the day Garmin has it
+        on, so it says «cambiada» (R-205). ValueError with why; LookupError without it."""
+        dia = _dia_que_viene(fecha, hoy)
+        with self._connect() as conn:
+            fila = self._fila_sesion(conn, ident)
+            conn.execute("UPDATE plan_sesion SET fecha = ?, garmin_fecha = CASE WHEN garmin_workout_id IS NULL "
+                         "THEN garmin_fecha ELSE COALESCE(garmin_fecha, ?) END WHERE rowid = ?",
+                         (dia, fila["fecha"], ident))
+
+    def borrar_sesion(self, ident: int, hoy: date) -> None:
+        """That session out of the plan (R-202); not one of a day that is over (R-207). Garmin is not touched here:
+        `web/plan.py` removes it from Garmin first (`plan.reloj.quitar`, R-206). LookupError without it."""
+        with self._connect() as conn:
+            fila = self._fila_sesion(conn, ident)
+            _no_pasado(fila["fecha"], hoy)
+            conn.execute("DELETE FROM plan_sesion WHERE rowid = ?", (ident,))
+
+    @staticmethod
+    def _fila_semana(conn: sqlite3.Connection, plan_id: int, n: int) -> sqlite3.Row:
+        fila = conn.execute("SELECT rowid AS id, * FROM plan_semana WHERE plan_id = ? AND n = ? ORDER BY orden LIMIT 1",
+                            (plan_id, n)).fetchone()
+        if fila is None:
+            raise LookupError(n)
+        return fila
+
+    @staticmethod
+    def _apartado_semanas(conn: sqlite3.Connection, plan_id: int) -> int:
+        """The section of the weeks of a plan: the one of its last week; without weeks, its «previsto» section (a plan
+        made by hand, `APARTADOS_NUEVO`); else a new «Semanas» section at the end."""
+        fila = conn.execute("SELECT apartado FROM plan_semana WHERE plan_id = ? ORDER BY orden DESC LIMIT 1",
+                            (plan_id,)).fetchone()
+        if fila is not None:
+            return int(fila[0])
+        (texto,) = conn.execute("SELECT apartados FROM plan WHERE id = ?", (plan_id,)).fetchone()
+        apartados = json.loads(texto)
+        i = next((i for i, a in enumerate(apartados) if a.get("parte") == "previsto"), None)
+        if i is not None:
+            return i
+        apartados.append({"titulo": "Semanas", "parte": "previsto"})
+        conn.execute("UPDATE plan SET apartados = ? WHERE id = ?", (json.dumps(apartados, ensure_ascii=False), plan_id))
+        return len(apartados) - 1
+
+    @staticmethod
+    def _semana_valida(conn: sqlite3.Connection, plan_id: int, semana: dict[str, Any], rowid: int | None) -> None:
+        if semana["hasta"] < semana["desde"]:
+            raise ValueError(f"La semana {semana['n']} acaba ({semana['hasta']}) antes de empezar ({semana['desde']}): "
+                             "la fecha hasta va después de la fecha desde")
+        otra = conn.execute("SELECT 1 FROM plan_semana WHERE plan_id = ? AND n = ? AND rowid != ?",
+                            (plan_id, semana["n"], rowid or -1)).fetchone()
+        if otra is not None:
+            raise ValueError(f"Ya hay una semana {semana['n']} en el plan")
+
+    def anadir_semana(self, plan_id: int, datos: dict[str, Any]) -> None:
+        """A week (`{n, desde, hasta, previsto, clave}`; `previsto` as «4:30», «4h30» or «270'») of that plan, also of
+        an empty one (R-203). ValueError, with why, for a bad number, dates or planned time, `hasta` before `desde` or
+        a number the plan has; LookupError without that plan."""
+        semana = _semana_nueva(datos)
+        with self._connect() as conn:
+            self._plan_existe(conn, plan_id)
+            self._semana_valida(conn, plan_id, semana, None)
+            apartado = self._apartado_semanas(conn, plan_id)
+            (orden,) = conn.execute("SELECT COALESCE(MAX(orden), -1) + 1 FROM plan_semana WHERE plan_id = ?",
+                                    (plan_id,)).fetchone()
+            conn.execute("INSERT INTO plan_semana (plan_id, orden, apartado, n, desde, hasta, previsto_s, clave) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (plan_id, orden, apartado, semana["n"], semana["desde"], semana["hasta"],
+                          semana["previsto_s"], semana["clave"]))
+
+    def cambiar_semana(self, plan_id: int, n: int, cambios: dict[str, Any]) -> None:
+        """Changes `n`, `desde`, `hasta`, `previsto` and `clave` of week `n` of that plan, only the ones in `cambios`, in
+        its row (R-203). ValueError, with why, as `anadir_semana`; LookupError without that week."""
+        with self._connect() as conn:
+            fila = self._fila_semana(conn, plan_id, n)
+            actual = {"n": fila["n"], "desde": fila["desde"], "hasta": fila["hasta"], "clave": fila["clave"],
+                      "previsto": fila["previsto_s"]}
+            semana = _semana_nueva({**actual, **cambios}, previsto_s="previsto" not in cambios)
+            self._semana_valida(conn, plan_id, semana, fila["id"])
+            conn.execute("UPDATE plan_semana SET n = ?, desde = ?, hasta = ?, previsto_s = ?, clave = ? WHERE rowid = ?",
+                         (semana["n"], semana["desde"], semana["hasta"], semana["previsto_s"], semana["clave"],
+                          fila["id"]))
+
+    def sesiones_de_semana(self, plan_id: int, n: int) -> int:
+        """How many sessions week `n` of that plan has (what goes with it if it is deleted). LookupError without it."""
+        with self._connect() as conn:
+            fila = self._fila_semana(conn, plan_id, n)
+            (cuantas,) = conn.execute("SELECT COUNT(*) FROM plan_sesion WHERE plan_id = ? AND fecha BETWEEN ? AND ?",
+                                      (plan_id, fila["desde"], fila["hasta"])).fetchone()
+        return int(cuantas)
+
+    def borrar_semana(self, plan_id: int, n: int) -> int:
+        """Week `n` out of that plan with its sessions, in one transaction; how many sessions went with it (R-203). Its
+        phase stays. Garmin is not touched here (`web/plan.py` removes the sent ones first). LookupError without it."""
+        with self._connect() as conn:
+            fila = self._fila_semana(conn, plan_id, n)
+            borradas = conn.execute("DELETE FROM plan_sesion WHERE plan_id = ? AND fecha BETWEEN ? AND ?",
+                                    (plan_id, fila["desde"], fila["hasta"])).rowcount
+            conn.execute("DELETE FROM plan_semana WHERE rowid = ?", (fila["id"],))
+        return int(borradas)
+
+    @staticmethod
+    def _fases(conn: sqlite3.Connection, plan_id: int) -> list[dict[str, Any]]:
+        filas = conn.execute("SELECT rowid AS id, nombre, desde_n, hasta_n FROM plan_fase WHERE plan_id = ? "
+                             "ORDER BY desde_n, orden", (plan_id,)).fetchall()
+        return [{"id": f["id"], "nombre": f["nombre"], "desde_n": f["desde_n"], "hasta_n": f["hasta_n"]} for f in filas]
+
+    @staticmethod
+    def _fase_valida(conn: sqlite3.Connection, plan_id: int, nombre: str, desde_n: Any, hasta_n: Any,
+                     rowid: int | None) -> tuple[str, int, int]:
+        limpio = _limpio(nombre)
+        if not limpio:
+            raise ValueError("Ponle un nombre a la fase")
+        desde, hasta = _numero(desde_n, "la semana desde"), _numero(hasta_n, "la semana hasta")
+        if hasta < desde:
+            raise ValueError(f"La fase acaba en la semana {hasta}, antes de empezar (semana {desde}): la semana hasta "
+                             "va después")
+        tiene = {int(f[0]) for f in conn.execute("SELECT n FROM plan_semana WHERE plan_id = ?", (plan_id,))}
+        for extremo in (desde, hasta):
+            if extremo not in tiene:
+                raise ValueError(f"El plan no tiene la semana {extremo}")
+        pisada = conn.execute("SELECT nombre FROM plan_fase WHERE plan_id = ? AND rowid != ? AND desde_n <= ? "
+                              "AND hasta_n >= ? ORDER BY desde_n LIMIT 1", (plan_id, rowid or -1, hasta, desde)).fetchone()
+        if pisada is not None:
+            raise ValueError(f"Esas semanas pisan la fase «{pisada[0]}»: una semana está en una fase o en ninguna")
+        return limpio, desde, hasta
+
+    def anadir_fase(self, plan_id: int, nombre: str, desde_n: Any, hasta_n: Any) -> int:
+        """A phase («Base») over weeks `desde_n`..`hasta_n` of that plan; its id (R-204, S-70). ValueError, with why,
+        for an empty name, `hasta_n` before `desde_n`, a week the plan has not or one in another phase; LookupError
+        without that plan."""
+        with self._connect() as conn:
+            self._plan_existe(conn, plan_id)
+            limpio, desde, hasta = self._fase_valida(conn, plan_id, nombre, desde_n, hasta_n, None)
+            (orden,) = conn.execute("SELECT COALESCE(MAX(orden), -1) + 1 FROM plan_fase WHERE plan_id = ?",
+                                    (plan_id,)).fetchone()
+            cursor = conn.execute("INSERT INTO plan_fase (plan_id, orden, nombre, desde_n, hasta_n) VALUES (?, ?, ?, ?, ?)",
+                                  (plan_id, orden, limpio, desde, hasta))
+            return int(cursor.lastrowid or 0)
+
+    def _fila_fase(self, conn: sqlite3.Connection, ident: int) -> sqlite3.Row:
+        fila = conn.execute("SELECT rowid AS id, plan_id FROM plan_fase WHERE rowid = ?", (ident,)).fetchone()
+        if fila is None:
+            raise LookupError(ident)
+        return fila
+
+    def fase(self, ident: int) -> dict[str, Any] | None:
+        """`{id, plan_id}` of a phase, or None."""
+        with self._connect() as conn:
+            fila = conn.execute("SELECT rowid AS id, plan_id FROM plan_fase WHERE rowid = ?", (ident,)).fetchone()
+        return {"id": fila["id"], "plan_id": fila["plan_id"]} if fila is not None else None
+
+    def cambiar_fase(self, ident: int, nombre: str, desde_n: Any, hasta_n: Any) -> None:
+        """Another name and stretch for that phase (R-204); ValueError as `anadir_fase`, LookupError without it."""
+        with self._connect() as conn:
+            fila = self._fila_fase(conn, ident)
+            limpio, desde, hasta = self._fase_valida(conn, fila["plan_id"], nombre, desde_n, hasta_n, ident)
+            conn.execute("UPDATE plan_fase SET nombre = ?, desde_n = ?, hasta_n = ? WHERE rowid = ?",
+                         (limpio, desde, hasta, ident))
+
+    def borrar_fase(self, ident: int) -> None:
+        """That phase out of the plan; its weeks stay (R-204). LookupError without it."""
+        with self._connect() as conn:
+            self._fila_fase(conn, ident)
+            conn.execute("DELETE FROM plan_fase WHERE rowid = ?", (ident,))
+
     # -- unit 044: the live incidents and the notes of a day ---------------------------------------------------------
 
     def abrir_incidencia(self, plan_id: int, zona: str, lado: str | None, desde: date, que_paso: str,
@@ -635,6 +880,79 @@ def _fecha(valor: Any) -> str | None:
 
 def _limpio(valor: Any) -> str:
     return " ".join(str(valor or "").split())
+
+
+def _titulo(valor: Any) -> str:
+    limpio = _limpio(valor)
+    if not limpio:
+        raise ValueError("Ponle un título a la sesión")
+    return limpio
+
+
+def _bloques_limpios(bloques: Any) -> list[str]:
+    """One block per line (a list, or a text with a line per block), tidied; the empty ones left out."""
+    lineas = bloques.splitlines() if isinstance(bloques, str) else list(bloques or [])
+    return [x for x in (_limpio(b) for b in lineas if isinstance(b, str)) if x]
+
+
+def _no_pasado(fecha: str, hoy: date) -> None:
+    from .acciones import YA_PASO
+
+    if date.fromisoformat(fecha) < hoy:
+        raise ValueError(YA_PASO)
+
+
+def _dia_que_viene(fecha: Any, hoy: date) -> str:
+    """The ISO date of today or a day to come; ValueError for a bad or missing one or a day that is over (R-207)."""
+    dia = _fecha(fecha)
+    if dia is None:
+        raise ValueError("Elige el día de la sesión (año-mes-día)")
+    _no_pasado(dia, hoy)
+    return dia
+
+
+def _numero(valor: Any, que: str) -> int:
+    if isinstance(valor, bool):
+        valor = None
+    try:
+        numero = int(str(valor).strip()) if isinstance(valor, (int, str)) else None
+    except ValueError:
+        numero = None
+    if numero is None or numero < 1:
+        raise ValueError(f"El número de {que} tiene que ser 1 o más")
+    return numero
+
+
+_PREVISTO = (re.compile(r"^(\d+):([0-5]\d)$"), re.compile(r"^(\d+)\s*h\s*(\d{1,2})?'?$"), re.compile(r"^(\d+)\s*'?$"))
+
+
+def _previsto(valor: Any) -> int | None:
+    """The planned time of a week in seconds: «4:30» or «4h30» (hours and minutes), «4h», «270'» or «270» (minutes);
+    empty, None. ValueError saying why for anything else."""
+    texto = "".join(str(valor or "").split()).replace("min", "'")
+    if not texto:
+        return None
+    horas_minutos, horas, minutos = (p.match(texto) for p in _PREVISTO)
+    if horas_minutos:
+        return int(horas_minutos.group(1)) * 3600 + int(horas_minutos.group(2)) * 60
+    if horas:
+        return int(horas.group(1)) * 3600 + int(horas.group(2) or 0) * 60
+    if minutos:
+        return int(minutos.group(1)) * 60
+    raise ValueError(f"El previsto «{texto}» no se entiende: escríbelo en horas y minutos, como 4:30")
+
+
+def _semana_nueva(datos: dict[str, Any], previsto_s: bool = False) -> dict[str, Any]:
+    """`{n, desde, hasta, previsto_s, clave}` of a week typed by hand (`previsto_s`: `previsto` is already seconds);
+    ValueError, with why, for a bad number, a missing or bad date or a planned time it does not understand."""
+    n = _numero(datos.get("n"), "la semana")
+    desde, hasta = _fecha(datos.get("desde")), _fecha(datos.get("hasta"))
+    if desde is None or hasta is None:
+        raise ValueError(f"La semana {n} necesita su fecha desde y su fecha hasta (año-mes-día)")
+    previsto = datos.get("previsto")
+    return {"n": n, "desde": desde, "hasta": hasta,
+            "previsto_s": (int(previsto) if previsto is not None else None) if previsto_s else _previsto(previsto),
+            "clave": _limpio(datos.get("clave"))}
 
 
 def _carrera_nueva(carrera: dict[str, Any]) -> dict[str, Any]:

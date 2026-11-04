@@ -16,6 +16,9 @@ of the sport its name says («10K», «media», «maratón», «Behobia», «tra
 the multisport, or the sum of the day), else the longest of the day, so the warm-up, the cool-down and the ride to
 get there do not count. What was written by hand (`resultado`, or the «✅ …» of the .md) always wins (`origen`
 "a mano"). Each race also carries its strategy (`estrategia`, unit 045).
+
+Unit 067 (R-204, S-70): a week inside a phase of the plan carries its name (`fase`), and the plan its phases
+(`fases`: `{id, nombre, desde_n, hasta_n}`); a week in no phase, and a plan without phases, as before.
 """
 from __future__ import annotations
 
@@ -132,18 +135,28 @@ def _carrera(c: dict, store: DataStore | None, hoy: date) -> dict[str, Any]:
             "resultado": resultado, "estrategia": list(c.get("estrategia") or [])}
 
 
-def _semana(s: dict, store: DataStore | None, hoy: date) -> dict[str, Any]:
+def fase_de(plan: dict, n: int) -> str | None:
+    """The name of the phase week `n` of the plan is in, or None (unit 067)."""
+    return next((f["nombre"] for f in plan.get("fases") or [] if f["desde_n"] <= n <= f["hasta_n"]), None)
+
+
+def _semana(s: dict, store: DataStore | None, hoy: date, fase: str | None = None) -> dict[str, Any]:
     desde, hasta = date.fromisoformat(s["desde"]), date.fromisoformat(s["hasta"])
-    return {"n": s["n"], "desde": s["desde"], "hasta": s["hasta"], "previsto_s": s.get("previsto_s"),
-            "clave": s.get("clave") or "", "hoy": desde <= hoy <= hasta,
-            "hecho": hecho(store, desde, hasta, hoy, s.get("hecho_plan_s"), s.get("hecho_plan_km"))}
+    semana = {"n": s["n"], "desde": s["desde"], "hasta": s["hasta"], "previsto_s": s.get("previsto_s"),
+              "clave": s.get("clave") or "", "hoy": desde <= hoy <= hasta,
+              "hecho": hecho(store, desde, hasta, hoy, s.get("hecho_plan_s"), s.get("hecho_plan_km"))}
+    if fase:
+        semana["fase"] = fase
+    return semana
 
 
 def vista(plan: dict, store: DataStore | None, hoy: date) -> dict[str, Any]:
     """The plan as Fitness › Plan shows it (R1, R2): its races and its weeks with planned and done."""
     return {"id": plan["id"], "nombre": plan["nombre"],
             "carreras": [_carrera(c, store, hoy) for c in plan["carreras"]],
-            "semanas": [_semana(s, store, hoy) for s in sorted(plan["semanas"], key=lambda s: s["n"])],
+            "semanas": [_semana(s, store, hoy, fase_de(plan, s["n"]))
+                        for s in sorted(plan["semanas"], key=lambda s: s["n"])],
+            "fases": [dict(f) for f in plan.get("fases") or []],
             "incidencias": len(plan["incidencias"]), "notas": len([n for n in plan["notas"] if n["tipo"] == "nota"])}
 
 
@@ -163,7 +176,7 @@ def semana(plan: dict, n: int, store: DataStore | None, hoy: date,
     s = next((s for s in plan["semanas"] if s["n"] == n), None)
     if s is None:
         return None
-    resumen = _semana(s, store, hoy)
+    resumen = _semana(s, store, hoy, fase_de(plan, n))
     desde = date.fromisoformat(s["desde"])
     dias = []
     for i in range((date.fromisoformat(s["hasta"]) - desde).days + 1):
@@ -177,4 +190,4 @@ def semana(plan: dict, n: int, store: DataStore | None, hoy: date,
     return {**resumen, "dias": dias}
 
 
-__all__ = ["hecho", "semana", "vista"]
+__all__ = ["fase_de", "hecho", "semana", "vista"]

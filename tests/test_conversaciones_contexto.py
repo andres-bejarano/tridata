@@ -392,3 +392,35 @@ def test_el_entrenador_tiene_la_estrategia_sin_pegarla(web):  # R4, through the 
     fija = "\n".join(b["text"] for b in web.claude.peticiones[-1]["system"][:-1])
     for tramo in ESTRATEGIA:
         assert tramo in fija, tramo
+
+
+# -- unit 071: the planned trainings of today and the next 14 days ----------------------------------------------------
+
+def _previsto(nombre: str, minutos: float, kcal: float) -> dict:
+    return {"actividad_id": f"p-{nombre}", "nombre": nombre, "tipo": "running", "minutos": minutos, "kcal": kcal}
+
+
+def test_el_contexto_lleva_los_entrenos_previstos(tmp_path):  # 071 · R1
+    from tridata.nutricion import ObjetivosDia
+    mundo = Mundo(tmp_path)
+    objetivos = ObjetivosDia(mundo.db)
+    objetivos.cambiar(HOY, previstos=[_previsto("Rodaje de prueba", 40, 400), _previsto("Natación de prueba", 30, 250)])
+    objetivos.cambiar(HOY + timedelta(days=3), previstos=[_previsto("Series de prueba", 60, 700)])
+    objetivos.cambiar(HOY + timedelta(days=14), previstos=[_previsto("Tirada de prueba", 90, 1000)])
+    objetivos.cambiar(HOY + timedelta(days=15), previstos=[_previsto("Lejana de prueba", 30, 300)])  # too far
+    datos = _datos(mundo.contexto())
+    previstos = datos["entrenos_previstos"]
+    assert [p["fecha"] for p in previstos] == [HOY.isoformat(), (HOY + timedelta(days=3)).isoformat(),
+                                               (HOY + timedelta(days=14)).isoformat()]
+    assert previstos[0]["previstos"] == [{"nombre": "Rodaje de prueba", "minutos": 40, "kcal": 400},
+                                         {"nombre": "Natación de prueba", "minutos": 30, "kcal": 250}]
+    assert all(p["dia"] for p in previstos)  # each date with its day of the week (bug 052)
+    assert '"entrenos_previstos"' in mundo.contexto().bloques[0]  # the instructions say what it is
+
+
+def test_sin_previstos_no_sale_y_los_de_antes_de_hoy_no_cuentan(tmp_path):  # 071 · R2
+    from tridata.nutricion import ObjetivosDia
+    mundo = Mundo(tmp_path)
+    assert "entrenos_previstos" not in _datos(mundo.contexto())
+    ObjetivosDia(mundo.db).cambiar(HOY - timedelta(days=1), previstos=[_previsto("Ayer de prueba", 40, 400)])
+    assert "entrenos_previstos" not in _datos(mundo.contexto())

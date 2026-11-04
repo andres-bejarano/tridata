@@ -574,9 +574,10 @@ def _fila(planes: Planes, ident: int) -> tuple:
 def test_una_sesion_se_anade_se_cambia_y_se_mueve_en_su_misma_fila(tmp_path):  # R1, R2, R3 (portante) · C-247..C-249
     planes, ident = _con_semanas(tmp_path)
     sesion = planes.anadir_sesion(ident, "2026-10-23", " Rodaje ", ["45' a 5:30", "  ", " 10' suave "], HOY)
+    otra = planes.anadir_sesion(ident, "2026-10-29", "Tirada", ["1h30"], HOY)  # after it: a new row would show
     plan = planes.leer(ident)
     assert [(s["fecha"], s["titulo"], s["bloques"]) for s in plan["sesiones"]] == [
-        ("2026-10-23", "Rodaje", ["45' a 5:30", "10' suave"])]
+        ("2026-10-23", "Rodaje", ["45' a 5:30", "10' suave"]), ("2026-10-29", "Tirada", ["1h30"])]
     assert plan["sesiones"][0]["apartado"] == 2  # «Sesiones clave», the sessions of a plan made by hand
     dias = {d["fecha"]: d for d in semanas.semana(plan, 1, None, HOY)["dias"]}
     assert dias["2026-10-23"]["sesiones"][0]["titulo"] == "Rodaje"  # seen at once
@@ -590,10 +591,11 @@ def test_una_sesion_se_anade_se_cambia_y_se_mueve_en_su_misma_fila(tmp_path):  #
     assert (despues[0], despues[1], despues[2]) == (antes[0], antes[1], antes[2])
     assert despues[4] == "2026-10-27" and despues[6] == '["50\' a 5:30"]'
     plan = planes.leer(ident)
-    assert len(plan["sesiones"]) == 1
+    assert [s["titulo"] for s in plan["sesiones"]] == ["Rodaje", "Tirada"]  # still first: the same row, not a new one
+    assert [s["id"] for s in planes.sesiones_reloj(ident)] == [sesion, otra]
     assert [d["sesiones"] for d in semanas.semana(plan, 1, None, HOY)["dias"] if d["sesiones"]] == []  # the old day free
-    (dia,) = [d for d in semanas.semana(plan, 2, None, HOY)["dias"] if d["sesiones"]]
-    assert dia["fecha"] == "2026-10-27" and dia["sesiones"][0]["bloques"] == ["50' a 5:30"]
+    dia = next(d for d in semanas.semana(plan, 2, None, HOY)["dias"] if d["fecha"] == "2026-10-27")
+    assert dia["sesiones"] == [{"titulo": "Rodaje", "bloques": ["50' a 5:30"], "clave": False}]
 
 
 def test_lo_que_no_cuadra_de_una_sesion_no_se_guarda(tmp_path):  # R1, R2, R3
@@ -651,18 +653,19 @@ def test_mover_una_sesion_deja_un_solo_evento_en_google_calendar(tmp_path):  # R
     plan_id = b.planes.crear(plan_inventado([SERIES, RODAJE]), AHORA_CAL)
     b.conectar()
     sincronizar(b.planes, b.calendario, HOY_CAL)
-    (rodaje,) = [s for s in b.planes.sesiones_reloj(plan_id) if s["fecha"] == "2026-10-29"]
-    (antes,) = [e for e in b.google.de(b.cal()) if e["start"].get("date") == "2026-10-29"]
+    # the first of the two (`orden` 0): a session made again at the end would be another event
+    (series,) = [s for s in b.planes.sesiones_reloj(plan_id) if s["fecha"] == "2026-10-28"]
+    (antes,) = [e for e in b.google.de(b.cal()) if e["start"].get("date") == "2026-10-28"]
 
-    b.planes.mover_sesion(rodaje["id"], "2026-10-31", HOY_CAL)
-    b.planes.cambiar_sesion(rodaje["id"], "Rodaje 45'", ["45' a 5:40"], HOY_CAL)
+    b.planes.mover_sesion(series["id"], "2026-10-31", HOY_CAL)
+    b.planes.cambiar_sesion(series["id"], "Series 3×10'", ["20' suave", "3×10' a 4:00 (2' rec)"], HOY_CAL)
     assert sincronizar(b.planes, b.calendario, HOY_CAL) == {"creados": 0, "cambiados": 1, "borrados": 0}
-    del_rodaje = [e for e in b.google.de(b.cal()) if "Rodaje" in e["summary"]]
-    assert len(del_rodaje) == 1  # never two events of the same session
-    (evento,) = del_rodaje
+    de_las_series = [e for e in b.google.de(b.cal()) if "Series" in e["summary"]]
+    assert len(de_las_series) == 1  # never two events of the same session
+    (evento,) = de_las_series
     assert evento["id"] == antes["id"]  # the same event, on the new day
-    assert evento["start"] == {"date": "2026-10-31"} and evento["summary"] == "🏃 Rodaje 45'"
-    assert [e["start"].get("date") for e in b.google.de(b.cal())].count("2026-10-29") == 0
+    assert evento["start"] == {"date": "2026-10-31"} and evento["summary"] == "🏃 Series 3×10'"
+    assert [e["start"].get("date") for e in b.google.de(b.cal())].count("2026-10-28") == 0
 
 
 def test_las_semanas_de_un_plan_vacio_y_borrar_una_con_sus_sesiones(tmp_path):  # R5 · R-203, C-251, C-252

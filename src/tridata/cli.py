@@ -859,6 +859,10 @@ def _cmd_importar_detalle(md: Path, simular: bool, *, db_path: Path = DEFAULT_DB
     return 0
 
 
+logger = logging.getLogger(__name__)
+_PENDIENTES_AL_ACTUALIZAR = 5  # unit 069: activities per press whose laps (and weather) are still missing
+
+
 def _actualizador_garmin(store: DataStore, entorno: Mapping[str, str] | None = None) -> Callable[[date], None] | None:
     """The «Actualizar Garmin» button: the same sync as `tridata sync`, from the day of the last good sync to
     `dia` (unit 018, R-90: at most 45 days), and always at least yesterday and today (unit 030, R-100).
@@ -873,8 +877,15 @@ def _actualizador_garmin(store: DataStore, entorno: Mapping[str, str] | None = N
 
     def actualizar(dia: date) -> None:
         desde = min(dia - timedelta(days=1), desde_para_actualizar(store.estado_sync(), dia))
-        SyncService(GarminClient(email, password), store).sync(since=desde, until=dia,
-                                                               revalidate_days=(dia - desde).days + 1)
+        servicio = SyncService(GarminClient(email, password), store)
+        servicio.sync(since=desde, until=dia, revalidate_days=(dia - desde).days + 1)
+        # unit 069: the laps and the weather of the trainings that have none yet, as the 08:00 routine
+        # (`sync --laps`, `sync --weather`); a failure here keeps the days already brought (R2).
+        for paso, traer in (("laps", servicio.sync_laps), ("weather", servicio.sync_weather)):
+            try:
+                traer(limit=_PENDIENTES_AL_ACTUALIZAR)
+            except Exception as exc:  # Garmin failing in several ways; the next press or the routine tries again
+                logger.warning("Actualizar Garmin: the %s were not brought (%s)", paso, exc)
 
     return actualizar
 

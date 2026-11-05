@@ -37,9 +37,10 @@
                                       name, a bad date, the same plan), 404 without that plan, race or destination
     POST /api/plan/incidencia/ID/cerrar  unit 044: {leccion}: closes it by hand with its lesson (R-148) and answers
                                       like GET /api/plan/incidencias; 400 without a lesson, 404 without it, 409 closed
-    POST /api/plan/sesion/anadir      unit 067: {id, fecha, titulo, bloques}: a session that day (`bloques` a list, or
-                                      a text with a line per block)
-    POST /api/plan/sesion/cambiar     unit 067: {sesion, titulo, bloques}: another title and blocks, in its row
+    POST /api/plan/sesion/anadir      unit 067: {id, fecha, titulo, bloques, hora?}: a session that day (`bloques` a
+                                      list, or a text with a line per block; `hora` «HH:MM» or empty, unit 076)
+    POST /api/plan/sesion/cambiar     unit 067: {sesion, titulo, bloques, hora?}: another title and blocks, in its row;
+                                      `hora` (076) «HH:MM», empty to remove it, absent to keep it
     POST /api/plan/sesion/mover       unit 067: {sesion, fecha}: to another day, in its row (its `orden` stays: Google
                                       Calendar keeps one event, R-201)
     POST /api/plan/sesion/borrar      unit 067: {sesion}: out of the plan; sent to Garmin, it is removed from Garmin
@@ -62,6 +63,7 @@ Unit 042: each day of GET /api/plan/semana/N also brings `reloj`, one per sessio
 one it replaces is not known), or None.
 Unit 059: each race of GET /api/plan brings its `resultado` ({tiempo, km, origen: "garmin" | "a mano"} or None)
 and its `estrategia` (unit 045), both from `plan.semanas.vista`.
+Unit 076: each session of a day with an hour also brings its `hora` («HH:MM»); one without it, as before.
 Unit 044: each day also brings its `notas` (how it went, R-150), and GET /api/plan its `abiertas`, how many incidents
 are open («⚠️ Incidencias (1)»).
 
@@ -88,7 +90,7 @@ from ..conversaciones import TOPE_DOLARES_MES, Conversaciones
 from ..fitness import detalle_actividad
 from ..ia.plan import ErrorPlan
 from ..nutricion.ajustes import Ajustes
-from ..plan import ABIERTA, Planes, semanas
+from ..plan import ABIERTA, CONSERVA, Planes, semanas
 from ..plan.acciones import tarjeta_garmin
 from ..plan.importar import confirmar, proponer
 from ..plan.markdown import escribir
@@ -153,8 +155,11 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
             return None
         reloj = planes.sesiones_reloj(plan["id"])  # the same order as plan["sesiones"]
         for dia in vista["dias"]:
-            dia["reloj"] = [{k: s[k] for k in ("id", "estado", "enviada", "aviso")} for s in reloj
-                           if s["fecha"] == dia["fecha"]]
+            del_dia = [s for s in reloj if s["fecha"] == dia["fecha"]]
+            dia["reloj"] = [{k: s[k] for k in ("id", "estado", "enviada", "aviso")} for s in del_dia]
+            for sesion, r in zip(dia["sesiones"], del_dia, strict=False):  # unit 076: its hour, only if it has one
+                if r["hora"]:
+                    sesion["hora"] = r["hora"]
         return vista
 
     async def ver_semana(request: Request) -> Response:
@@ -305,7 +310,7 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         if not isinstance(ident, int) or isinstance(ident, bool) or await run_in_threadpool(planes.leer, ident) is None:
             return _error(NO_ESTA, 404)
         return await _hacer(lambda: planes.anadir_sesion(ident, _texto(cuerpo, "fecha"), _texto(cuerpo, "titulo"),
-                                                         _bloques(cuerpo), hoy()),
+                                                         _bloques(cuerpo), hoy(), hora=_texto(cuerpo, "hora")),
                             lambda: planes.leer(ident), NO_ESTA)
 
     def _bloques(cuerpo: dict) -> list[str] | str:
@@ -315,8 +320,8 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         return valor if isinstance(valor, str) else []
 
     async def cambiar_sesion(request: Request) -> Response:
-        return await _de_sesion(request, lambda c, s: planes.cambiar_sesion(s["id"], _texto(c, "titulo"), _bloques(c),
-                                                                            hoy()))
+        return await _de_sesion(request, lambda c, s: planes.cambiar_sesion(
+            s["id"], _texto(c, "titulo"), _bloques(c), hoy(), hora=_texto(c, "hora") if "hora" in c else CONSERVA))
 
     async def mover_sesion(request: Request) -> Response:
         return await _de_sesion(request, lambda c, s: planes.mover_sesion(s["id"], _texto(c, "fecha"), hoy()))

@@ -236,6 +236,7 @@ class CambioInterpretado(BaseModel):
     desde: date | None = Field(default=None, description="Desde qué día vale (AAAA-MM-DD), o null")
     fecha: date | None = Field(default=None, description="Otra fecha que dice (AAAA-MM-DD), o null")
     antes_dicho: str | None = Field(default=None, description="El valor de antes, solo si la persona lo dice; o null")
+    hora: str | None = Field(default=None, description="Una hora que dice (HH:MM), si la acción la pide; o null")
     falta: str | None = Field(
         default=None, description="Si no entiendes una parte o falta un dato, una frase corta que lo diga; o null")
 

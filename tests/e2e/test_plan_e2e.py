@@ -234,3 +234,60 @@ def test_el_plan_a_mano(servidor, abrir, capturar, oscuro):  # unit 067 · REC-3
     s1.get_by_role("button", name="Volver al plan").click()
     expect(p.locator("#plan-semanas .fase-plan")).to_contain_text("Base")
     capturar(p, f"plan-a-mano{sufijo}", completa=True)
+
+
+@TEMAS
+def test_la_hora_de_una_sesion_a_mano(servidor, abrir, capturar, oscuro):  # unit 076 · R3 (R-218, C-268, C-271)
+    """A session added on Friday at 19:30 shows «19:30 · Rodaje»; «25:00» is not saved and says how it goes; moved to
+    Saturday it keeps its hour; cleared, only the title."""
+    sufijo = "-oscuro" if oscuro else "-claro"
+    p = abrir(servidor, "/#fitness/plan", oscuro=oscuro, esperar=False)
+    expect(p.locator("#plan-vista")).to_contain_text("Importa tu plan")
+    p.locator("#plan-nuevo-boton").click()
+    nuevo = p.locator("#plan-nuevo-form")
+    nuevo.locator("input[name=plan-nombre]").fill("Prueba de hora 27")
+    nuevo.locator("input[name=carrera-nombre]").fill("Media de prueba")
+    nuevo.locator("input[name=carrera-fecha]").fill("2027-03-07")
+    nuevo.get_by_role("button", name="Crear plan").click()
+    expect(p.locator("#plan-nombre")).to_have_text("Prueba de hora 27")
+    p.locator("#plan-anadir-semana").click()
+    semana = p.locator("#plan-anadir-semana-form")
+    semana.locator("input[name=semana-desde]").fill("2026-10-19")
+    semana.locator("input[name=semana-desde]").dispatch_event("change")
+    semana.get_by_role("button", name="Añadir semana").click()
+    expect(p.locator("#plan-semanas .semana")).to_have_count(1)
+
+    p.locator("#plan-semanas .semana").filter(has_text="S1").click()
+    dias = p.locator("#plan-semana .dia-plan")
+    expect(dias).to_have_count(7)
+    viernes = dias.nth(4)
+    viernes.locator(".anadir-sesion").click()
+    viernes.locator("input[name=sesion-titulo]").fill("Rodaje")
+    viernes.locator("textarea[name=sesion-bloques]").fill("45' a 5:30")
+    viernes.locator("input[name=sesion-hora]").fill("19:30")
+    viernes.get_by_role("button", name="Guardar sesión").click()
+    expect(dias.nth(4)).to_contain_text("Vie 23/10 · 19:30 · Rodaje")
+
+    # a bad hour is not saved and says how it goes
+    dias.nth(4).locator(".cambiar-sesion").click()
+    cambiar = dias.nth(4).locator(".form-cambiar-sesion")
+    expect(cambiar.locator("input[name=sesion-hora]")).to_have_value("19:30")
+    cambiar.locator("input[name=sesion-hora]").fill("25:00")
+    cambiar.get_by_role("button", name="Guardar cambios").click()
+    expect(dias.nth(4).locator(".acciones-sesion .aviso")).to_contain_text("HH:MM")
+    expect(dias.nth(4)).to_contain_text("Vie 23/10 · 19:30 · Rodaje")
+
+    # moved to Saturday: it keeps its hour
+    dias.nth(4).locator(".mover-sesion").click()
+    dias.nth(4).locator(".form-mover-sesion input[name=sesion-dia]").fill("2026-10-24")
+    dias.nth(4).locator(".form-mover-sesion button[type=submit]").click()
+    expect(dias.nth(5)).to_contain_text("Sáb 24/10 · 19:30 · Rodaje")
+    _sin_scroll(p, "sesion-con-hora")
+    capturar(p, f"plan-sesion-con-hora{sufijo}", completa=True)
+
+    # cleared: only the title
+    dias.nth(5).locator(".cambiar-sesion").click()
+    dias.nth(5).locator(".form-cambiar-sesion input[name=sesion-hora]").fill("")
+    dias.nth(5).get_by_role("button", name="Guardar cambios").click()
+    expect(dias.nth(5)).to_contain_text("Sáb 24/10 · Rodaje")
+    expect(dias.nth(5)).not_to_contain_text("19:30")

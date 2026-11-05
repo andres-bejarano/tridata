@@ -552,7 +552,7 @@ def test_el_esquema_trae_cambios_genericos():  # R1-R14: one request, one more p
     assert "cambios" in esquema["properties"]
     cambio = esquema["$defs"]["CambioInterpretado"]
     campos = {"accion", "objeto", "campo", "valor", "valores", "texto", "cantidad", "unidad", "kcal_estimadas",
-              "lineas", "dia", "desde", "fecha", "antes_dicho", "falta"}
+              "lineas", "dia", "desde", "fecha", "antes_dicho", "falta", "hora"}
     assert set(cambio["properties"]) == campos and set(cambio["required"]) == campos
     assert all(cambio["properties"][c].get("description") or "anyOf" in cambio["properties"][c] for c in campos)
     assert ListaInterpretada(alimentos=[]).cambios == []  # absent by default: the interpretations of before

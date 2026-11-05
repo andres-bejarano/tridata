@@ -534,3 +534,10 @@ def test_si_garmin_falla_al_quitar_lo_dice(error, dice):  # R8
     assert dice in str(exc.value)
     with pytest.raises(GarminNoLlega, match="GARMIN_EMAIL"):
         reloj.quitar({**SERIES, "garmin_workout_id": 5, "garmin_schedule_id": 6}, lambda: reloj.cliente_garmin({}))
+
+
+def test_la_hora_de_la_sesion_no_cambia_lo_que_va_al_reloj():  # 076 · R5 (R-220): Garmin sigue por día
+    con_hora = {**SERIES, "hora": "20:00"}
+    assert a_garmin(con_hora) == a_garmin(SERIES)
+    assert lineas(con_hora) == lineas(SERIES)
+    assert fit_local(con_hora) == fit_local(SERIES)

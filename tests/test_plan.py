@@ -853,3 +853,80 @@ def test_renumerar_una_semana_de_una_fase_la_ajusta(tmp_path):  # 072 · R2
     assert planes.leer(ident)["fases"] == [{"id": base, "nombre": "Base", "desde_n": 1, "hasta_n": 1}]
     planes.cambiar_semana(ident, 3, {"previsto": "6h"})  # a change that keeps the number does not touch phases
     assert planes.leer(ident)["fases"] == [{"id": base, "nombre": "Base", "desde_n": 1, "hasta_n": 1}]
+
+
+# -- unit 076: an optional hour in the sessions (R1-R3, R5, R6 · R-216..R-218, R-220, C-268, C-271..C-273). Invented. --
+
+def test_una_base_sin_la_columna_hora_la_gana_y_sus_sesiones_quedan_sin_hora(tmp_path):  # R1 · R-216, C-273
+    import sqlite3
+
+    db = tmp_path / "data.sqlite3"
+    planes = Planes(db)
+    ident = planes.crear(plan_de_prueba(), AHORA_067)
+    antes = planes.leer(ident)
+    with sqlite3.connect(db) as conn:  # a base of before the 076: plan_sesion without `hora`
+        conn.execute("ALTER TABLE plan_sesion DROP COLUMN hora")
+    planes = Planes(db)
+    with planes._connect() as conn:
+        assert "hora" in {f["name"] for f in conn.execute("PRAGMA table_info(plan_sesion)")}
+        assert {f[0] for f in conn.execute("SELECT hora FROM plan_sesion")} == {None}
+    assert planes.leer(ident) == antes  # without an hour, the plan reads exactly as before: no `hora` key
+    assert all("hora" not in s for s in planes.leer(ident)["sesiones"])
+    assert all(s["hora"] is None for s in planes.sesiones_reloj(ident))
+
+
+def test_una_sesion_lleva_hora_se_cambia_se_quita_y_moverla_la_conserva(tmp_path):  # R3 · R-218, C-268
+    planes, ident = _con_semanas(tmp_path)
+    sesion = planes.anadir_sesion(ident, "2026-10-22", "Rodaje", ["45' a 5:30"], HOY, hora="20:00")
+    assert planes.sesion(sesion)["hora"] == "20:00"
+    assert planes.leer(ident)["sesiones"][0]["hora"] == "20:00"
+    assert next(s for s in planes.sesiones_reloj(ident) if s["id"] == sesion)["hora"] == "20:00"
+    planes.cambiar_sesion(sesion, "Rodaje", ["45' a 5:30"], HOY)  # the hour not said: it stays
+    assert planes.sesion(sesion)["hora"] == "20:00"
+    planes.cambiar_sesion(sesion, "Rodaje", ["45' a 5:30"], HOY, hora="7:30")
+    assert planes.sesion(sesion)["hora"] == "07:30"
+    planes.mover_sesion(sesion, "2026-10-24", HOY)  # moved to Saturday: the hour goes with it
+    assert (planes.sesion(sesion)["fecha"], planes.sesion(sesion)["hora"]) == ("2026-10-24", "07:30")
+    planes.cambiar_sesion(sesion, "Rodaje", ["45' a 5:30"], HOY, hora="")  # removed by hand: only the title
+    assert planes.sesion(sesion)["hora"] is None
+    assert "hora" not in planes.leer(ident)["sesiones"][0]
+    otra = planes.anadir_sesion(ident, "2026-10-23", "Tirada", ["1h30"], HOY)
+    assert planes.sesion(otra)["hora"] is None
+
+
+@pytest.mark.parametrize("mala", ["25:00", "24:00", "12:60", "a las tantas", "20", "20:5", "8 pm"])
+def test_una_hora_que_no_es_hhmm_no_se_guarda_y_dice_como_va(tmp_path, mala):  # R3 · C-271
+    planes, ident = _con_semanas(tmp_path)
+    with pytest.raises(ValueError, match="HH:MM") as exc:
+        planes.anadir_sesion(ident, "2026-10-22", "Rodaje", ["45'"], HOY, hora=mala)
+    assert "00:00" in str(exc.value) and "23:59" in str(exc.value)
+    assert planes.leer(ident)["sesiones"] == []
+    sesion = planes.anadir_sesion(ident, "2026-10-22", "Rodaje", ["45'"], HOY, hora="20:00")
+    with pytest.raises(ValueError, match="HH:MM"):
+        planes.cambiar_sesion(sesion, "Rodaje cambiado", ["50'"], HOY, hora=mala)
+    assert (planes.sesion(sesion)["titulo"], planes.sesion(sesion)["hora"]) == ("Rodaje", "20:00")  # nothing saved
+
+
+def test_cambiar_solo_la_hora_no_la_marca_cambiada_en_garmin(tmp_path):  # R5 · R-220, C-272
+    planes, ident = _con_semanas(tmp_path)
+    sesion = planes.anadir_sesion(ident, "2026-10-23", "Rodaje", ["45' a 5:30"], HOY, hora="20:00")
+    planes.marcar_garmin(sesion, 501, 601, AHORA_067, "Rodaje: 45' a 5:30")
+    estado = lambda: next(s["estado"] for s in planes.sesiones_reloj(ident) if s["id"] == sesion)  # noqa: E731
+    assert estado() == "al_dia"
+    planes.cambiar_sesion(sesion, "Rodaje", ["45' a 5:30"], HOY, hora="19:30")
+    assert estado() == "al_dia"
+    planes.cambiar_sesion(sesion, "Rodaje", ["45' a 5:30"], HOY, hora="")
+    assert estado() == "al_dia"
+
+
+def test_la_sincronizacion_desde_garmin_no_le_quita_la_hora(tmp_path):  # R6
+    from tridata.plan.desde_garmin import Programado, cambios
+
+    planes, ident = _con_semanas(tmp_path)
+    sesion = planes.anadir_sesion(ident, "2026-10-23", "Rodaje", ["45' a 5:30"], HOY, hora="20:00")
+    planes.marcar_garmin(sesion, 501, 601, AHORA_067, "Rodaje: 45' a 5:30")
+    cambiado = Programado(601, 501, "2026-10-25", "carrera", "Rodaje largo", ("60' a 5:30",), "2026-10-22T09:00:00")
+    planes.aplicar_garmin(ident, cambios(planes.sesiones_garmin(ident, HOY, date(2026, 11, 1)), [cambiado]))
+    rehecha = planes.sesion(sesion)
+    assert (rehecha["fecha"], rehecha["titulo"], rehecha["bloques"]) == ("2026-10-25", "Rodaje largo", ["60' a 5:30"])
+    assert rehecha["hora"] == "20:00"  # rewritten in its place, the hour stays

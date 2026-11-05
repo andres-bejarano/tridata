@@ -888,3 +888,78 @@ def test_el_logger_de_la_libreria_de_google_no_escribe_la_url_de_vuelta(caplog):
         logging.getLogger(nombre).info('"GET /?state=ESTADO-INVENTADO&code=CODIGO-INVENTADO HTTP/1.1" 200 -')
         logging.getLogger(nombre).debug("token body code=CODIGO-INVENTADO")
     assert "CODIGO-INVENTADO" not in caplog.text and "ESTADO-INVENTADO" not in caplog.text
+
+
+# -- unit 076 · R1, R4 (R-216, R-219, C-269, C-270, C-273): a session with an hour is an event at that hour ------------
+
+RODAJE_20H = {"apartado": 0, "fecha": "2026-10-30", "titulo": "Rodaje 45'", "bloques": ["45' a 5:40"], "clave": False}
+
+
+def _a_las(sesion: dict, hora: str | None) -> dict:
+    return {**sesion, "hora": hora} if hora else dict(sesion)
+
+
+@pytest.mark.parametrize("bloques, fin", [
+    (["45' a 5:40"], "20:45"),  # C-269
+    (["20' suave", "4×12' a 4:00 (2' rec)", "10' vuelta a la calma"], "21:26"),  # the series with their recoveries
+    (["10 km a 5:00"], "20:50"),  # a distance with its pace
+    (["45' a 5:40", "técnica inventada sin medida"], "21:00"),  # C-270: a block it cannot read, one hour
+    (["10 km"], "21:00"),  # a distance without pace says no duration: one hour
+    ([], "21:00"),  # without blocks: one hour
+])
+def test_con_hora_el_evento_va_de_esa_hora_a_lo_que_duran_sus_bloques(bloques, fin):  # R4 · C-269, C-270
+    cuerpo = cuerpo_del_evento("7-3", _a_las({**RODAJE_20H, "bloques": bloques}, "20:00"), ZONA)
+    assert cuerpo["start"] == {"dateTime": "2026-10-30T20:00:00+01:00", "timeZone": ZONA}
+    assert cuerpo["end"] == {"dateTime": f"2026-10-30T{fin}:00+01:00", "timeZone": ZONA}
+    assert cuerpo["summary"] == "🏃 Rodaje 45'" and cuerpo["extendedProperties"]["private"]["tridata_sesion"] == "7-3"
+
+
+def test_en_verano_la_hora_de_la_sesion_lleva_su_desfase():  # R4: in the zone of the PC, the offset of that day
+    cuerpo = cuerpo_del_evento("7-3", _a_las({**RODAJE_20H, "fecha": "2026-08-04"}, "07:05"), ZONA)
+    assert cuerpo["start"] == {"dateTime": "2026-08-04T07:05:00+02:00", "timeZone": ZONA}
+    assert cuerpo["end"] == {"dateTime": "2026-08-04T07:50:00+02:00", "timeZone": ZONA}
+
+
+def test_sin_hora_el_evento_es_el_de_siempre():  # R1 · C-273
+    assert cuerpo_del_evento("7-3", RODAJE_20H, ZONA) == cuerpo_del_evento("7-3", RODAJE_20H) == {
+        "summary": "🏃 Rodaje 45'", "description": "45' a 5:40",
+        "start": {"date": "2026-10-30"}, "end": {"date": "2026-10-31"},
+        "extendedProperties": {"private": {"tridata_sesion": "7-3"}}}
+
+
+def test_poner_cambiar_y_quitar_la_hora_cambia_el_evento_en_la_siguiente_pasada(b):  # R4 · C-269
+    plan_id = b.planes.crear(plan_inventado([RODAJE_20H]), AHORA)
+    (fila,) = b.planes.sesiones_reloj(plan_id)
+    b.conectar()
+    sincronizar(b.planes, b.calendario, HOY, zona=ZONA)
+    cal = b.cal()
+    (evento,) = b.google.de(cal)
+    assert evento["start"] == {"date": "2026-10-30"}  # without an hour, all day
+
+    def una_pasada() -> dict:
+        resumen = sincronizar(b.planes, b.calendario, HOY, zona=ZONA)
+        (actual,) = b.google.de(cal)
+        assert actual["id"] == evento["id"]  # the same event, never two
+        assert sincronizar(b.planes, b.calendario, HOY, zona=ZONA) == {"creados": 0, "cambiados": 0, "borrados": 0}
+        return {"resumen": resumen, "start": actual["start"], "end": actual["end"]}
+
+    b.planes.cambiar_sesion(fila["id"], "Rodaje 45'", ["45' a 5:40"], HOY, hora="20:00")
+    pasada = una_pasada()
+    assert pasada["resumen"] == {"creados": 0, "cambiados": 1, "borrados": 0}
+    assert pasada["start"]["dateTime"] == "2026-10-30T20:00:00+01:00" and not pasada["start"].get("date")
+    assert pasada["end"]["dateTime"] == "2026-10-30T20:45:00+01:00" and not pasada["end"].get("date")
+
+    b.planes.cambiar_sesion(fila["id"], "Rodaje 45'", ["45' a 5:40"], HOY, hora="19:30")
+    pasada = una_pasada()
+    assert pasada["start"]["dateTime"] == "2026-10-30T19:30:00+01:00"
+    assert pasada["end"]["dateTime"] == "2026-10-30T20:15:00+01:00"
+
+    b.planes.mover_sesion(fila["id"], "2026-10-31", HOY)  # moved: the same hour, the other day
+    pasada = una_pasada()
+    assert pasada["start"]["dateTime"] == "2026-10-31T19:30:00+01:00"
+
+    b.planes.cambiar_sesion(fila["id"], "Rodaje 45'", ["45' a 5:40"], HOY, hora="")  # removed: all day again
+    pasada = una_pasada()
+    assert pasada["resumen"] == {"creados": 0, "cambiados": 1, "borrados": 0}
+    assert pasada["start"].get("date") == "2026-10-31" and not pasada["start"].get("dateTime")
+    assert pasada["end"].get("date") == "2026-11-01" and not pasada["end"].get("dateTime")

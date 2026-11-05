@@ -424,3 +424,19 @@ def test_sin_previstos_no_sale_y_los_de_antes_de_hoy_no_cuentan(tmp_path):  # 07
     assert "entrenos_previstos" not in _datos(mundo.contexto())
     ObjetivosDia(mundo.db).cambiar(HOY - timedelta(days=1), previstos=[_previsto("Ayer de prueba", 40, 400)])
     assert "entrenos_previstos" not in _datos(mundo.contexto())
+
+
+# -- unit 076 · R1, R5 (R-216, R-220, C-272, C-273): the hour of a session in what the team reads -----------------------
+
+def test_la_hora_de_una_sesion_va_en_el_contexto_y_sin_hora_como_antes(tmp_path):  # R1, R5
+    mundo = Mundo(tmp_path)
+    planes = mundo.plan()
+    antes = _datos(mundo.contexto(planes=planes))["plan"]["sesiones"]
+    assert all("hora" not in s for s in antes)  # without an hour: the same sessions as before
+    (ident,) = [s["id"] for s in planes.sesiones_reloj(planes.en_curso(HOY)) if s["fecha"] == "2026-10-28"]
+    planes.cambiar_sesion(ident, "Series de prueba 3×2000", ["20' a 5:30", "3×2000 a 4:15 (3' rec)", "15' suave"],
+                          HOY, hora="19:30")
+    despues = _datos(mundo.contexto(planes=planes))["plan"]["sesiones"]
+    assert next(s for s in despues if s["fecha"] == "2026-10-28")["hora"] == "19:30"
+    assert [{k: v for k, v in s.items() if k != "hora"} for s in despues] == antes  # only the hour is new
+    assert "su hora de empezar (HH:MM) si la tiene" in mundo.contexto(planes=planes).bloques[0]  # said in the rules

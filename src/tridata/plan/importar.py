@@ -26,7 +26,7 @@ from typing import Any
 
 from ..ia.plan import ErrorPlan
 from ..storage import DataStore
-from . import Planes, semanas as semanas_del_plan
+from . import Planes, hora_de, semanas as semanas_del_plan
 
 TOLERANCIA_S = 120  # ±2 min per week: Strava and Garmin round differently, that is no difference
 TOLERANCIA_KM = 0.3  # ±0,3 km per week
@@ -44,7 +44,9 @@ class Trozo:
 _FENCE = re.compile(r"^\s*(```|~~~)")
 # a section of a plan pasted from a document: «3. Previsto (se construye semana a semana)», short, capital after the dot
 _NUMERADO = re.compile(r"^(\d{1,2})\.[ \t]+([A-ZÁÉÍÓÚÑ¿¡].{0,78})$")
-_ITEM = re.compile(r"^\d+[.)][ \t]")  # a numbered line of any kind: next to another one, it is a list, not a section
+_ITEM = re.compile(r"^\d+[.)][ \t]")
+# unit 077: «20:00 · Rodaje», the hour «Bajar .md» writes before the title of a session (R-220)
+_HORA_DELANTE = re.compile(r"^(\d{1,2}:\d{2})\s*·\s*(\S.*)$")  # a numbered line of any kind: next to another one, it is a list, not a section
 
 
 def _titulos(lineas: list[str], marca: str) -> list[int]:
@@ -177,8 +179,17 @@ def _sesion(c: list[str]) -> dict | None:
     fecha, titulo, bloques, clave = _campos(c, 4)
     if _fecha(fecha) is None or not titulo:
         return None
-    return {"fecha": _fecha(fecha), "titulo": titulo, "bloques": [b.strip() for b in bloques.split(";") if b.strip()],
-            "clave": _si(clave)}
+    sesion = {"fecha": _fecha(fecha), "titulo": titulo, "bloques": [b.strip() for b in bloques.split(";") if b.strip()],
+              "clave": _si(clave)}
+    delante = _HORA_DELANTE.match(titulo)
+    if delante is not None:  # unit 077: the hour goes back to the session; one that is no hour stays in the title
+        try:
+            hora = hora_de(delante[1])
+        except ValueError:
+            hora = None
+        if hora is not None:
+            sesion |= {"titulo": delante[2].strip(), "hora": hora}
+    return sesion
 
 
 def _nutricion(c: list[str]) -> dict | None:

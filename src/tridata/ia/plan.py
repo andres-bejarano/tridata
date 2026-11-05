@@ -38,7 +38,8 @@ filas: una fila por cosa, en una sola línea, con sus campos separados por «|»
 va vacío. Los tipos de fila:
 - carrera|nombre|fecha|objetivo|estado o resultado (p. ej. «✅ 38:10» o «pendiente»)|principal (sí o no)
 - semana|número|desde|hasta|tiempo previsto|sesiones clave en pocas palabras|tiempo en movimiento hecho|km hechos
-- sesion|fecha|título|bloques separados por «;» (p. ej. «20' a 5:30; 4×1000 a 4:00 (2' rec)»)|clave (sí o no)
+- sesion|fecha|título|bloques separados por «;» (p. ej. «20' a 5:30; 4×1000 a 4:00 (2' rec)»)|clave (sí o no) \
+(si la sesión dice su hora, va delante del título: «20:00 · Rodaje»)
 - nutricion|producto (con sus hidratos, sodio o cafeína)|pauta (por minuto o km)
 - incidencia|fecha|texto
 - comparativa|texto

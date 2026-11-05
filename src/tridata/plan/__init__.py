@@ -261,10 +261,13 @@ class Planes:
                                    ahora.isoformat(timespec="seconds")))
             ident = int(cursor.lastrowid or 0)
             for clave, (tabla, columnas) in _FILAS.items():
+                if tabla == "plan_sesion":  # unit 077: its hour too, when a session brings one
+                    columnas = (*columnas, "hora")
                 marcas = ", ".join("?" * (len(columnas) + 2))
                 conn.executemany(
                     f"INSERT INTO {tabla} (plan_id, orden, {', '.join(columnas)}) VALUES ({marcas})",  # noqa: S608
-                    [(ident, orden, *(_a_la_base(tabla, c, fila.get(c)) for c in columnas))
+                    [(ident, orden, *(hora_de(fila.get(c)) if c == "hora" else _a_la_base(tabla, c, fila.get(c))
+                                      for c in columnas))
                      for orden, fila in enumerate(datos.get(clave, []))])
         return ident
 

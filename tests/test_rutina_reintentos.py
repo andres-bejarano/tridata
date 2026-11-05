@@ -12,7 +12,7 @@ import re
 import shutil
 import stat
 import subprocess
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -168,7 +168,8 @@ def test_f_el_barrido_amplio_que_falla_tampoco_dice_manana(rutina):  # R4 (f) ·
     assert "mañana" not in log
     assert rutina.wide.read_text(encoding="utf-8") == ""
     assert rutina.correr() == 0
-    assert rutina.wide.read_text(encoding="utf-8").strip() == date.today().strftime("%Y-%m-%d")
+    # daily_update.sh writes (and reads) the wide marker in UTC (`date -u`): local date breaks it from 00:00 to 01/02 h
+    assert rutina.wide.read_text(encoding="utf-8").strip() == datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 # -- R5 · G-6, G-45: waits that double, and longer on a 429 ---------------------------------------------------

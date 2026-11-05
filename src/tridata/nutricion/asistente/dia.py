@@ -20,6 +20,9 @@ come → planeado, today or a past day → comido. Its kcal do not change, so it
 The warning «tenías X, no Y» (R-77) in every action with a before, `pasos_dia` included: what Andrés said of the
 before (`antes_dicho`) against what the base has.
 
+Unit 075 (R-215, C-265, C-266): `seccion_alimento` puts a logged food in another section of Nutrición › día (the six
+of `SECCIONES`, or «Sin sección») in its same row with `RegistroComidas.mover_seccion`: kcal, quantity and state stay.
+
 Unit 047: a day may have several planned trainings. `entreno_previsto` ADDS one; it only replaces the one of the same
 activity (Garmin's `tipo`; without it, the same `actividad_id`), and the card says which. At most `PREVISTOS_MAX`.
 """
@@ -37,7 +40,7 @@ from ..gasto import kcal_previstas
 from ..margen import NIVELES_POR_DEFECTO, PASOS_POR_DEFECTO, objetivo_del_dia
 from ..objetivo_dia import PREVISTOS_MAX, _porcentaje, niveles_validos, pasos_validos
 from ..recetas import normalizar
-from ..registro import Alimento, RegistroComidas
+from ..registro import SECCIONES, Alimento, RegistroComidas
 from . import (
     Accion, Contexto, Peticion, TarjetaMal, buscar_apuntado, campo, corta, descripcion_alimento, elegir, fecha_de, no,
     numero, tarjeta,
@@ -438,6 +441,66 @@ def _aplicar_mover(parametros: dict, ctx: Contexto) -> str:
     return f"{movido['nombre']} está en el {corta(date.fromisoformat(movido['dia']))}, {movido['estado']}"
 
 
+# -- seccion_alimento (unit 075) ----------------------------------------------------------------------------------------
+
+NOMBRE_SECCION = {"desayuno": "Desayuno", "media_manana": "Media mañana", "comida": "Comida", "merienda": "Merienda",
+                  "cena": "Cena", "carrera": "Nutrición en carrera", None: "Sin sección"}
+_SIN = "sin"  # the key of «Sin sección» in the card (JSON has no None key we can compare against a text)
+
+
+def _clave_seccion(texto: Any) -> str | None:
+    """The key of the section said (its key or the name seen, any case and accents), `_SIN`, or None if not one."""
+    if not isinstance(texto, str):
+        return None
+    dicho = normalizar(texto.replace("_", " ")).strip()
+    for clave, nombre in NOMBRE_SECCION.items():
+        if dicho in {normalizar(nombre), normalizar((clave or "").replace("_", " "))} - {""}:
+            return clave if clave is not None else _SIN
+    return _SIN if dicho in {"sin seccion", "ninguna"} else None
+
+
+def _secciones_validas() -> str:
+    return ", ".join(NOMBRE_SECCION.values())
+
+
+def _proponer_seccion(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
+    if not cambio.objeto:
+        return no("No sé qué alimento quieres pasar de sección")
+    clave = _clave_seccion(cambio.texto)
+    if clave is None:
+        dicho = f"«{cambio.texto}» no es una sección" if cambio.texto else "No sé a qué sección quieres pasarlo"
+        return no(f"{dicho} de Nutrición › día: tiene que ser una de {_secciones_validas()}")
+    parametros = {"seccion": clave}
+    encontrados = _buscar(cambio, ctx, peticion, "seccion_alimento", "pasar de sección", parametros)
+    if isinstance(encontrados, dict):
+        return encontrados
+    return _rehacer_seccion({**parametros, "id": encontrados[0]["id"]}, {}, ctx, peticion)
+
+
+def _rehacer_seccion(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
+    fila = _fila_elegida(parametros, valores, ctx)
+    if fila.get("tipo") == "no":
+        return fila
+    clave = parametros.get("seccion")
+    seccion = None if clave == _SIN else clave
+    if seccion is not None and seccion not in SECCIONES:
+        raise TarjetaMal("la tarjeta no dice una sección")
+    dia = date.fromisoformat(fila["dia"])
+    nombre = NOMBRE_SECCION[seccion]
+    if fila.get("seccion") == seccion:
+        return no(f"{fila['nombre']} ya está en {nombre} el {corta(dia)}")
+    return tarjeta(accion="seccion_alimento", parametros={"id": fila["id"], "seccion": clave}, peticion=peticion,
+                   texto=f"Voy a pasar {_que(fila)} del {corta(dia)} a {nombre}",
+                   antes=NOMBRE_SECCION.get(fila.get("seccion"), "Sin sección"), despues=nombre, dia=dia,
+                   donde=f"en Nutrición › Día, el {corta(dia)}: el mismo alimento, con sus kcal, en otra sección")
+
+
+def _aplicar_seccion(parametros: dict, ctx: Contexto) -> str:
+    seccion = None if parametros["seccion"] == _SIN else parametros["seccion"]
+    movido = ctx.registro.mover_seccion(parametros["id"], seccion)
+    return f"{movido['nombre']} está en {NOMBRE_SECCION[seccion]} el {corta(date.fromisoformat(movido['dia']))}"
+
+
 # -- niveles_dia, objetivo_dia ------------------------------------------------------------------------------------------
 
 def _pct(n: float) -> str:
@@ -681,6 +744,12 @@ ACCIONES = [
     Accion("mover_alimento", "pasar un alimento apuntado a otro día («el plátano pásalo a mañana»). objeto: su "
            "nombre; dia: el día en que está apuntado si lo dice, o null; fecha: el día al que lo pasa.",
            _proponer_mover, _rehacer_mover, _aplicar_mover),
+    Accion("seccion_alimento", "pasar un alimento ya apuntado a otra sección de Nutrición › día, en su misma fila "
+           "(«los geles del domingo ponlos en nutrición en carrera»); no borra ni vuelve a apuntar. Las secciones son "
+           "las de Nutrición › día, no la estrategia de nutrición del plan: desayuno, media_manana (media mañana), "
+           "comida, merienda, cena, carrera («Nutrición en carrera») o «sin sección». objeto: su nombre; dia: el día "
+           "en que está apuntado si lo dice, o null; texto: la sección, como la dice.",
+           _proponer_seccion, _rehacer_seccion, _aplicar_seccion),
     Accion("niveles_dia", "cambiar los niveles del margen de hoy o de un día que aún no ha llegado (como mucho "
            "cinco). valores: los % de cada nivel con su signo, negativo si es déficit y positivo si es superávit; "
            "dia: el día del que habla, o null.",

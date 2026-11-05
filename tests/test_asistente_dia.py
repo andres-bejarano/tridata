@@ -22,7 +22,9 @@ from starlette.testclient import TestClient
 
 from tridata.ia import CambioInterpretado, ListaInterpretada
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, ObjetivosDia, RegistroComidas, RegistroPeso
-from tridata.nutricion.asistente import Contexto, Peticion, catalogo, confirmar, proponer, rehacer, texto_acciones
+from tridata.nutricion.asistente import (
+    Cambiado, Contexto, Peticion, catalogo, confirmar, proponer, rehacer, texto_acciones,
+)
 from tridata.nutricion.recetas import Recetario
 from tridata.web import crear_app
 
@@ -177,6 +179,103 @@ def test_mover_a_ayer_queda_comido(b):  # R3
 def test_mover_al_mismo_dia_no(b):
     r = _uno(b, accion="mover_alimento", objeto="plátano", fecha=HOY)
     assert r["tipo"] == "no" and "ya está" in r["texto"]
+
+
+# -- unit 075 · R-215, C-265, C-266: move a logged food to another section of Nutrición › día -------------------------
+
+def test_seccion_pasa_el_mismo_alimento_a_carrera(b):  # 075 R1 (C-265)
+    antes = b.registro.alimento(b.platano)
+    t = _uno(b, "el plátano ponlo en nutrición en carrera", accion="seccion_alimento", objeto="plátano",
+             texto="carrera")
+    assert t["tipo"] == "propuesta" and t["accion"] == "seccion_alimento"
+    assert t["texto"] == "Voy a pasar plátano de prueba 120 g (108 kcal) del 22-10 a Nutrición en carrera"
+    confirmar(t, b.ctx)
+    despues = b.registro.alimento(b.platano)
+    assert despues["seccion"] == "carrera"
+    assert {k: despues[k] for k in ("id", "dia", "kcal", "cantidad", "unidad", "estado")} == \
+        {k: antes[k] for k in ("id", "dia", "kcal", "cantidad", "unidad", "estado")}
+    assert b.total() == 1000  # nothing removed nor logged again
+
+
+@pytest.mark.parametrize(("dicho", "clave", "nombre"), [
+    ("Nutrición en carrera", "carrera", "Nutrición en carrera"),
+    ("media mañana", "media_manana", "Media mañana"),
+    ("media_manana", "media_manana", "Media mañana"),
+    ("Desayuno", "desayuno", "Desayuno"),
+])
+def test_seccion_acepta_el_nombre_que_se_ve(b, dicho, clave, nombre):  # 075 R1
+    t = _uno(b, accion="seccion_alimento", objeto="yogur", texto=dicho)
+    assert t["texto"].endswith(f"del 22-10 a {nombre}")
+    confirmar(t, b.ctx)
+    assert b.registro.alimento(b.yogur)["seccion"] == clave
+
+
+def test_seccion_de_vuelta_a_sin_seccion(b):  # 075 R1
+    b.registro.mover_seccion(b.pasta, "comida")
+    t = _uno(b, accion="seccion_alimento", objeto="pasta", texto="sin sección")
+    assert t["texto"].endswith("del 22-10 a Sin sección")
+    confirmar(t, b.ctx)
+    assert b.registro.alimento(b.pasta)["seccion"] is None
+
+
+def test_seccion_de_otro_dia_dicho(b):  # 075 R1: the day it is logged on
+    gel = b.apuntar("gel de prueba", DOMINGO, 1, 90, unidad="unidad")
+    t = _uno(b, accion="seccion_alimento", objeto="gel", dia=DOMINGO, texto="carrera")
+    assert t["texto"] == "Voy a pasar gel de prueba 1 unidad (90 kcal) del 18-10 a Nutrición en carrera"
+    confirmar(t, b.ctx)
+    assert b.registro.alimento(gel)["seccion"] == "carrera"
+
+
+def test_seccion_que_no_es_de_las_seis_no(b):  # 075 R2 (C-266)
+    r = _uno(b, accion="seccion_alimento", objeto="plátano", texto="estrategia de geles")
+    assert r["tipo"] == "no"
+    for nombre in ("Desayuno", "Media mañana", "Comida", "Merienda", "Cena", "Nutrición en carrera", "Sin sección"):
+        assert nombre in r["texto"]
+    assert b.tarjetas() == 0
+    assert b.registro.alimento(b.platano)["seccion"] is None
+
+
+def test_seccion_sin_decirla_no(b):  # 075 R2
+    r = _uno(b, accion="seccion_alimento", objeto="plátano")
+    assert r["tipo"] == "no" and b.tarjetas() == 0
+
+
+def test_seccion_ya_esta_en_esa_no(b):  # 075 R2
+    b.registro.mover_seccion(b.platano, "merienda")
+    r = _uno(b, accion="seccion_alimento", objeto="plátano", texto="merienda")
+    assert r["tipo"] == "no" and "ya está en Merienda" in r["texto"]
+    assert b.tarjetas() == 0
+
+
+def test_seccion_ya_no_esta_al_aplicar_no_mueve_nada(b):  # 075 R2
+    t = _uno(b, accion="seccion_alimento", objeto="plátano", texto="carrera")
+    b.registro.borrar(b.platano)
+    with pytest.raises(Cambiado) as e:
+        confirmar(t, b.ctx)
+    assert e.value.tarjeta["texto"] == "Ese alimento ya no está apuntado."
+
+
+def test_seccion_varios_con_ese_nombre_pregunta_cual(b):  # 075 R1: `elegir`, as the other actions
+    otro = b.apuntar("plátano de prueba", HOY, 100, 90, "19:00")
+    e = _uno(b, accion="seccion_alimento", objeto="plátano", texto="carrera")
+    assert e["tipo"] == "elegir"
+    t = rehacer(e, b.ctx, eleccion=otro)
+    confirmar(t, b.ctx)
+    assert b.registro.alimento(otro)["seccion"] == "carrera"
+    assert b.registro.alimento(b.platano)["seccion"] is None
+
+
+def test_seccion_nombra_las_seis_y_sin_seccion():  # 075 R1: one visible name per section of `registro`
+    from tridata.nutricion.asistente.dia import NOMBRE_SECCION
+    from tridata.nutricion.registro import SECCIONES
+    assert set(NOMBRE_SECCION) == {*SECCIONES, None}
+
+
+def test_seccion_su_descripcion_dice_nutricion_dia(b):  # 075 R3
+    texto = texto_acciones()
+    (linea,) = [x for x in texto.splitlines() if x.startswith("- seccion_alimento:")]
+    assert "Nutrición › día" in linea and "Nutrición en carrera" in linea and "carrera" in linea
+    assert "estrategia" in linea  # it is not the nutrition strategy of the plan
 
 
 # -- R4 · R-76, C-97: the levels --------------------------------------------------------------------------------------

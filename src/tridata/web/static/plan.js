@@ -36,6 +36,8 @@
 // «Borrar semana» (its confirm() says how many sessions go with it); the plan «➕ Añadir semana» (also an empty plan)
 // and «➕ Añadir fase» (name and weeks from–to, /api/plan/fase/*), and each phase is a header over its weeks with
 // «Editar» (rename, other weeks, «Borrar fase»: its weeks stay).
+// Unit 076 (R-218): adding or changing a session also takes its hour (optional, «HH:MM»; empty removes it), and a
+// session with one is shown «20:00 · Rodaje»; the server says how it goes if it is not an hour («25:00»).
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -506,13 +508,13 @@ function lineaHecha(a) {
 function filaDia(d) {
   const nombre = DIAS[fecha(d.fecha).getUTCDay()];
   const varias = d.sesiones.length > 1; // unit 048: one row per session, each with its blocks and its watch
-  const titulo = varias ? `${d.sesiones.length} sesiones` : (d.sesiones[0]?.titulo ?? "sin sesión prevista");
+  const titulo = varias ? `${d.sesiones.length} sesiones` : (d.sesiones[0] ? conHora(d.sesiones[0]) : "sin sesión prevista");
   const nodo = el("li", { className: `dia-plan ${d.estado}` },
     el("strong", { textContent: `${nombre} ${diaMes(d.fecha)} · ${titulo}` }));
   const reloj = d.reloj ?? [];
   if (varias) {
     nodo.append(el("ul", { className: "sesiones-dia" }, ...d.sesiones.map((s, i) => el("li", { className: "sesion-plan" },
-      el("span", { className: "titulo-sesion", textContent: s.titulo }),
+      el("span", { className: "titulo-sesion", textContent: conHora(s) }),
       s.bloques.length ? el("ul", { className: "bloques" }, ...s.bloques.map((b) => el("li", { textContent: b }))) : null,
       reloj[i] ? filaReloj(d, reloj[i]) : null,
       reloj[i] ? accionesSesion(d, s, reloj[i]) : null))));
@@ -547,24 +549,30 @@ async function enSemana(ruta, cuerpo, error, boton, n = undefined) {
   if (datos.aviso) aviso(datos.aviso);
 }
 
-// title and blocks of a session: [title input, blocks textarea, their labels]
-function camposSesion(titulo = "", bloques = []) {
+// unit 076: «20:00 · Rodaje» when the session has its hour; the title alone without one
+const conHora = (s) => (s.hora ? `${s.hora} · ${s.titulo}` : s.titulo);
+
+// title, blocks and hour of a session: [title input, blocks textarea, their labels, hour input, its label]
+function camposSesion(titulo = "", bloques = [], hora = "") {
   const [entrada, lTitulo] = campo("Título", { type: "text", required: true, value: titulo, name: "sesion-titulo", placeholder: "Rodaje" });
   const texto = el("textarea", { rows: 3, name: "sesion-bloques", value: bloques.join("\n"), placeholder: "45' a 5:30" });
   texto.value = bloques.join("\n");
   const lBloques = el("label", {}, el("small", { className: "suave", textContent: "Bloques (uno por línea)" }), texto);
-  return [entrada, texto, lTitulo, lBloques];
+  // a text, not type=time: what is typed reaches the server, which says how it goes («25:00» is not saved)
+  const [enHora, lHora] = campo("Hora (opcional, HH:MM)", { type: "text", value: hora ?? "", name: "sesion-hora",
+    placeholder: "20:00", inputMode: "numeric", autocomplete: "off" });
+  return [entrada, texto, lTitulo, lBloques, enHora, lHora];
 }
 
 function anadirSesion(d) {
-  const [titulo, bloques, lTitulo, lBloques] = camposSesion();
+  const [titulo, bloques, lTitulo, lBloques, hora, lHora] = camposSesion();
   const error = cajaError();
   const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar sesión" });
-  const formulario = el("form", { className: "cerrar-incid form-anadir-sesion", hidden: true }, lTitulo, lBloques, error, guardar);
+  const formulario = el("form", { className: "cerrar-incid form-anadir-sesion", hidden: true }, lTitulo, lBloques, lHora, error, guardar);
   formulario.addEventListener("submit", (evento) => {
     evento.preventDefault();
-    enSemana("/api/plan/sesion/anadir", { id: ultimo.plan.id, fecha: d.fecha, titulo: titulo.value, bloques: bloques.value },
-      error, guardar);
+    enSemana("/api/plan/sesion/anadir", { id: ultimo.plan.id, fecha: d.fecha, titulo: titulo.value, bloques: bloques.value,
+      hora: hora.value }, error, guardar);
   });
   const boton = el("button", { type: "button", className: "enlace-boton anadir-sesion", textContent: "➕ Añadir sesión",
     ariaLabel: `Añadir sesión el ${diaMes(d.fecha)}`,
@@ -580,12 +588,13 @@ function accionesSesion(d, s, r) {
   const viene = diaQueViene(d);
   let formCambiar = null;
   if (viene) {
-    const [titulo, bloques, lTitulo, lBloques] = camposSesion(s.titulo, s.bloques);
+    const [titulo, bloques, lTitulo, lBloques, hora, lHora] = camposSesion(s.titulo, s.bloques, s.hora);
     const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar cambios" });
-    formCambiar = el("form", { className: "cerrar-incid form-cambiar-sesion", hidden: true }, lTitulo, lBloques, guardar);
+    formCambiar = el("form", { className: "cerrar-incid form-cambiar-sesion", hidden: true }, lTitulo, lBloques, lHora, guardar);
     formCambiar.addEventListener("submit", (evento) => {
       evento.preventDefault();
-      enSemana("/api/plan/sesion/cambiar", { sesion: r.id, titulo: titulo.value, bloques: bloques.value }, error, guardar);
+      enSemana("/api/plan/sesion/cambiar", { sesion: r.id, titulo: titulo.value, bloques: bloques.value, hora: hora.value },
+        error, guardar);
     });
     acciones.append(el("button", { type: "button", className: "enlace-boton cambiar-sesion", textContent: "Cambiar",
       onclick: () => { formCambiar.hidden = !formCambiar.hidden; formMover.hidden = true; } }));

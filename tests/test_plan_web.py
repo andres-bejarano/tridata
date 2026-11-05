@@ -488,3 +488,50 @@ def test_semanas_y_fases_desde_la_web(web):  # R5, R6 · C-251..C-253
     assert Planes(web.db).leer(medio)["sesiones"] == []
     assert _post(web, "/api/plan/semana/borrar", id=medio, semana=2).status_code == 404
     assert _post(web, "/api/plan/semana/anadir", id=999, n=1, desde="2026-10-19", hasta="2026-10-25").status_code == 404
+
+
+# -- unit 076 · R3 (R-218, C-268, C-271): the hour of a session by hand in Fitness › Plan. Invented. ------------------
+
+def test_la_hora_de_una_sesion_se_pone_se_cambia_y_se_quita_desde_la_web(web):  # R3 · C-268
+    medio = _plan_con_semanas(web)
+    r = _post(web, "/api/plan/sesion/anadir", id=medio, fecha="2026-10-22", titulo="Rodaje", bloques=["45' a 5:30"],
+              hora="07:00")
+    assert r.status_code == 200, r.text
+    dia = _dia(web, medio, 1, "2026-10-22")
+    assert dia["sesiones"] == [{"titulo": "Rodaje", "bloques": ["45' a 5:30"], "clave": False, "hora": "07:00"}]
+    sesion = dia["reloj"][0]["id"]
+    r = _post(web, "/api/plan/sesion/mover", sesion=sesion, fecha="2026-10-24")  # to Saturday: it keeps its hour
+    assert r.status_code == 200, r.text
+    assert _dia(web, medio, 1, "2026-10-24")["sesiones"][0]["hora"] == "07:00"
+    r = _post(web, "/api/plan/sesion/cambiar", sesion=sesion, titulo="Rodaje", bloques=["45' a 5:30"], hora="19:30")
+    assert r.status_code == 200, r.text
+    assert _dia(web, medio, 1, "2026-10-24")["sesiones"][0]["hora"] == "19:30"
+    r = _post(web, "/api/plan/sesion/cambiar", sesion=sesion, titulo="Rodaje", bloques=["50' a 5:30"])  # not sent
+    assert _dia(web, medio, 1, "2026-10-24")["sesiones"][0]["hora"] == "19:30"
+    r = _post(web, "/api/plan/sesion/cambiar", sesion=sesion, titulo="Rodaje", bloques=["50' a 5:30"], hora="")
+    assert r.status_code == 200, r.text
+    assert _dia(web, medio, 1, "2026-10-24")["sesiones"] == [
+        {"titulo": "Rodaje", "bloques": ["50' a 5:30"], "clave": False}]  # without it: as before
+
+
+@pytest.mark.parametrize("mala", ["25:00", "a las tantas"])
+def test_una_hora_mala_desde_la_web_no_se_guarda_y_dice_como_va(web, mala):  # R3 · C-271
+    medio = _plan_con_semanas(web)
+    r = _post(web, "/api/plan/sesion/anadir", id=medio, fecha="2026-10-22", titulo="Rodaje", bloques=["45'"],
+              hora=mala)
+    assert r.status_code == 400 and "HH:MM" in r.json()["error"] and "23:59" in r.json()["error"]
+    assert _dia(web, medio, 1, "2026-10-22")["sesiones"] == []
+    _post(web, "/api/plan/sesion/anadir", id=medio, fecha="2026-10-22", titulo="Rodaje", bloques=["45'"], hora="20:00")
+    sesion = _dia(web, medio, 1, "2026-10-22")["reloj"][0]["id"]
+    r = _post(web, "/api/plan/sesion/cambiar", sesion=sesion, titulo="Otro", bloques=["45'"], hora=mala)
+    assert r.status_code == 400 and "HH:MM" in r.json()["error"]
+    assert _dia(web, medio, 1, "2026-10-22")["sesiones"][0]["titulo"] == "Rodaje"
+
+
+def test_la_hora_sale_en_el_md_que_se_baja(web):  # R5 · R-220
+    medio = _plan_con_semanas(web)
+    _post(web, "/api/plan/sesion/anadir", id=medio, fecha="2026-10-23", titulo="Rodaje", bloques=["45'"], hora="19:30")
+    _post(web, "/api/plan/sesion/anadir", id=medio, fecha="2026-10-24", titulo="Tirada", bloques=["1h30"])
+    r = web.cliente.get(f"/api/plan/{medio}.md")
+    assert r.status_code == 200, r.text
+    assert "### 2026-10-23 · 19:30 · Rodaje" in r.text and "### 2026-10-24 · Tirada" in r.text

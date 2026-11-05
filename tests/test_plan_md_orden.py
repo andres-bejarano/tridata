@@ -32,3 +32,15 @@ def test_las_del_mismo_dia_y_sin_mover_salen_como_antes(tmp_path):  # 073 · R2
     md = escribir(planes.leer(ident), None, HOY)
     assert re.findall(r"^### \S+ · (.+)$", md, flags=re.M) == ["Natación de prueba", "Bici de prueba",
                                                                  "Rodaje de prueba"]
+
+
+def test_la_hora_va_en_la_cabecera_de_la_sesion_y_sin_hora_como_antes(tmp_path):  # 076 · R1, R5 · R-220, C-272
+    planes, ident = _con_semanas(tmp_path, 3)
+    rodaje = planes.anadir_sesion(ident, "2026-10-30", "Rodaje de prueba", ["45' a 5:40"], HOY)
+    planes.anadir_sesion(ident, "2026-10-31", "Tirada de prueba", ["1h30 suave"], HOY)
+    sin_hora = escribir(planes.leer(ident), None, HOY)
+    assert "### 2026-10-30 · Rodaje de prueba\n- 45' a 5:40" in sin_hora
+    planes.cambiar_sesion(rodaje, "Rodaje de prueba", ["45' a 5:40"], HOY, hora="20:00")
+    md = escribir(planes.leer(ident), None, HOY)
+    assert "### 2026-10-30 · 20:00 · Rodaje de prueba\n- 45' a 5:40" in md
+    assert md.replace(" · 20:00", "") == sin_hora  # only the hour

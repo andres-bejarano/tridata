@@ -64,6 +64,13 @@ next pass of «Garmin manda» does not take it back to that day (`aplicar_garmin
 (`cambiar_semana`) and deleted with their sessions (`borrar_semana`). The phases (`plan_fase`: name and the weeks it
 spans, `desde_n`..`hasta_n`) are added, changed and deleted without touching their weeks; two phases never share a
 week. `leer` gives `fases` only when the plan has them, so a plan without them reads as before.
+
+Unit 076 (REC-31, R-216..R-220): a session may have the hour it starts (`plan_sesion.hora`, «HH:MM», NULL: none, as
+every session of before). It is set when a session is added (`anadir_sesion`) or changed (`cambiar_sesion`: not said,
+it stays; empty, it goes) and checked with `hora_de` («25:00» is a ValueError saying how it goes). Moving a session
+and «Garmin manda» (`aplicar_garmin`) never touch it, and it is not part of what goes to the watch, so changing only
+the hour never marks a sent session «cambiada». `leer` gives `hora` only to a session that has one; `sesion` and
+`sesiones_reloj` always (None without one).
 """
 from __future__ import annotations
 
@@ -178,6 +185,8 @@ _RELOJ = (("garmin_workout_id", "INTEGER"), ("garmin_schedule_id", "INTEGER"), (
 _DESDE_GARMIN = (("garmin_actualizado", "TEXT"), ("garmin_aviso", "TEXT"))
 # unit 067: the day Garmin has a sent session on, to tell a move by hand from a move in Garmin
 _EN_GARMIN = (("garmin_fecha", "TEXT"),)
+# unit 076: the hour a session starts («HH:MM»), NULL without one
+_HORA = (("hora", "TEXT"),)
 _COLUMNAS_GARMIN = {"titulo", "bloques", "fecha", "garmin_workout_id", "garmin_schedule_id", "garmin_actualizado",
                     "garmin_texto"}
 # unit 044: the columns of a live incident, added to an older base without them
@@ -195,6 +204,7 @@ APARTADOS_NUEVO = ({"titulo": "Objetivos", "parte": "objetivos"}, {"titulo": "Pr
 _TABLAS_DEL_PLAN = ("plan_carrera", "plan_semana", "plan_sesion", "plan_nutricion", "plan_incidencia", "plan_nota",
                     "plan_nota_dia", "plan_fase")
 ABIERTA, CERRADA = "abierta", "cerrada"
+CONSERVA = object()  # unit 076: `cambiar_sesion` without an hour keeps the one the session had
 
 
 def texto_sesion(titulo: str, bloques: list[str]) -> str:
@@ -227,7 +237,7 @@ class Planes:
             conn.executescript(_SCHEMA)
             for tabla, columnas in (("plan_sesion", _RELOJ), ("plan_incidencia", _VIVA), ("plan_carrera", _ESTRATEGIA),
                                     ("plan_carrera", _RESULTADO), ("plan_sesion", _DESDE_GARMIN),
-                                    ("plan_sesion", _EN_GARMIN)):
+                                    ("plan_sesion", _EN_GARMIN), ("plan_sesion", _HORA)):
                 tiene = {f["name"] for f in conn.execute(f"PRAGMA table_info({tabla})")}
                 for columna, tipo in columnas:
                     if columna not in tiene:
@@ -272,7 +282,12 @@ class Planes:
                 plan[clave] = [{c: _de_la_base(tabla, c, f[c]) for c in columnas} for f in filas]
             extra = conn.execute("SELECT estrategia, resultado FROM plan_carrera WHERE plan_id = ? ORDER BY orden",
                                  (ident,)).fetchall()
+            horas = [f["hora"] for f in conn.execute("SELECT hora FROM plan_sesion WHERE plan_id = ? ORDER BY orden",
+                                                     (ident,))]
             fases = self._fases(conn, ident)
+        for sesion, hora in zip(plan["sesiones"], horas, strict=True):  # unit 076: only when it has one
+            if hora:
+                sesion["hora"] = hora
         if fases:  # unit 067: only when it has them
             plan["fases"] = fases
         for carrera, f in zip(plan["carreras"], extra, strict=True):  # unit 059: only when it has them
@@ -310,13 +325,14 @@ class Planes:
         if f is None:
             return None
         return {"id": f["id"], "plan_id": f["plan_id"], "fecha": f["fecha"], "titulo": f["titulo"],
-                "bloques": json.loads(f["bloques"]), "clave": bool(f["clave"]),
+                "bloques": json.loads(f["bloques"]), "clave": bool(f["clave"]), "hora": f["hora"],
                 **{columna: f[columna] for columna, _ in _RELOJ}}
 
     def sesiones_reloj(self, plan_id: int) -> list[dict[str, Any]]:
-        """`[{id, fecha, titulo, estado, enviada, aviso}]` of the sessions of a plan, in the order of `leer`: `estado`
-        is "al_dia" (in the watch as it is now), "cambiada" (changed since it was sent) or None (never sent);
-        `aviso`, the warning of the last pass with Garmin (unit 061) or None."""
+        """`[{id, fecha, titulo, estado, enviada, aviso, hora}]` of the sessions of a plan, in the order of `leer`:
+        `estado` is "al_dia" (in the watch as it is now), "cambiada" (changed since it was sent) or None (never sent);
+        `aviso`, the warning of the last pass with Garmin (unit 061) or None; `hora`, its hour (unit 076) or None. The
+        hour does not go to the watch, so it never makes a session «cambiada»."""
         with self._connect() as conn:
             filas = conn.execute("SELECT rowid AS id, * FROM plan_sesion WHERE plan_id = ? ORDER BY orden",
                                  (plan_id,)).fetchall()
@@ -328,7 +344,8 @@ class Planes:
                 movida = f["garmin_fecha"] is not None and f["garmin_fecha"] != f["fecha"]  # unit 067
                 estado = "al_dia" if f["garmin_texto"] == ahora and not movida else "cambiada"
             salida.append({"id": f["id"], "fecha": f["fecha"], "titulo": f["titulo"], "estado": estado,
-                           "enviada": f["garmin_enviada"] if estado else None, "aviso": f["garmin_aviso"]})
+                           "enviada": f["garmin_enviada"] if estado else None, "aviso": f["garmin_aviso"],
+                           "hora": f["hora"]})
         return salida
 
     def marcar_garmin(self, ident: int, workout_id: int | None, schedule_id: int | None,
@@ -589,30 +606,36 @@ class Planes:
             raise LookupError(ident)
         return fila
 
-    def anadir_sesion(self, plan_id: int, fecha: str, titulo: str, bloques: list[str] | str, hoy: date) -> int:
-        """A session on that day (R-199), with its blocks (one line each, the empty ones left out), in the section of
-        the session closest before it; its id. ValueError, with why, for a bad date, a day that is over (`YA_PASO`) or
-        an empty title; LookupError without that plan."""
+    def anadir_sesion(self, plan_id: int, fecha: str, titulo: str, bloques: list[str] | str, hoy: date,
+                      hora: str | None = None) -> int:
+        """A session on that day (R-199), with its blocks (one line each, the empty ones left out) and its hour if it
+        has one (unit 076, «HH:MM»), in the section of the session closest before it; its id. ValueError, with why,
+        for a bad date, a day that is over (`YA_PASO`), an empty title or a bad hour; LookupError without that plan."""
         from .acciones import _sitio
 
         dia, limpio, lineas = _dia_que_viene(fecha, hoy), _titulo(titulo), _bloques_limpios(bloques)
+        a_la = hora_de(hora)
         with self._connect() as conn:
             self._plan_existe(conn, plan_id)
             apartado, orden = _sitio(conn, "plan_sesion", plan_id, dia)
-            cursor = conn.execute("INSERT INTO plan_sesion (plan_id, orden, apartado, fecha, titulo, bloques, clave) "
-                                  "VALUES (?, ?, ?, ?, ?, ?, 0)",
-                                  (plan_id, orden, apartado, dia, limpio, json.dumps(lineas, ensure_ascii=False)))
+            cursor = conn.execute("INSERT INTO plan_sesion (plan_id, orden, apartado, fecha, titulo, bloques, clave, "
+                                  "hora) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+                                  (plan_id, orden, apartado, dia, limpio, json.dumps(lineas, ensure_ascii=False), a_la))
             return int(cursor.lastrowid or 0)
 
-    def cambiar_sesion(self, ident: int, titulo: str, bloques: list[str] | str, hoy: date) -> None:
-        """Another title and blocks for that session, in its row (R-200). ValueError for an empty title or a day that
-        is over (R-207); LookupError without it."""
+    def cambiar_sesion(self, ident: int, titulo: str, bloques: list[str] | str, hoy: date,
+                       hora: str | None | object = CONSERVA) -> None:
+        """Another title and blocks for that session, in its row (R-200), and its hour (unit 076): not given
+        (`CONSERVA`), the one it had stays; «HH:MM», that one; empty or None, none. ValueError for an empty title, a
+        bad hour or a day that is over (R-207); LookupError without it."""
         limpio, lineas = _titulo(titulo), _bloques_limpios(bloques)
+        a_la = None if hora is CONSERVA else hora_de(hora)
         with self._connect() as conn:
             fila = self._fila_sesion(conn, ident)
             _no_pasado(fila["fecha"], hoy)
-            conn.execute("UPDATE plan_sesion SET titulo = ?, bloques = ? WHERE rowid = ?",
-                         (limpio, json.dumps(lineas, ensure_ascii=False), ident))
+            conn.execute("UPDATE plan_sesion SET titulo = ?, bloques = ?, hora = ? WHERE rowid = ?",
+                         (limpio, json.dumps(lineas, ensure_ascii=False),
+                          fila["hora"] if hora is CONSERVA else a_la, ident))
 
     def mover_sesion(self, ident: int, fecha: str, hoy: date) -> None:
         """That session to another day, with its blocks, in ONE `UPDATE` of its row: its `orden` stays, so Google
@@ -888,6 +911,26 @@ class Planes:
         return notas
 
 
+_HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+
+
+def hora_de(valor: Any) -> str | None:
+    """Unit 076: the hour of a session as «HH:MM» («7:30» is «07:30»), or None if empty; else ValueError saying how it
+    goes (00:00 to 23:59)."""
+    texto = str(valor or "").strip()
+    if not texto:
+        return None
+    encontrada = _HHMM.match(texto)
+    if encontrada is None:
+        raise ValueError(f"La hora «{texto}» no vale: va como HH:MM, de 00:00 a 23:59 (p. ej. 20:00)")
+    return f"{int(encontrada.group(1)):02d}:{encontrada.group(2)}"
+
+
+def con_hora(hora: str | None, texto: str) -> str:
+    """«20:00 · texto» when there is an hour; the text alone without one (unit 076)."""
+    return f"{hora} · {texto}" if hora else texto
+
+
 def _fecha(valor: Any) -> str | None:
     """An ISO date (YYYY-MM-DD) that exists, or None if empty; else ValueError saying why."""
     texto = str(valor or "").strip()
@@ -993,4 +1036,5 @@ def titulo_incidencia(zona: str | None, lado: str | None) -> str:
     return " ".join(x for x in (zona, lado) if x)
 
 
-__all__ = ["ABIERTA", "APARTADOS_NUEVO", "CERRADA", "HECHA", "Planes", "texto_sesion", "titulo_incidencia"]
+__all__ = ["ABIERTA", "APARTADOS_NUEVO", "CERRADA", "CONSERVA", "HECHA", "Planes", "con_hora", "hora_de", "texto_sesion",
+           "titulo_incidencia"]

@@ -17,6 +17,11 @@ Unit 054: each activity of the `DataStore` since `DESDE_HECHOS` is one event tie
 hour), «Hecho según Garmin» as description. It changes when the activity changes and is deleted when it leaves the
 base. The sessions and the trainings are crossed by their own key: one never changes or deletes the other (R6).
 
+Unit 076 (R-219, C-269, C-270): a session with an hour (`plan_sesion.hora`) is an event from that hour, in the zone of
+this PC (as the trainings done), lasting what its blocks say (read as the watch reads them, `plan.reloj`; one hour if
+a block says no duration). The event keeps that hour in `tridata_hora`, so a session that loses it goes back to all
+day, while an hour Andrés put in Google to a session without one (R3) stays.
+
 Idempotent: a second pass in a row writes nothing. Only the type, the day and the blocks go to Google: no plan name,
 no incidents, no figure of heart rate (G-59); of a training, only its sport, hour, duration and distance: no heart
 rate, kcal, load, pace, training effect, name of the activity or place (G-59 widened, R2). It does not touch the code
@@ -34,11 +39,14 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..plan import Planes
+from ..plan import reloj
 from ..storage import DataStore
 from ..sync import CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES
 from . import DESDE_HECHOS, SIN_CONECTAR, Calendario, ErrorCalendario
 
 CLAVE = "tridata_sesion"
+CLAVE_HORA = "tridata_hora"  # unit 076: the hour TriData gave the event of a session («» or absent: none)
+UNA_HORA = timedelta(hours=1)  # unit 076: a session whose blocks do not say how long it lasts (C-270)
 CLAVE_HECHO = "tridata_actividad"  # unit 054; since 057, `<day>/<sport>`: what was done of one sport that day
 MINIMO_BICI_S = 50 * 60  # unit 056: a shorter ride is a commute, not a training: it does not go to the calendar
 HECHO = "Hecho según Garmin"
@@ -71,25 +79,58 @@ def _sin_pulso(texto: str) -> str:
     return " ".join(limpio.split()).strip(" ,;·-")
 
 
-def cuerpo_del_evento(sesion_id: str, sesion: dict[str, Any]) -> dict[str, Any]:
-    """The event of one session: its type in the title, its day (all day) and its blocks. Nothing else (R5)."""
+def duracion(bloques: list[str]) -> timedelta:
+    """Unit 076: how long the blocks of a session last, read as the watch reads them (`plan.reloj`): the time of each
+    one, a distance at its pace, the repetitions with their recoveries. One hour if there are none or a block says no
+    duration (one it cannot read, a distance without a pace), C-270."""
+    total = 0.0
+    for texto in bloques:
+        try:
+            bloque = reloj._bloque(str(texto))
+        except reloj.NoTraducible:
+            return UNA_HORA
+        vuelta = reloj._segundos(bloque.cuanto, bloque.ritmo)
+        recuperacion = reloj._segundos(bloque.recuperacion, bloque.ritmo_rec) if bloque.recuperacion else None
+        if vuelta <= 0 or recuperacion == 0:
+            return UNA_HORA
+        total += (bloque.veces or 1) * (vuelta + (recuperacion or 0))
+    return timedelta(seconds=round(total)) if total > 0 else UNA_HORA
+
+
+def cuerpo_del_evento(sesion_id: str, sesion: dict[str, Any], zona: str | None = None) -> dict[str, Any]:
+    """The event of one session: its type in the title, its day (all day) and its blocks. Nothing else (R5).
+
+    Unit 076: with its `hora`, from that hour in `zona` (the one of this PC) for as long as its blocks last
+    (`duracion`), with that hour kept in `tridata_hora`; without it, all day as always."""
     dia = date.fromisoformat(sesion["fecha"])
     titulo = _sin_pulso(sesion["titulo"]) or sesion["titulo"]
     bloques = [b for b in (_sin_pulso(b) for b in sesion.get("bloques") or []) if b]
-    return {"summary": f"{_icono(titulo)} {titulo}", "description": "\n".join(bloques),
-            "start": {"date": dia.isoformat()}, "end": {"date": (dia + timedelta(days=1)).isoformat()},
-            "extendedProperties": {"private": {CLAVE: sesion_id}}}
+    cuerpo: dict[str, Any] = {"summary": f"{_icono(titulo)} {titulo}", "description": "\n".join(bloques),
+                              "start": {"date": dia.isoformat()}, "end": {"date": (dia + timedelta(days=1)).isoformat()},
+                              "extendedProperties": {"private": {CLAVE: sesion_id}}}
+    hora = sesion.get("hora")
+    if hora:
+        horas, minutos = (int(x) for x in str(hora).split(":"))
+        leida = datetime(dia.year, dia.month, dia.day, horas, minutos)
+        inicio = leida.replace(tzinfo=ZoneInfo(zona)) if zona else leida.astimezone()
+        fin = (inicio + duracion([str(b) for b in sesion.get("bloques") or []])).astimezone(inicio.tzinfo)
+        extra = {"timeZone": zona} if zona else {}
+        cuerpo["start"] = {"dateTime": inicio.isoformat(), **extra}
+        cuerpo["end"] = {"dateTime": fin.isoformat(), **extra}
+        cuerpo["extendedProperties"]["private"][CLAVE_HORA] = str(hora)
+    return cuerpo
 
 
-def _previstas(planes: Planes, ident: int | None) -> dict[str, dict[str, Any]]:
-    """`{session id: its event}` of the plan in course, every day of it (unit 054, R5)."""
+def _previstas(planes: Planes, ident: int | None, zona: str | None = None) -> dict[str, dict[str, Any]]:
+    """`{session id: its event}` of the plan in course, every day of it (unit 054, R5); with its hour (076) in `zona`."""
     if ident is None:
         return {}
     with planes._connect() as conn:  # the same SQLite of `Planes`, as the cards of the 041 do
-        filas = conn.execute("SELECT orden, fecha, titulo, bloques FROM plan_sesion WHERE plan_id = ? "
+        filas = conn.execute("SELECT orden, fecha, titulo, bloques, hora FROM plan_sesion WHERE plan_id = ? "
                              "ORDER BY fecha, orden", (ident,)).fetchall()
     return {f"{ident}-{f['orden']}": cuerpo_del_evento(f"{ident}-{f['orden']}", {
-        "fecha": f["fecha"], "titulo": f["titulo"], "bloques": json.loads(f["bloques"])}) for f in filas}
+        "fecha": f["fecha"], "titulo": f["titulo"], "bloques": json.loads(f["bloques"]), "hora": f["hora"]}, zona)
+        for f in filas}
 
 
 # -- unit 054: the trainings done ---------------------------------------------------------------------------------------
@@ -240,23 +281,34 @@ def _fecha_hora(texto: str) -> datetime:
 
 def _dia(evento: dict) -> date:
     inicio = evento.get("start") or {}
-    if "date" in inicio:
+    if inicio.get("date"):
         return date.fromisoformat(inicio["date"])
     return _fecha_hora(inicio["dateTime"]).date()
 
 
 def _cambio(evento: dict, cuerpo: dict) -> dict:
-    """What to patch so the event says what the session says now, keeping the hour Andrés gave it (R3)."""
+    """What to patch so the event says what the session says now, keeping the hour Andrés gave it (R3).
+
+    Unit 076: a session with its hour wins (its start and end, as `_cambio_hecho`); one that lost the hour TriData gave
+    its event (`tridata_hora`) goes back to all day."""
+    privado = (evento.get("extendedProperties") or {}).get("private") or {}
+    hora_dada, hora = privado.get(CLAVE_HORA) or None, cuerpo["extendedProperties"]["private"].get(CLAVE_HORA)
+    if hora or hora_dada:
+        cambio = _cambio_hecho(evento, cuerpo)
+        if hora != hora_dada:
+            cambio["extendedProperties"] = {"private": {**cuerpo["extendedProperties"]["private"],
+                                                        CLAVE_HORA: hora or ""}}
+        return cambio
     cambio = {k: cuerpo[k] for k in ("summary", "description") if evento.get(k) != cuerpo[k]}
     dia = date.fromisoformat(cuerpo["start"]["date"])
     inicio, fin = evento.get("start") or {}, evento.get("end") or {}
-    if "dateTime" in inicio and "dateTime" in fin:
+    if inicio.get("dateTime") and fin.get("dateTime"):
         desde, hasta = _fecha_hora(inicio["dateTime"]), _fecha_hora(fin["dateTime"])
         if desde.date() != dia:
             nuevo = datetime.combine(dia, desde.timetz())
             cambio["start"] = {**inicio, "dateTime": nuevo.isoformat()}
             cambio["end"] = {**fin, "dateTime": (nuevo + (hasta - desde)).isoformat()}
-    elif inicio != cuerpo["start"] or fin != cuerpo["end"]:
+    elif not _mismo_momento(inicio, cuerpo["start"]) or not _mismo_momento(fin, cuerpo["end"]):
         cambio["start"], cambio["end"] = cuerpo["start"], cuerpo["end"]
     return cambio
 
@@ -275,8 +327,9 @@ def sincronizar(planes: Planes, calendario: Calendario, hoy: date, store: DataSt
     if not calendario.conectado:
         raise ErrorCalendario(SIN_CONECTAR)
     ident = planes.en_curso(hoy)
-    deseadas = _previstas(planes, ident)
-    hechos = _hechos(store, hoy, zona or zona_local(), _carreras(planes, ident)) if store is not None else None
+    zona = zona or zona_local()
+    deseadas = _previstas(planes, ident, zona)
+    hechos = _hechos(store, hoy, zona, _carreras(planes, ident)) if store is not None else None
     if hechos:
         deseadas = _sin_las_entrenadas(deseadas, hechos)
     calendario.asegurar()  # «TriData» is still there (Andrés may have deleted it: then a new one)
@@ -340,4 +393,5 @@ def sincronizar(planes: Planes, calendario: Calendario, hoy: date, store: DataSt
     return resumen
 
 
-__all__ = ["CLAVE", "CLAVE_HECHO", "cuerpo_del_evento", "cuerpo_del_hecho", "sincronizar", "zona_local"]
+__all__ = ["CLAVE", "CLAVE_HECHO", "CLAVE_HORA", "cuerpo_del_evento", "cuerpo_del_hecho", "duracion", "sincronizar",
+           "zona_local"]

@@ -675,3 +675,60 @@ def test_la_tarjeta_del_equipo_se_rehace_si_la_cambiaste_a_mano(b):  # R10 · R-
     t2 = b.uno(accion="plan_cambiar_sesion", dia=MIERCOLES, texto=NUEVA)
     t3 = b.uno(accion="plan_quitar_sesion", dia=date(2026, 10, 29))
     assert t2["tipo"] == "no" and t3["tipo"] == "propuesta"
+
+
+# -- unit 076 · R2 (R-217, C-267, criterio portante): the team puts the hour Andrés says in the session -----------------
+
+VIERNES = date(2026, 10, 30)
+RODAJE_45 = "Rodaje de prueba 45' | 45' a 5:40"
+
+
+def test_el_equipo_anade_una_sesion_con_su_hora_y_con_el_si_queda_con_ella(b):  # R2 · C-267 (portante)
+    t = b.uno(accion="plan_anadir_sesion", dia=VIERNES, texto=RODAJE_45, hora="20:00")
+    assert t["tipo"] == "propuesta", t
+    assert t["texto"] == "Voy a añadir en el plan: vie 30/10 · 20:00 · Rodaje de prueba 45'"
+    assert t["despues"].startswith("20:00 · Rodaje de prueba 45'")
+    assert _sesiones(b.plan(), "2026-10-30") == []  # nothing until the «sí»
+    confirmar(t, b.ctx)
+    (sesion,) = [s for s in b.plan()["sesiones"] if s["fecha"] == "2026-10-30"]
+    assert (sesion["titulo"], sesion["bloques"], sesion["hora"]) == ("Rodaje de prueba 45'", ["45' a 5:40"], "20:00")
+
+
+def test_el_equipo_cambia_una_sesion_y_le_pone_hora_o_conserva_la_que_tenia(b):  # R2 · R-217
+    t = b.uno(accion="plan_cambiar_sesion", dia=MIERCOLES, texto=NUEVA, hora="19:30")
+    assert t["tipo"] == "propuesta", t
+    assert t["texto"] == "Voy a cambiar en el plan: mié 28/10 · 19:30 · Series 3×1000"
+    assert not t["antes"].startswith("19:30") and t["despues"].startswith("19:30 · Series 3×1000")
+    confirmar(t, b.ctx)
+    ident = _id_del(b.planes, b.plan_id, "2026-10-28")
+    assert b.planes.sesion(ident)["hora"] == "19:30"
+
+    otra = b.uno(accion="plan_cambiar_sesion", dia=MIERCOLES, texto="Series 4×1000 | 4×1000 a 4:05 (2' rec)")
+    assert otra["tipo"] == "propuesta", otra
+    assert otra["antes"].startswith("19:30 · ") and otra["despues"].startswith("19:30 · Series 4×1000")
+    confirmar(otra, b.ctx)
+    assert (b.planes.sesion(ident)["titulo"], b.planes.sesion(ident)["hora"]) == ("Series 4×1000", "19:30")
+
+
+def test_sin_hora_la_tarjeta_y_la_sesion_son_como_antes(b):  # R1 · R-216
+    t = b.uno(accion="plan_anadir_sesion", dia=VIERNES, texto=RODAJE_45)
+    assert t["texto"] == "Voy a añadir en el plan: vie 30/10 · Rodaje de prueba 45'"
+    assert "hora" not in t["parametros"]
+    confirmar(t, b.ctx)
+    (sesion,) = [s for s in b.plan()["sesiones"] if s["fecha"] == "2026-10-30"]
+    assert "hora" not in sesion
+
+
+@pytest.mark.parametrize("mala", ["25:00", "a las tantas", "8 pm", "20.00"])
+def test_una_hora_que_no_es_hhmm_no_se_propone(b, mala):  # R2: a «no» that says how it goes
+    for accion, dia in (("plan_anadir_sesion", VIERNES), ("plan_cambiar_sesion", MIERCOLES)):
+        t = b.uno(accion=accion, dia=dia, texto=RODAJE_45, hora=mala)
+        assert t["tipo"] == "no", t
+        assert "HH:MM" in t["texto"] and "00:00" in t["texto"] and "23:59" in t["texto"], t
+
+
+def test_la_hora_se_describe_en_las_acciones_de_sesion_sin_cifras():  # R2 · G-38
+    texto = texto_acciones()
+    for ident in ("plan_cambiar_sesion", "plan_anadir_sesion"):
+        linea = next(x for x in texto.splitlines() if x.startswith(f"- {ident}:"))
+        assert "hora:" in linea and "HH:MM" in linea, ident

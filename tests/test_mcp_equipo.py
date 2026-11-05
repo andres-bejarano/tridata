@@ -421,3 +421,21 @@ def test_la_descripcion_dice_cuando_usar_la_seccion(mundo):  # R2
     for clave in SEIS:
         assert clave in herramienta.description
     assert "says which meal" in herramienta.description
+
+
+# -- unit 076 · R2 (R-217, C-267): the coach of the PC says the hour and, with the «sí», the session has it ------------
+
+def test_el_coach_pone_la_hora_con_el_si(mundo):  # R2 · C-267
+    viernes = "2026-10-30"
+    cambio = {"accion": "plan_anadir_sesion", "dia": viernes, "texto": "Rodaje inventado 45' | 45' a 5:40",
+              "hora": "20:00"}
+    texto, _ = mundo.preparar(cambio)
+    assert "20:00" in texto  # the proposal shows it
+    assert mundo.hacer(cambio).startswith("Hecho")
+    (sesion,) = [s for s in mundo.planes.leer(mundo.plan_id)["sesiones"] if s["fecha"] == viernes]
+    assert sesion["hora"] == "20:00"
+
+
+def test_la_forma_del_cambio_nombra_la_hora(mundo):  # R2
+    herramienta = next(t for t in asyncio.run(mundo.server.list_tools()) if t.name == "preparar_cambio")
+    assert "hora" in herramienta.description.split("texto (optional)")[0]

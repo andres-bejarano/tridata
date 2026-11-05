@@ -16,6 +16,9 @@ a line per stretch), and a time written by hand is its «Estado» («✅ 1:12:30
 
 Unit 067 (R-204): a plan with phases writes the phase of each week in a last column «Fase» of the table of the weeks;
 a plan without them, the same table as before.
+
+Unit 076 (R-220): a session with its hour says it after its day, «### 2026-11-06 · 20:00 · Rodaje»; one without it,
+the same line as before.
 """
 from __future__ import annotations
 
@@ -23,7 +26,7 @@ from datetime import date
 from typing import Any
 
 from ..storage import DataStore
-from . import ABIERTA, HECHA, Planes, semanas as semanas_del_plan
+from . import ABIERTA, HECHA, Planes, con_hora, semanas as semanas_del_plan
 
 
 def _celda(valor: Any) -> str:
@@ -101,7 +104,8 @@ def _apartado(plan: dict, i: int, store: DataStore | None, hoy: date, vivas: lis
             (s["n"], s["desde"], s["hasta"], hmm(s["previsto_s"]), s["clave"], *_hecho(s, store, hoy),
              *((semanas_del_plan.fase_de(plan, s["n"]),) if con_fases else ())) for s in de["semanas"]]))
     for s in sorted(de["sesiones"], key=lambda s: s["fecha"]):  # unit 073: a moved one in its day (stable sort)
-        bloques.append("\n".join([f"### {s['fecha']} · {_celda(s['titulo'])}", *(f"- {b}" for b in s["bloques"])]))
+        linea = f"### {s['fecha']} · {con_hora(s.get('hora'), _celda(s['titulo']))}"  # unit 076: its hour, if any
+        bloques.append("\n".join([linea, *(f"- {b}" for b in s["bloques"])]))
     if de["nutricion"]:
         bloques.append(_tabla(("Producto", "Pauta"), [(n["producto"], n["pauta"]) for n in de["nutricion"]]))
     if de["incidencias"]:

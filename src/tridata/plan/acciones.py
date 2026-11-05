@@ -30,6 +30,11 @@ session is gone says so and touches no other one; one whose id now has another d
 of the last row deleted) is redone with what is there now and nothing is applied. A card from before (by title) is
 still confirmed if its title is unique that day.
 
+Unit 076 (R-217, C-267): `plan_anadir_sesion` and `plan_cambiar_sesion` take the hour Andrés says in `hora` («HH:MM»):
+the card shows it («Voy a añadir en el plan: vie 30/10 · 20:00 · Rodaje») and confirming saves it in the session.
+Changing a session without saying an hour keeps the one it had; an hour that is not «HH:MM» (00:00 to 23:59) is a
+«no» that says how it goes. Removing the hour is only by hand, in Fitness › Plan.
+
 Unit 045 (REC-25, R-155, R-156): `guardar_estrategia`, «Voy a guardar en el plan: estrategia de Behobia (6 tramos, 2
 geles)», the strategy by stretches the coach answered with a route attached, one line per stretch (its km, terrain,
 pace or effort and time of passage) and one per gel, in that race of the plan in course; it replaces the one it had
@@ -44,7 +49,7 @@ from typing import Any
 
 from ..nutricion.asistente import Accion, Contexto, NoValida, Peticion, TarjetaMal, campo, fecha_de, no, tarjeta
 from ..nutricion.recetas import normalizar
-from . import ABIERTA, texto_sesion, titulo_incidencia
+from . import ABIERTA, con_hora, hora_de, texto_sesion, titulo_incidencia
 from .reloj import GarminNoLlega, NoTraducible, lineas, mandar
 
 SIN_PLAN = "No tienes ningún plan de entrenamiento: impórtalo en Fitness › Plan"
@@ -129,6 +134,12 @@ def _proponer_sesion(que: str) -> Any:
         parametros: dict[str, Any] = {"plan_id": plan["id"], "fecha": cambio.dia.isoformat()}
         if nueva is not None:
             parametros.update(nuevo_titulo=nueva[0], bloques=nueva[1])
+            try:  # unit 076: the hour Andrés says; not said, none (or, changing, the one it had)
+                hora = hora_de(cambio.hora)
+            except ValueError as exc:
+                return no(str(exc))
+            if hora is not None:
+                parametros["hora"] = hora
         if que != "anadir":
             elegida = _la_sesion(cambio, ctx, plan, cambio.dia)
             if isinstance(elegida, str):
@@ -164,21 +175,26 @@ def _rehacer_sesion(que: str) -> Any:
         if plan is None:
             return no(SIN_PLAN)
         antes = despues = None
+        hora = parametros.get("hora")
         if que != "anadir":
             sesion = _sesion_de(parametros, ctx)
             if isinstance(sesion, str):
                 return no(sesion)
             parametros = {**parametros, "fecha": sesion["fecha"], "titulo": sesion["titulo"], "sesion": sesion["id"]}
-            antes = _sesion_texto(sesion["titulo"], sesion["bloques"])
+            antes = con_hora(sesion.get("hora"), _sesion_texto(sesion["titulo"], sesion["bloques"]))
+            if que == "cambiar" and hora is None:  # unit 076: not said, the one it had stays
+                hora = sesion.get("hora")
         dia = fecha_de(parametros["fecha"])
         if dia < peticion.fecha:
             return no(YA_PASO)
         titulo = parametros.get("nuevo_titulo") or parametros.get("titulo") or ""
         bloques = list(parametros.get("bloques") or [])
         if que != "quitar":
-            despues = _sesion_texto(titulo, bloques)
-        texto = {"cambiar": f"Voy a cambiar en el plan: {dia_corto(dia)} · {titulo}",
-                 "anadir": f"Voy a añadir en el plan: {dia_corto(dia)} · {titulo}",
+            despues = con_hora(hora, _sesion_texto(titulo, bloques))
+        else:
+            hora = None
+        texto = {"cambiar": f"Voy a cambiar en el plan: {dia_corto(dia)} · {con_hora(hora, titulo)}",
+                 "anadir": f"Voy a añadir en el plan: {dia_corto(dia)} · {con_hora(hora, titulo)}",
                  "quitar": f"Voy a quitar del plan: {dia_corto(dia)} · {titulo}"}[que]
         return tarjeta(accion=accion, parametros=parametros, peticion=peticion, texto=texto, antes=antes,
                        despues=despues, dia=dia, donde=f"en tu plan {plan['nombre']}, en Fitness › Plan",
@@ -195,10 +211,10 @@ def _aplicar_sesion(que: str) -> Any:
         with ctx.planes._connect() as conn:  # the same SQLite and connection of `Planes`
             if que == "anadir":
                 apartado, orden = _sitio(conn, "plan_sesion", plan_id, fecha)
-                conn.execute("INSERT INTO plan_sesion (plan_id, orden, apartado, fecha, titulo, bloques, clave) "
-                             "VALUES (?, ?, ?, ?, ?, ?, 0)",
+                conn.execute("INSERT INTO plan_sesion (plan_id, orden, apartado, fecha, titulo, bloques, clave, hora) "
+                             "VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
                              (plan_id, orden, apartado, fecha, parametros["nuevo_titulo"],
-                              json.dumps(parametros["bloques"], ensure_ascii=False)))
+                              json.dumps(parametros["bloques"], ensure_ascii=False), parametros.get("hora")))
                 return f"el {dia} tienes en el plan «{parametros['nuevo_titulo']}»"
             # by its id, and only if it is still the session of the card (the redone card always carries it)
             fila = conn.execute("SELECT rowid FROM plan_sesion WHERE rowid = ? AND plan_id = ? AND fecha = ? "
@@ -209,8 +225,9 @@ def _aplicar_sesion(que: str) -> Any:
             if que == "quitar":
                 conn.execute("DELETE FROM plan_sesion WHERE rowid = ?", (fila[0],))
                 return f"el {dia} ya no tienes «{parametros['titulo']}» en el plan"
-            conn.execute("UPDATE plan_sesion SET titulo = ?, bloques = ? WHERE rowid = ?",
-                         (parametros["nuevo_titulo"], json.dumps(parametros["bloques"], ensure_ascii=False), fila[0]))
+            conn.execute("UPDATE plan_sesion SET titulo = ?, bloques = ?, hora = COALESCE(?, hora) WHERE rowid = ?",
+                         (parametros["nuevo_titulo"], json.dumps(parametros["bloques"], ensure_ascii=False),
+                          parametros.get("hora"), fila[0]))
             return f"el {dia} tienes en el plan «{parametros['nuevo_titulo']}»"
     return aplicar
 
@@ -639,15 +656,19 @@ _SESION = ("texto: «título | bloque | bloque…», cada bloque como lo lee su 
            "siempre dentro de su bloque, nunca en valor")
 
 # unit 048: two sessions the same day can have the same title, so the one meant goes by its id
+# unit 076: the hour Andrés says, in words (G-38)
+_HORA = ("hora: la hora de empezar solo si Andrés la dice, en HH:MM de veinticuatro horas (las ocho de la tarde son "
+         "las veinte, dos puntos, cero cero); si no la dice, null, y al cambiar una sesión se queda la que tenía")
+
 _OBJETO = ("objeto: si ese día hay varias sesiones, su id tal como viene en esa sesión de \"plan\" (con # delante) o "
            "su título; si solo hay una, null")
 
 ACCIONES = [
     Accion("plan_cambiar_sesion", "cambiar una sesión prevista del plan en curso, de hoy o de un día que aún no ha "
-           f"llegado. dia: el día de la sesión; {_OBJETO}; {_SESION}.",
+           f"llegado. dia: el día de la sesión; {_OBJETO}; {_SESION}; {_HORA}.",
            _proponer_sesion("cambiar"), _rehacer_sesion("cambiar"), _aplicar_sesion("cambiar")),
     Accion("plan_anadir_sesion", "añadir una sesión al plan en curso, hoy o un día que aún no ha llegado. dia: el día; "
-           f"{_SESION}.", _proponer_sesion("anadir"), _rehacer_sesion("anadir"), _aplicar_sesion("anadir")),
+           f"{_SESION}; {_HORA}.", _proponer_sesion("anadir"), _rehacer_sesion("anadir"), _aplicar_sesion("anadir")),
     Accion("plan_quitar_sesion", "quitar una sesión prevista del plan en curso. dia: el día de la sesión; "
            f"{_OBJETO}.",
            _proponer_sesion("quitar"), _rehacer_sesion("quitar"), _aplicar_sesion("quitar")),

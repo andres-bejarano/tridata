@@ -7,6 +7,12 @@ SHA-256 of the file, and it is read again only when the file changes or Andrés 
 PDF that is no longer in the folder leaves the context. What goes in every message is that transcription (a few
 thousand tokens), never the PDFs.
 
+Unit 081 (REC-32, R-221, R-222): without the paid API, the coach of the PC reads the PDF itself. `pendientes` says
+which PDF of the folder have no transcription (new or changed), where they are and their SHA-256, never their
+contents; `guardar` keeps the transcription the coach made of one, as `al_dia` keeps the API's, only if the file is in
+the folder (`pdf`: a name relative to it or a path inside it, never outside) and its SHA-256 is the one given; a
+transcription without any value is not kept.
+
 Nothing here logs a value, a test name or the contents of a document: only counts (R12, G-50). The transcription of
 this module is what `tridata comprobar-privados` also looks for (`valores_privados`).
 """
@@ -83,6 +89,10 @@ class TranscripcionMedica(BaseModel):
     fecha: str | None
     valores: list[ValorMedico]
     notas: list[str]
+
+
+class FueraDeLaCarpeta(LookupError):
+    """Unit 081: that file is not a PDF of the folder of the medical documents (or there is no folder)."""
 
 
 class ErrorMedico(Exception):
@@ -209,6 +219,59 @@ class Medicos:
             log.info("medical documents: %d transcribed, %d failed, %d in the folder", leidos, self._fallidos, len(pdfs))
         return self.estado()
 
+    def _guardadas(self) -> dict[str, str]:
+        with self._connect() as conn:
+            return {f["fichero"]: f["huella"] for f in conn.execute("SELECT fichero, huella FROM transcripcion_medica")}
+
+    def pendientes(self) -> list[dict[str, Any]]:
+        """Unit 081 (R-221): each PDF of the folder without its transcription: `{fichero, ruta, huella, estado}`, with
+        `estado` "nuevo" (never read) or "cambiado" (read when it was another file). Never its contents."""
+        pdfs = self._pdfs() or {}
+        guardadas = self._guardadas()
+        salida = []
+        for fichero, ruta in pdfs.items():
+            huella = _huella(ruta)
+            if guardadas.get(fichero) != huella:
+                salida.append({"fichero": fichero, "ruta": str(ruta), "huella": huella,
+                               "estado": "cambiado" if fichero in guardadas else "nuevo"})
+        return salida
+
+    def pdf(self, fichero: str) -> tuple[str, str]:
+        """Unit 081 (R-222): `(name in the folder, its SHA-256 now)` of `fichero`, a name relative to the folder or a
+        path inside it. `FueraDeLaCarpeta` if it is not one of its PDF (outside it, «..», not there, no folder)."""
+        pdfs = self._pdfs()
+        if not pdfs or self.carpeta is None:
+            raise FueraDeLaCarpeta
+        dado = Path(str(fichero)).expanduser()
+        try:
+            ruta = (dado if dado.is_absolute() else self.carpeta / dado).resolve()
+            nombre = ruta.relative_to(self.carpeta.resolve()).as_posix()
+        except (OSError, ValueError):
+            raise FueraDeLaCarpeta from None
+        if nombre not in pdfs:
+            raise FueraDeLaCarpeta
+        return nombre, _huella(pdfs[nombre])
+
+    def guardar(self, fichero: str, huella: str, transcripcion: TranscripcionMedica) -> str:
+        """Unit 081 (R-221): keeps `transcripcion` as the one of `fichero` (as `al_dia` keeps the API's) and returns its
+        name in the folder. `FueraDeLaCarpeta` as `pdf`; ValueError if the file is not the one with `huella` any more
+        or the transcription has no value. Logs counts only."""
+        nombre, ahora = self.pdf(fichero)
+        if ahora != huella:
+            raise ValueError("el PDF ha cambiado desde que se leyó")
+        if not transcripcion.valores:
+            raise ValueError("la transcripción no trae ningún valor")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO transcripcion_medica (fichero, huella, tipo, titulo, fecha, valores, notas, "
+                "leida) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (nombre, huella, transcripcion.tipo, transcripcion.titulo, transcripcion.fecha,
+                 json.dumps([v.model_dump() for v in transcripcion.valores], ensure_ascii=False),
+                 json.dumps(transcripcion.notas, ensure_ascii=False), datetime.now().isoformat(timespec="seconds")))
+        log.info("medical document transcribed on the PC: %d values, %d notes", len(transcripcion.valores),
+                 len(transcripcion.notas))
+        return nombre
+
     def transcripciones(self) -> list[dict[str, Any]]:
         """The transcriptions of the PDFs still in the folder, by file name: what goes in the context."""
         pdfs = self._pdfs()
@@ -281,4 +344,4 @@ def valores_privados(db_path: Path | str) -> set[tuple[str, str]]:
     return pares
 
 
-__all__ = ["ErrorMedico", "Medicos", "TranscripcionMedica", "TranscriptorPDF", "ValorMedico", "valores_privados"]
+__all__ = ["ErrorMedico", "FueraDeLaCarpeta", "Medicos", "TranscripcionMedica", "TranscriptorPDF", "ValorMedico", "valores_privados"]

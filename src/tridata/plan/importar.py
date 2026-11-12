@@ -13,6 +13,13 @@
 3. `confirmar`: only then is the plan saved (`Planes.crear`), with what Andrés chose for each difference: «plan»
    (by default) keeps the plan's done as «hecho según el plan», which wins over Garmin; «garmin» leaves Garmin's.
 
+Unit 081 (R-131, R-132): step 2 is two halves. `ordenar` is the AI's (each section to its part and its rows, as
+`Apartado`); `proponer_ordenado` is the code's (read the rows, keep what cannot be read as notes, cross with Garmin).
+The coach of the PC orders the .md itself and gives its sections (`apartados_del_coach`), so the app never calls the
+paid AI for it; `proponer` (the app's path) is `ordenar` + `proponer_ordenado`, as before. Two rows the app's AI never
+wrote are read too: «fase|nombre|semana desde|semana hasta» (a phase over weeks the plan has, saved after
+`Planes.crear` with `Planes.anadir_fase`) and a fifth field of «sesion», its hour («20:00»).
+
 Nothing here logs a text of the plan (R9).
 """
 from __future__ import annotations
@@ -32,6 +39,16 @@ TOLERANCIA_S = 120  # ±2 min per week: Strava and Garmin round differently, tha
 TOLERANCIA_KM = 0.3  # ±0,3 km per week
 LLAMADAS_A_LA_VEZ = 4
 NOMBRE_POR_DEFECTO = "Plan importado"
+
+
+@dataclass(frozen=True)
+class Apartado:
+    """One section ordered: its heading, its part (`ia.plan.PARTES`), its rows of text and its text as it was."""
+
+    titulo: str
+    parte: str
+    filas: tuple[str, ...]
+    cuerpo: str
 
 
 @dataclass(frozen=True)
@@ -176,11 +193,16 @@ def _semana(c: list[str]) -> dict | None:
 
 
 def _sesion(c: list[str]) -> dict | None:
-    fecha, titulo, bloques, clave = _campos(c, 4)
+    fecha, titulo, bloques, clave, hora_dicha = _campos(c, 5)
     if _fecha(fecha) is None or not titulo:
         return None
     sesion = {"fecha": _fecha(fecha), "titulo": titulo, "bloques": [b.strip() for b in bloques.split(";") if b.strip()],
               "clave": _si(clave)}
+    if hora_dicha:  # unit 081: its hour in a field of its own; one that is no hour, the row is not read (to notes)
+        try:
+            return sesion | {"hora": hora_de(hora_dicha)}
+        except ValueError:
+            return None
     delante = _HORA_DELANTE.match(titulo)
     if delante is not None:  # unit 077: the hour goes back to the session; one that is no hour stays in the title
         try:
@@ -209,17 +231,25 @@ def _comparativa(c: list[str]) -> dict | None:
     return {"tipo": "comparativa", "texto": texto} if texto else None
 
 
+def _fase(c: list[str]) -> dict | None:
+    """Unit 081: «fase|Base|1|4», a phase over weeks 1 to 4 (checked against the weeks in `_leer_fases`)."""
+    nombre, desde, hasta = _campos(c, 3)
+    if not nombre or not desde.strip().isdigit() or not hasta.strip().isdigit():
+        return None
+    return {"nombre": nombre, "desde_n": int(desde), "hasta_n": int(hasta)}
+
+
 _LECTORES: dict[str, tuple[str, Callable[[list[str]], dict | None]]] = {
     "carrera": ("carreras", _carrera), "semana": ("semanas", _semana), "sesion": ("sesiones", _sesion),
     "sesión": ("sesiones", _sesion), "nutricion": ("nutricion", _nutricion), "nutrición": ("nutricion", _nutricion),
-    "incidencia": ("incidencias", _incidencia), "comparativa": ("notas", _comparativa),
+    "incidencia": ("incidencias", _incidencia), "comparativa": ("notas", _comparativa), "fase": ("fases", _fase),
 }
 PARTES_DEL_PLAN = ("carreras", "semanas", "sesiones", "nutricion", "incidencias", "notas")
 
 
 def _leer_apartado(propuesta: dict[str, Any], i: int, parte: str, filas: list[str], cuerpo: str) -> None:
     """Adds the rows of section `i`; what cannot be read goes to the notes, so no piece of the .md is lost."""
-    leidas: dict[str, list[dict]] = {k: [] for k in PARTES_DEL_PLAN}
+    leidas: dict[str, list[dict]] = {k: [] for k in (*PARTES_DEL_PLAN, "fases")}
     sobran: list[str] = []
     semanas_ya = {s["n"] for s in propuesta["semanas"]}
     for fila in filas:
@@ -244,6 +274,21 @@ def _leer_apartado(propuesta: dict[str, Any], i: int, parte: str, filas: list[st
     propuesta["notas"].extend({"apartado": i, "tipo": "nota", "texto": t} for t in sobran)
 
 
+def _leer_fases(propuesta: dict[str, Any]) -> None:
+    """Unit 081: a phase stays only over weeks the plan has and in no other phase (as `Planes.anadir_fase` checks);
+    any other one goes to the notes with its row, so nothing is lost and saving it never fails."""
+    tiene = {s["n"] for s in propuesta["semanas"]}
+    buenas: list[dict] = []
+    for f in propuesta["fases"]:
+        pisa = any(f["desde_n"] <= b["hasta_n"] and b["desde_n"] <= f["hasta_n"] for b in buenas)
+        if f["desde_n"] in tiene and f["hasta_n"] in tiene and f["desde_n"] <= f["hasta_n"] and not pisa:
+            buenas.append(f)
+        else:
+            propuesta["notas"].append({"apartado": f["apartado"], "tipo": "nota",
+                                       "texto": f"fase | {f['nombre']} | {f['desde_n']} | {f['hasta_n']}"})
+    propuesta["fases"] = buenas
+
+
 def _diferencias(semanas: list[dict], store: DataStore | None, hoy: date) -> list[dict]:
     """The weeks done whose running in Garmin is not what the plan says (beyond the tolerance)."""
     diferencias = []
@@ -266,18 +311,22 @@ def _diferencias(semanas: list[dict], store: DataStore | None, hoy: date) -> lis
 
 def _resumen(p: dict[str, Any]) -> dict[str, int]:
     hechas = [s for s in p["semanas"] if s["hecho_s"] is not None or s["hecho_km"] is not None]
-    return {"carreras": len(p["carreras"]), "semanas_hechas": len(hechas),
-            "previstas": len(p["semanas"]) - len(hechas), "sesiones_clave": len([s for s in p["sesiones"] if s["clave"]]),
-            "nutricion": len(p["nutricion"]), "incidencias": len(p["incidencias"]),
-            "comparativa": len([n for n in p["notas"] if n["tipo"] == "comparativa"]),
-            "notas": len([n for n in p["notas"] if n["tipo"] == "nota"])}
+    resumen = {"carreras": len(p["carreras"]), "semanas_hechas": len(hechas),
+               "previstas": len(p["semanas"]) - len(hechas),
+               "sesiones_clave": len([s for s in p["sesiones"] if s["clave"]]),
+               "nutricion": len(p["nutricion"]), "incidencias": len(p["incidencias"]),
+               "comparativa": len([n for n in p["notas"] if n["tipo"] == "comparativa"]),
+               "notas": len([n for n in p["notas"] if n["tipo"] == "nota"])}
+    if p.get("fases"):  # unit 081: only when it has them, so a plan without them reads as before
+        resumen["fases"] = len(p["fases"])
+    return resumen
 
 
-def proponer(texto: str, ordenador: Any, store: DataStore | None, hoy: date,
-             al_gastar: Callable[[str, dict[str, int]], Any] | None = None, nombre: str | None = None) -> dict[str, Any]:
-    """The proposal of the .md (nothing saved). Raises `ErrorPlan` if the AI could not order every section."""
-    trozos = trocear(texto)
-    con_texto = [t for t in trozos if t.cuerpo or t.titulo]
+def ordenar(texto: str, ordenador: Any, hoy: date,
+            al_gastar: Callable[[str, dict[str, int]], Any] | None = None) -> list[Apartado]:
+    """The AI's half (unit 081): each section of the .md with text, ordered by `ordenador` (one call each, several at
+    a time); one with only its heading is a «nota» without rows. Raises `ErrorPlan` if any call failed."""
+    con_texto = [t for t in trocear(texto) if t.cuerpo or t.titulo]
 
     def ordenar(t: Trozo) -> Any:
         if not t.cuerpo:
@@ -295,28 +344,78 @@ def proponer(texto: str, ordenador: Any, store: DataStore | None, hoy: date,
             al_gastar(r[2], r[1])
     if fallo is not None:
         raise ErrorPlan(str(fallo))
+    return [Apartado(t.titulo, r[0].parte if r is not None else "nota", tuple(r[0].filas) if r is not None else (),
+                     t.cuerpo)
+            for t, r in zip(con_texto, respuestas, strict=True)]
 
-    propuesta: dict[str, Any] = {"nombre": nombre_del_plan(texto) or nombre or NOMBRE_POR_DEFECTO, "apartados": [],
-                                 **{k: [] for k in PARTES_DEL_PLAN}}
-    for i, (t, r) in enumerate(zip(con_texto, respuestas, strict=True)):
-        parte = r[0].parte if r is not None else "nota"
-        propuesta["apartados"].append({"titulo": t.titulo, "parte": parte})
-        _leer_apartado(propuesta, i, parte, list(r[0].filas) if r is not None else [], t.cuerpo)
+
+def proponer_ordenado(apartados: list[Apartado], store: DataStore | None, hoy: date,
+                      nombre: str | None = None) -> dict[str, Any]:
+    """The code's half (unit 081): the proposal of sections already ordered (nothing saved). What cannot be read goes
+    to the notes as it was (R6, R-132); each week done is crossed with Garmin (G-54)."""
+    propuesta: dict[str, Any] = {"nombre": nombre or NOMBRE_POR_DEFECTO, "apartados": [],
+                                 **{k: [] for k in PARTES_DEL_PLAN}, "fases": []}
+    for i, a in enumerate(apartados):
+        propuesta["apartados"].append({"titulo": a.titulo, "parte": a.parte})
+        _leer_apartado(propuesta, i, a.parte, list(a.filas), a.cuerpo)
+    _leer_fases(propuesta)
     propuesta["diferencias"] = _diferencias(propuesta["semanas"], store, hoy)
     propuesta["resumen"] = _resumen(propuesta)
     return propuesta
 
 
+def proponer(texto: str, ordenador: Any, store: DataStore | None, hoy: date,
+             al_gastar: Callable[[str, dict[str, int]], Any] | None = None, nombre: str | None = None) -> dict[str, Any]:
+    """The proposal of the .md (nothing saved). Raises `ErrorPlan` if the AI could not order every section."""
+    return proponer_ordenado(ordenar(texto, ordenador, hoy, al_gastar), store, hoy, nombre_del_plan(texto) or nombre)
+
+
+_PARTES = ("objetivos", "semanas_hechas", "previsto", "sesiones_clave", "nutricion", "incidencias", "comparativa",
+           "nota")  # the same as `ia.plan.PARTES`, so the coach's path does not need the AI's module
+
+
+def apartados_del_coach(entrada: Any) -> tuple[str | None, list[Apartado]]:
+    """Unit 081: `{nombre?, apartados: [{titulo, parte, filas, texto}]}` from the coach of the PC, as `ordenar` gives
+    them: (the name, the sections). ValueError saying which fields to mend (never what was sent)."""
+    if not isinstance(entrada, dict):
+        raise ValueError("plan (un objeto con nombre y apartados)")
+    crudos = entrada.get("apartados")
+    if not isinstance(crudos, list) or not crudos:
+        raise ValueError("apartados (una lista con al menos un apartado)")
+    nombre = entrada.get("nombre")
+    if nombre is not None and not isinstance(nombre, str):
+        raise ValueError("nombre")
+    apartados, malos = [], []
+    for i, a in enumerate(crudos):
+        if not isinstance(a, dict):
+            malos.append(f"apartados.{i}")
+            continue
+        titulo, parte, filas, cuerpo = a.get("titulo") or "", a.get("parte"), a.get("filas") or [], a.get("texto") or ""
+        campos = [c for c, bien in (("titulo", isinstance(titulo, str)), ("parte", parte in _PARTES),
+                                    ("filas", isinstance(filas, list) and all(isinstance(f, str) for f in filas)),
+                                    ("texto", isinstance(cuerpo, str))) if not bien]
+        malos += [f"apartados.{i}.{c}" for c in campos]
+        if not campos:
+            apartados.append(Apartado(titulo.strip(), str(parte), tuple(filas), cuerpo.strip()))
+    if malos:
+        raise ValueError(", ".join(malos))
+    return (nombre.strip() or None) if nombre else None, apartados
+
+
 def confirmar(propuesta: dict[str, Any], elecciones: dict[str, str], planes: Planes, ahora: datetime) -> int:
-    """Saves the proposal: for each difference, «garmin» leaves Garmin's done; anything else keeps the plan's."""
+    """Saves the proposal: for each difference, «garmin» leaves Garmin's done; anything else keeps the plan's.
+    Unit 081: and its phases, if it has any (checked when proposed, `_leer_fases`)."""
     del_plan = {d["semana"] for d in propuesta["diferencias"] if elecciones.get(str(d["semana"])) != "garmin"}
     semanas = [{k: s[k] for k in ("apartado", "n", "desde", "hasta", "previsto_s", "clave")}
                | {"hecho_plan_s": s["hecho_s"] if s["n"] in del_plan else None,
                   "hecho_plan_km": s["hecho_km"] if s["n"] in del_plan else None}
                for s in propuesta["semanas"]]
     datos = {k: propuesta[k] for k in ("nombre", "apartados", *PARTES_DEL_PLAN)} | {"semanas": semanas}
-    return planes.crear(datos, ahora)
+    ident = planes.crear(datos, ahora)
+    for fase in propuesta.get("fases") or []:
+        planes.anadir_fase(ident, fase["nombre"], fase["desde_n"], fase["hasta_n"])
+    return ident
 
 
-__all__ = ["TOLERANCIA_KM", "TOLERANCIA_S", "Trozo", "confirmar", "duracion", "kilometros", "nombre_del_plan",
-           "proponer", "trocear"]
+__all__ = ["TOLERANCIA_KM", "TOLERANCIA_S", "Apartado", "Trozo", "apartados_del_coach", "confirmar", "duracion",
+           "kilometros", "nombre_del_plan", "ordenar", "proponer", "proponer_ordenado", "trocear"]

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .calendario import DESDE_HECHOS
-from .garmin_client import GarminClient
+from .garmin_client import GarminAuthError, GarminClient, GarminRateLimitError, _es_429
 from .plan import Planes
 from .plan.desde_garmin import cambios, programado
 from .storage import DataStore
@@ -316,7 +316,15 @@ class SyncService:
         total = len(pending)
         for i, activity_id in enumerate(pending, start=1):
             print(f"parciales: {i}/{total} actividades procesadas", flush=True)
-            laps = self._client.get_activity_laps(activity_id)
+            try:
+                laps = self._client.get_activity_laps(activity_id)
+            except Exception as exc:
+                # Bug 079: a 429 or a session failure stops the run as before (the routine waits and
+                # retries); any other failure is one line and the activity stays pending (G-4).
+                if isinstance(exc, (GarminAuthError, GarminRateLimitError)) or _es_429(exc):
+                    raise
+                logger.warning("Laps not fetched for activity %s (%s)", activity_id, type(exc).__name__)
+                continue
             if laps:
                 self._store.save_activity_laps(laps)
             self._store.mark_laps_synced(activity_id, len(laps))

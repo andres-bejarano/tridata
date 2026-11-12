@@ -8,8 +8,9 @@ from datetime import date
 from unittest.mock import MagicMock
 
 import pytest
+from garminconnect import GarminConnectTooManyRequestsError
 
-from tridata.garmin_client import GarminClient
+from tridata.garmin_client import GarminAuthError, GarminClient
 from tridata.models import Activity, ActivityLap, pace_seconds_per_km
 from tridata.storage import DataStore
 from tridata.sync import SyncService
@@ -306,3 +307,104 @@ class TestSyncLapsIdempotency:
 
         n = SyncService(mock_client, store).sync_laps(limit=5)
         assert n == 2
+
+
+# ---------------------------------------------------------------------------
+# Bug 079: one activity whose laps fail must not stop the others
+# ---------------------------------------------------------------------------
+
+class TestSyncLapsOneFailure:
+    """Three pending activities (newest first: a3, a2, a1); Garmin fails only on the second one."""
+
+    def _seed(self, store: DataStore) -> None:
+        store.save_activities([
+            Activity(f"a{i}", date(2026, 2, i), "running", f"Run {i}", 1800.0) for i in (1, 2, 3)
+        ])
+
+    def _client_failing_on(self, failing_id: str, exc: BaseException) -> MagicMock:
+        def laps(activity_id: str) -> list[ActivityLap]:
+            if activity_id == failing_id:
+                raise exc
+            return _make_laps(activity_id)
+
+        client = MagicMock()
+        client.get_activity_laps.side_effect = laps
+        return client
+
+    def test_failure_in_one_activity_keeps_the_others(self, store):  # 079 · bug
+        self._seed(store)
+        client = self._client_failing_on("a2", RuntimeError("Garmin Connect answered 500"))
+
+        n = SyncService(client, store).sync_laps(limit=20)
+
+        assert n == 3
+        assert [c.args[0] for c in client.get_activity_laps.call_args_list] == ["a3", "a2", "a1"]
+        assert len(store.get_laps("a3")) == 2
+        assert len(store.get_laps("a1")) == 2  # the one after the failure is not left without laps
+        assert store.get_laps("a2") == []
+
+    def test_failure_is_one_warning_with_id_and_type(self, store, caplog):  # 079 · R1
+        self._seed(store)
+        client = self._client_failing_on("a2", RuntimeError("body-of-the-response"))
+
+        with caplog.at_level("WARNING", logger="tridata.sync"):
+            SyncService(client, store).sync_laps(limit=20)
+
+        avisos = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(avisos) == 1
+        texto = avisos[0].getMessage()
+        assert "a2" in texto and "RuntimeError" in texto
+        assert "body-of-the-response" not in texto  # no body of the response
+        assert avisos[0].exc_info is None  # no traceback
+
+    def test_failed_activity_is_not_marked_and_retried_next_pass(self, store):  # 079 · R2
+        self._seed(store)
+        client = self._client_failing_on("a2", RuntimeError("Garmin Connect answered 500"))
+        SyncService(client, store).sync_laps(limit=20)
+
+        assert store.activity_ids_lap_synced() >= {"a1", "a3"}
+        assert "a2" not in store.activity_ids_lap_synced()
+
+        client.get_activity_laps.reset_mock(side_effect=True)
+        client.get_activity_laps.side_effect = _make_laps
+        SyncService(client, store).sync_laps(limit=20)
+
+        client.get_activity_laps.assert_called_once_with("a2")
+        assert len(store.get_laps("a2")) == 2
+
+    @pytest.mark.parametrize("exc", [
+        GarminConnectTooManyRequestsError("Too many requests"),
+        RuntimeError("Garmin Connect answered 429"),
+    ])
+    def test_rate_limit_stops_the_run_as_today(self, store, exc):  # 079 · R3
+        self._seed(store)
+        client = self._client_failing_on("a2", exc)
+
+        with pytest.raises(type(exc)):
+            SyncService(client, store).sync_laps(limit=20)
+
+        assert [c.args[0] for c in client.get_activity_laps.call_args_list] == ["a3", "a2"]
+        assert "a2" not in store.activity_ids_lap_synced()
+
+    def test_auth_failure_stops_the_run_as_today(self, store):  # 079 · R3
+        self._seed(store)
+        client = self._client_failing_on("a2", GarminAuthError("Could not authenticate"))
+
+        with pytest.raises(GarminAuthError):
+            SyncService(client, store).sync_laps(limit=20)
+
+        assert [c.args[0] for c in client.get_activity_laps.call_args_list] == ["a3", "a2"]
+
+    def test_without_failures_output_and_return_unchanged(self, store, capsys, caplog):  # 079 · R4
+        self._seed(store)
+        client = MagicMock()
+        client.get_activity_laps.side_effect = _make_laps
+
+        with caplog.at_level("WARNING", logger="tridata.sync"):
+            n = SyncService(client, store).sync_laps(limit=20)
+
+        assert n == 3
+        assert capsys.readouterr().out == "".join(
+            f"parciales: {i}/3 actividades procesadas\n" for i in (1, 2, 3))
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+        assert store.activity_ids_lap_synced() >= {"a1", "a2", "a3"}

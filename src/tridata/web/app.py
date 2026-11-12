@@ -209,6 +209,7 @@ from ..ia.plan import OrdenadorPlan
 from ..plan import Planes
 from ..calendario import Calendario
 from .calendario import Despertar, Sincronizacion, rutas as rutas_calendario
+from .origen import Origen
 
 log = logging.getLogger(__name__)
 
@@ -1127,9 +1128,10 @@ def crear_app(
         parar_calendario.set()
         sincronizacion.pronto()  # unit 062: wakes the thread so it sees `parar`
 
+    # bug 078: `Origen` goes the first, so that what does not come from the app itself reaches nothing (`web/origen.py`)
     # unit 062 (R1): what changes the plan wakes the calendar's thread (`web/calendario.py::Despertar`)
     return Starlette(exception_handlers={FaltanAjustes: faltan_ajustes}, lifespan=ciclo,
-                     middleware=[Middleware(Despertar, sinc=sincronizacion)], routes=[
+                     middleware=[Middleware(Origen), Middleware(Despertar, sinc=sincronizacion)], routes=[
         Route("/", pagina),
         Route("/sw.js", service_worker),
         Route("/ajustes", pagina_ajustes),

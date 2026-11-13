@@ -324,3 +324,32 @@ def test_el_titulo_del_coach_es_el_de_siempre():  # R9 reads the conversation th
     from tridata.web.conversaciones import DESDE_EL_PC
 
     assert DESDE_EL_PC == TITULO == "Desde el PC"
+
+
+# Bug 055 · R1, moved from `test_conversaciones_web.py` (whose path through the Asistente this unit removes) to the
+# path the coach still uses: `preparar_cambio` validates the change with the same `CambioInterpretado`
+CAMBIO_SESION = {"accion": "plan_cambiar_sesion", "dia": "2026-10-28", "texto": "Rodaje 40' | 40' a 5:00-6:00"}
+
+
+@pytest.mark.parametrize("sobra", [{"valor": "5:00-6:00"}, {"cantidad": "40'"}, {"kcal_estimadas": "pocas"}])
+def test_un_numero_mal_escrito_que_el_cambio_no_usa_no_lo_rechaza(tmp_path, sobra):  # bug 055 · R1
+    import asyncio
+    import re
+
+    from tridata.conversaciones.desde_pc import montar_equipo
+    from tridata.mcp_server import build_server
+    from tridata.plan import Planes
+    from tridata.storage import DataStore
+
+    db = tmp_path / "data.sqlite3"
+    Planes(db).crear({"nombre": "Plan Inventado 26", "apartados": [{"titulo": "Semanas", "parte": "previsto"}],
+                      "carreras": [], "semanas": [], "nutricion": [], "incidencias": [], "notas": [],
+                      "sesiones": [{"apartado": 0, "fecha": "2026-10-28", "titulo": "Series inventadas",
+                                    "bloques": ["6x1000 a 4:00"], "clave": True}]}, datetime(2026, 10, 26, 9, 0))
+    store = DataStore(db)
+    equipo = montar_equipo(db, store=store, hoy=lambda: date(2026, 10, 26), ahora=lambda: datetime(2026, 10, 26, 9))
+    resultado = asyncio.run(build_server(store, equipo=equipo).call_tool(
+        "preparar_cambio", {"cambio": {**CAMBIO_SESION, **sobra}}))
+    texto = "".join(c.text for c in resultado.content)
+    assert not resultado.is_error and "No he entendido" not in texto, texto
+    assert texto.startswith("Esto es lo que se haría") and re.search(r"Huella: [0-9a-f]{12}", texto), texto

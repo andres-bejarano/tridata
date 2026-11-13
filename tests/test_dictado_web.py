@@ -42,7 +42,8 @@ def test_sw_en_la_raiz_sin_cache_y_solo_el_cascaron(cliente):  # R7
                           "/static/balance.css",  # unit 027: the styles of the Balance tab
                           "/static/hoy.js",  # unit 030: the cards of Hoy
                           "/static/fitness.js",  # unit 031: the Fitness tab
-                          "/static/plan.js"}  # unit 040: Fitness › Plan
+                          "/static/plan.js",  # unit 040: Fitness › Plan
+                          "/static/suplementacion.js"}  # unit 082: the block «Suplementación» of Nutrición › Día
     # unit 080: cola.js, dictado.js, asistente.js and conversaciones.js are retired
     assert '"/api/"' in r.text  # the fetch handler leaves /api/* to the network
     for ruta in rutas:

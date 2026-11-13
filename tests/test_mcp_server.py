@@ -129,8 +129,10 @@ def test_server_with_the_team_adds_its_tools(tmp_path, store):  # unit 065 R-186
         # unit 081: the plan .md, the medical PDF, the recipes and the routes, by the coach
         "preparar_plan", "importar_plan", "get_analiticas_pendientes", "preparar_transcripcion",
         "guardar_transcripcion", "get_recetas", "get_rutas", "get_perfil_ruta",
+        "apuntar_toma", "apuntar_leche_cafes",  # unit 082: coffees and B12 with their hour, and the milk of the coffees
     }  # `proponer_cambio` (065) is gone: no card is left anywhere
-    escriben = {"hacer_cambio", "apuntar_comida", "apuntar_peso", "importar_plan", "guardar_transcripcion"}
+    escriben = {"hacer_cambio", "apuntar_comida", "apuntar_peso", "importar_plan", "guardar_transcripcion",
+                "apuntar_toma", "apuntar_leche_cafes"}
     assert {n for n, t in tools.items() if not t.annotations.read_only_hint} == escriben
     preparar = tools["preparar_cambio"]
     assert texto_acciones() in preparar.description  # the same catalogue the team of the app sees

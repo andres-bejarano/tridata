@@ -57,6 +57,16 @@
                                   each with its `estado`). Every day with the HR in force that day in Ajustes (G-49)
     GET  /api/actividad/ID        unit 031: one activity with its laps (pace or speed, mean HR and its zone) and its
                                   weather; 404 if it does not exist
+    POST /api/toma                unit 082 (R-227): a dose by hand {"dia", "que" (cafe|b12), "forma"?, "hora"?, "mg"?,
+                                  "solo"?, "gramos"?, "fraccion"?, "cucharadas"?, "dosis"?}; today without an hour
+                                  takes the hour it is now (R-231), another day without one is 422. Its mg are by
+                                  hand (not estimated). Answers {"toma", "dia"}; no kcal change (G-60)
+    POST /api/toma/N              unit 082: changes its hour, form, details, mg or «solo»; 404 / 422, nothing changes
+    DELETE /api/toma/N            unit 082: deletes it, only with {"confirmado": true} (400 otherwise, nothing deleted)
+    POST /api/dia/AAAA-MM-DD/hora unit 082 (R-229): {"seccion", "hora" (HH:MM, or null: the typical one again)}: the
+                                  hour of that section that day; kcal and margin untouched. Every day (/api/dia and
+                                  the answers above) carries `suplementacion` (the doses by hour with their share of
+                                  the milk, `cafeina_mg`, `ultima`, `leche`) and `horas` (each section's hour, S-79)
     GET  /api/plan*               unit 040 (REC-22): Fitness › Plan, the routes of `web/plan.py` (the plan of the
                                   current objective, its weeks and downloading the .md; unit 080: importing it is
                                   the coach's)
@@ -179,6 +189,7 @@ from ..nutricion.margen import cabe_de_receta
 from ..nutricion.objetivo_dia import PREVISTOS_MAX
 from ..nutricion.asistente import Contexto as ContextoAsistente
 from ..nutricion.recetas import ErrorDatos, _numero
+from ..nutricion.suplementacion import Suplementacion
 from ..fitness import detalle_actividad, fitness, texto_pulso
 from ..hoy import como_llegas, entreno, texto_sync
 from ..storage import DataStore
@@ -336,6 +347,8 @@ def crear_app(
 
     # unit 080 (R-224): the conversation «Desde el PC», only read (what the coach has done)
     conversaciones = Conversaciones(registro.db_path)
+    # unit 082 (REC-34): the doses of the day, the milk of the coffees and the hours of the sections, apart from the foods
+    suplementacion = Suplementacion(registro.db_path)
 
     def _dia(fecha: date) -> dict:
         """The day as the screen shows it: `nutricion.dia.resumen_completo` (unit 015), the same nutricion.md uses."""
@@ -345,7 +358,8 @@ def crear_app(
         # unit 018 (R-91): only today says whether Garmin is behind
         garmin_sync = (aviso_sync(store.estado_sync() if store is not None else None, ahora())
                        if fecha == dia_hoy else None)
-        return {**resumen, "hoy": dia_hoy.isoformat(), "garmin_sync": garmin_sync}  # unit 016 (R3): midnight
+        return {**resumen, "hoy": dia_hoy.isoformat(), "garmin_sync": garmin_sync,  # unit 016 (R3): midnight
+                "suplementacion": suplementacion.resumen(fecha), "horas": suplementacion.horas_del_dia(fecha)}
 
     def _al_dia() -> None:
         """Today's screen first brings the days up to date (unit 014); a failure there never hides the day."""
@@ -730,6 +744,55 @@ def crear_app(
             return _error(f"No se ha cambiado nada: {exc}.", 422)
         return JSONResponse({"alimento": movido, "dia": _dia(date.fromisoformat(movido["dia"]))})
 
+    # -- unit 082: the block «Suplementación» and the hour of each section ---------------------------------------------
+
+    async def anadir_toma(request: Request) -> Response:
+        cuerpo = await _cuerpo(request) or {}
+        try:
+            fecha = date.fromisoformat(str(cuerpo.get("dia")))
+        except ValueError:
+            return _error(f"No se ha apuntado nada: día {cuerpo.get('dia')!r} no válido.", 400)
+        datos = {k: v for k, v in cuerpo.items() if k != "dia"}
+        if datos.get("mg") not in (None, ""):
+            datos["mg_estimado"] = False  # by hand
+        try:
+            toma = suplementacion.apuntar(fecha, datos, hoy=hoy(), ahora=ahora())
+        except ValueError as exc:
+            return _error(f"No se ha apuntado nada: {exc}.", 422)
+        return JSONResponse({"toma": toma, "dia": _dia(fecha)})
+
+    async def cambiar_toma(request: Request) -> Response:
+        cuerpo = {k: v for k, v in (await _cuerpo(request) or {}).items() if k not in ("dia", "que", "mg_estimado")}
+        try:
+            toma = suplementacion.cambiar(request.path_params["id"], cuerpo)
+        except KeyError:
+            return _error("Esa toma ya no está.", 404)
+        except ValueError as exc:
+            return _error(f"No se ha cambiado nada: {exc}.", 422)
+        return JSONResponse({"toma": toma, "dia": _dia(date.fromisoformat(toma["dia"]))})
+
+    async def borrar_toma(request: Request) -> Response:
+        if (await _cuerpo(request) or {}).get("confirmado") is not True:
+            return _error("Hay que confirmar antes de borrar: no se ha borrado nada.", 400)
+        try:
+            toma = suplementacion.borrar(request.path_params["id"])
+        except KeyError:
+            return _error("Esa toma ya no está.", 404)
+        return JSONResponse({"toma": toma, "dia": _dia(date.fromisoformat(toma["dia"]))})
+
+    async def hora_seccion(request: Request) -> Response:
+        texto = request.path_params["dia"]
+        try:
+            fecha = date.fromisoformat(texto)
+        except ValueError:
+            return _error(f"Fecha no válida: {texto!r}", 400)
+        cuerpo = await _cuerpo(request) or {}
+        try:
+            suplementacion.poner_hora_seccion(fecha, cuerpo.get("seccion"), cuerpo.get("hora"))
+        except ValueError as exc:
+            return _error(f"No se ha cambiado nada: {exc}.", 422)
+        return JSONResponse({"dia": _dia(fecha)})
+
     def _previsto_elegido(actividad_id: Any, minutos: Any) -> dict:
         """A planned training like one of the last 14 days, its kcal scaled to `minutos`. `ValueError` otherwise."""
         actividad = next((a for a in _recientes() if a.get("activity_id") == actividad_id), None)
@@ -970,6 +1033,10 @@ def crear_app(
         Route("/api/alimento/{id:int}/borrar", borrar, methods=["POST"]),
         Route("/api/alimento/{id:int}/comido", comido, methods=["POST"]),
         Route("/api/alimento/{id:int}/seccion", seccion, methods=["POST"]),
+        Route("/api/toma", anadir_toma, methods=["POST"]),
+        Route("/api/toma/{id:int}", cambiar_toma, methods=["POST"]),
+        Route("/api/toma/{id:int}", borrar_toma, methods=["DELETE"]),
+        Route("/api/dia/{dia}/hora", hora_seccion, methods=["POST"]),
         *rutas_recetas(recetario, hoy, registro),
         *rutas_coach(conversaciones),
         *rutas_plan(planes, store, ajustes, asistente, hoy, ahora),

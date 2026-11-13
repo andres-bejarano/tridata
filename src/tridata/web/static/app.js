@@ -37,6 +37,9 @@
 // just created with «Añadir sección» and the day has not changed (S-45: it only lives on this screen). Each row is
 // dragged from its handle ⠿ (pointer events, so it works with the finger on the iPhone) and dropped on another
 // section: POST /api/alimento/N/seccion saves only the section (G-52) and the day comes back painted.
+// Unit 082 (REC-34): on top of the day, apart from the meals, the block «Suplementación» (suplementacion.js); each
+// section of the day shows its hour, the one Andrés put or the typical one with «~» (S-79), and tapping it changes it
+// for that day (POST /api/dia/AAAA-MM-DD/hora). «Sin sección» has no hour.
 
 import { pintarBalance } from "./balance.js";
 import { buscador, cajaElegida, cargarGuardado, leerOrigen, textoReceta } from "./buscador.js";
@@ -44,6 +47,7 @@ import { pintarRecetas } from "./recetas.js";
 import { cargarHoy, iniciarHoy } from "./hoy.js";
 import { cargarFitness, iniciarFitness } from "./fitness.js";
 import { cargarPlan, iniciarPlan } from "./plan.js";
+import { pintarSuplementacion } from "./suplementacion.js";
 
 const $ = (id) => document.getElementById(id);
 // kcal with a thousands point always («1.040»): es-ES does not group 4 digits by default
@@ -83,6 +87,7 @@ let seccionesNuevas = new Set(); // unit 035 (S-45): sections just created, stil
 let eligiendoSeccion = false; // unit 035: «Añadir sección» open: false · "elegir" · "todas"
 let arrastre = null; // unit 035: { a, fila, asa, fantasma, destino, dy, puntero } while a row is dragged
 let diaTrasArrastre = null; // a day that came while dragging: painted when the drag ends
+let horaEditando = null; // unit 082: { clave, fecha, nodo } of the section whose hour is being changed
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -224,6 +229,7 @@ function pintarDia(dia) {
   pintarTarjeta(dia);
   pintarBarra(dia);
   pintarHoja(dia, esHoy);
+  pintarSuplementacion(dia, { api, alCambiar: pintarDia }); // unit 082
   pintarLista(dia);
   pintarCierre(dia, esHoy);
   pintarAvisoSync(dia, esHoy);
@@ -434,8 +440,45 @@ function cabeceraSeccion(clave, alimentos) {
     el("span", { className: "seccion-nombre", textContent: NOMBRE_SECCION[clave] }),
     el("span", { className: "seccion-kcal num", textContent: `${kcalEnteras(suma)} kcal` }));
   cabecera.dataset.seccion = clave;
+  if (clave) cabecera.querySelector(".seccion-nombre").after(...horaSeccion(clave)); // unit 082: «Sin sección», none
   if (!alimentos.length) cabecera.append(el("span", { className: "seccion-vacia", textContent: "Arrastra aquí un alimento" }));
   return cabecera;
+}
+
+// Unit 082 (R-229): the hour of a section of the day on screen, as a button; tapped, a time field to change it.
+function horaSeccion(clave) {
+  const fecha = ultimoDia.fecha;
+  if (horaEditando && horaEditando.fecha !== fecha) horaEditando = null;
+  if (horaEditando && horaEditando.clave === clave) return [horaEditando.nodo];
+  const h = (ultimoDia.horas ?? {})[clave] ?? { hora: null, aproximada: false };
+  const boton = el("button", { type: "button", className: `seccion-hora num${h.aproximada ? " aproximada" : ""}`,
+    textContent: h.hora ? `${h.aproximada ? "~" : ""}${h.hora}` : "+ hora" });
+  boton.setAttribute("aria-label", `Cambiar la hora de ${NOMBRE_SECCION[clave]}`);
+  boton.addEventListener("click", () => {
+    horaEditando = { clave, fecha, nodo: editorHora(clave, fecha, h) };
+    pintarLista(ultimoDia);
+    horaEditando.nodo.querySelector("input").focus();
+  });
+  return [boton];
+}
+
+function editorHora(clave, fecha, h) {
+  const entrada = el("input", { type: "time", value: h.hora ?? "" });
+  entrada.setAttribute("aria-label", `Hora de ${NOMBRE_SECCION[clave]}`);
+  const guardar = el("button", { type: "button", className: "principal", textContent: "Guardar" });
+  const cancelar = el("button", { type: "button", textContent: "Cancelar" });
+  const aviso = el("span", { className: "aviso", hidden: true });
+  const editor = el("div", { className: "editor-hora" }, entrada, guardar, cancelar, aviso);
+  cancelar.addEventListener("click", () => { horaEditando = null; pintarLista(ultimoDia); });
+  guardar.addEventListener("click", async () => {
+    guardar.disabled = true;
+    const { ok, datos } = await api(`/api/dia/${fecha}/hora`, { seccion: clave, hora: entrada.value || null });
+    guardar.disabled = false;
+    if (!ok) { aviso.textContent = `No se ha guardado. ${datos.error ?? ""}`.trim(); aviso.hidden = false; return; }
+    horaEditando = null;
+    pintarDia(datos.dia);
+  });
+  return editor;
 }
 
 // «Añadir sección» (R2): offers the ones of the five the day does not have yet; with the five, says so.

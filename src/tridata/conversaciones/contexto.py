@@ -29,6 +29,11 @@ Unit 076 (R-220): a session with an hour carries its `hora` («HH:MM»); one wit
 
 Unit 067 (R-204): the plan carries its phases (name and the weeks they span) and each week inside one its `fase`.
 
+Unit 082 (R-230): each day carries `suplementacion` (the coffees and the B12 by hour with their mg and their share of
+the milk, the caffeine of the day, the last dose with caffeine and the milk of the coffees) and `horas_comidas` (the
+hour of each section with food that day, «~08:00» when it is the typical one), next to its sleep. Read without
+creating anything (`nutricion.suplementacion.leer_todo`).
+
 Unit 045 (REC-25, R-154): a route attached to a conversation is NOT here: its profile goes in the message
 (`web/conversaciones.py`, `plan.rutas.perfil_para_modelo`), so the fixed part, and its cache, stay the same; only the
 line says «ruta adjunta: …».
@@ -55,7 +60,8 @@ from ..nutricion.ajustes import DESDE_SIEMPRE, Ajustes
 from ..nutricion.asistente import texto_acciones
 from ..nutricion.objetivo_dia import ObjetivosDia
 from ..nutricion.peso import RegistroPeso
-from ..nutricion.registro import RegistroComidas
+from ..nutricion.registro import SECCIONES, RegistroComidas
+from ..nutricion.suplementacion import horas_de_secciones, leer_todo, resumen_dia
 from ..ia.modelos import nombre_de
 from ..plan import ABIERTA, Planes
 from ..plan import semanas as semanas_del_plan
@@ -86,7 +92,9 @@ Ves siempre todo su contexto, que va aquí debajo: sus datos médicos (analític
 sus PDF) y sus datos en JSON: "hoy" es la fecha de hoy y "dia_semana", qué día de la semana es; "calendario", las \
 fechas de esta semana y de la siguiente con su día; cada fecha lleva su día de la semana al lado ("dia", "desde_dia", \
 "hasta_dia"): léelo de ahí y no lo calcules nunca; "dias", las últimas 8 semanas día a día (comidas con sus \
-kcal, peso, pasos, pulso en reposo, sueño, HRV, entrenos con su id y carga); "semanas", lo anterior resumido por \
+kcal, peso, pasos, pulso en reposo, sueño, HRV, entrenos con su id y carga; "suplementacion", sus cafés y su B12 con \
+la hora, los mg de cafeína, el total del día, la última toma y la leche de los cafés repartida; "horas_comidas", la \
+hora de cada comida del día, con «~» si es la típica y no la dijo); "semanas", lo anterior resumido por \
 semanas; "ajustes", sus objetivos de hoy; "carreras", sus carreras; "pulso", su frecuencia cardiaca máxima, de reposo \
 y sus zonas, y de dónde salen; "plan", su plan de entrenamiento en curso (sus carreras con su objetivo, su resultado —"a mano" si lo escribió él, \
 "garmin" si sale de su actividad de ese día— y la estrategia por tramos que guardó, tal cual; sus semanas \
@@ -174,6 +182,41 @@ def _comidas(registro: RegistroComidas) -> dict[str, list[dict[str, Any]]]:
         por_dia[f["dia"]].append(_limpio({"nombre": f["nombre"], "cantidad": _r(f["cantidad"]), "unidad": f["unidad"],
                                           "kcal": _r(f["kcal"], 0), "estado": f["estado"]}))
     return por_dia
+
+
+def _secciones_con_comida(registro: RegistroComidas) -> dict[str, set[str]]:
+    """Unit 082: the sections with some food, by day (for the hour of each meal, R-230)."""
+    conn = sqlite3.connect(registro.db_path)
+    try:
+        filas = conn.execute("SELECT DISTINCT dia, seccion FROM alimento_apuntado WHERE seccion IS NOT NULL").fetchall()
+    finally:
+        conn.close()
+    por_dia: dict[str, set[str]] = defaultdict(set)
+    for dia, seccion in filas:
+        por_dia[dia].add(seccion)
+    return por_dia
+
+
+def _suplementacion(tomas: list[dict], leche: dict | None) -> dict[str, Any] | None:
+    """Unit 082 (R-230): the doses of a day by hour with their mg and milk, the total, the last one and the milk."""
+    if not tomas and not leche:
+        return None
+    r = resumen_dia(tomas, leche)
+    return _limpio({
+        "tomas": [_limpio({"hora": t["hora"], "que": t["texto"], "mg": _r(t["mg"], 0), "mg_estimado": t["mg_estimado"]
+                           if t["mg"] is not None else None, "leche_ml": _r(t["leche_ml"], 0), "solo": t["solo"] or None})
+                  for t in r["tomas"]],
+        "cafeina_mg": _r(r["cafeina_mg"], 0) or None, "ultima": r["ultima"],
+        "leche": {"ml": _r(leche["ml"], 0), "kcal": _r(leche["kcal"], 0), "repartida": r["leche"]["repartida"]}
+        if leche and r["leche"] else None})
+
+
+def _horas_comidas(puestas: dict[str, str], con_comida: set[str]) -> dict[str, str] | None:
+    """Unit 082 (R-230): the hour of each section with food, in the order of the day; «~» when it is the typical."""
+    horas = horas_de_secciones(puestas)
+    salida = {s: ("~" if horas[s]["aproximada"] else "") + horas[s]["hora"] for s in SECCIONES
+              if s in con_comida and horas[s]["hora"]}
+    return salida or None
 
 
 def _entreno(store: DataStore, a: dict[str, Any]) -> dict[str, Any]:
@@ -274,6 +317,8 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     plan in course and its incidents (`planes`); unit 054: whether Google Calendar is connected and what it carries."""
     desde = hoy - timedelta(days=DIAS_DIA_A_DIA - 1)
     comidas = _comidas(registro)
+    secciones = _secciones_con_comida(registro)
+    tomas_de, horas_de, leche_de = leer_todo(registro.db_path)  # unit 082: read only, nothing created
     peso_de = {p["dia"]: p for p in pesos.entre(DESDE_SIEMPRE, hoy)}
     historial = ajustes.historial_fc()
 
@@ -308,6 +353,8 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
             "pasos": s.get("steps"), "kcal_garmin": s.get("total_calories"), "pulso_reposo": s.get("resting_hr"),
             "sueno_h": _r(sueno / 3600, 2) if sueno else None, "sueno_puntos": n.get("sleep_score"),
             "hrv": _r(h.get("last_night_avg"), 0), "entrenos": entrenos.get(dia, []), "carga": carga.get(dia),
+            "suplementacion": _suplementacion(tomas_de.get(dia, []), leche_de.get(dia)),
+            "horas_comidas": _horas_comidas(horas_de.get(dia, {}), secciones.get(dia, set())),
         }
 
     dias = []

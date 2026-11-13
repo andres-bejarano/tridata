@@ -28,6 +28,11 @@ it only with Andrés's «sí» and that same fingerprint):
   `Recetario.para_apuntar`, as the app does when a food is chosen from the saved ones (unit 019).
 - S-73, R-151..R-154: `rutas_desde_pc` and `perfil_ruta_desde_pc` (`plan.rutas`), never a coordinate.
 
+Unit 082 (REC-34 of `apuntar-comida`, R-225, R-228, R-229, R-231): `apuntar_toma_desde_pc` (coffees and B12 with
+their hour and mg, apart from the foods and without kcal: `nutricion.suplementacion`), `leche_cafes_desde_pc` (the
+milk of the coffees of a day, logged ONCE as a food with its kcal and spread among them) and the `hora` of the section
+in `apuntar_comida_desde_pc`. The same rule as `apuntar_comida`: Andrés's «sí» first, and «Hecho» only when done.
+
 Each save leaves its message in «Desde el PC» (R-196). Nothing here calls a paid AI.
 
 What a tool answers never carries a value of Andrés beyond what the card says; the logs carry ids and counts only.
@@ -54,6 +59,7 @@ from ..nutricion.ajustes import DESDE_SIEMPRE
 from ..nutricion.peso import peso_valido
 from ..nutricion.recetas import normalizar
 from ..nutricion.registro import validar_seccion
+from ..nutricion.suplementacion import FALTA_LA_HORA, Suplementacion, describir, validar_hora
 from ..plan import Planes
 from ..plan import rutas as perfiles
 from ..plan.importar import apartados_del_coach, confirmar as confirmar_plan, proponer_ordenado
@@ -112,6 +118,7 @@ def montar_equipo(db_path: Path | str, *, store: DataStore | None, medicos_dir: 
                                      registro=registro),
         recientes=recientes, planes=planes)
     token = Path(token) if token is not None else Path(db_path).parent / "google-token.json"
+    Suplementacion(db_path)  # unit 082: its tables, as the app makes them at start (what fails leaves no trace)
     return Equipo(conversaciones=Conversaciones(db_path), asistente=asistente,
                   medicos=Medicos(db_path, medicos_dir, transcriptor_medico),
                   calendario=Calendario(db_path, token, None), ahora=ahora)
@@ -257,11 +264,12 @@ def hacer_desde_pc(equipo: Equipo, papel: str, entrada: Any, huella_vista: str, 
 
 
 def apuntar_comida_desde_pc(equipo: Equipo, papel: str, dia: Any, alimentos: Any, texto: str = "",
-                            seccion: Any = None) -> str:
+                            seccion: Any = None, hora: Any = None) -> str:
     """The foods logged on `dia` as the dictation logs them (R-194): all of them or none.
 
     Unit 074 (R-214): with `seccion` (one of `registro.SECCIONES`) all of them go into that section of that day;
     without it, «Sin sección» as before. A section that is not one logs nothing and says which ones are valid.
+    Unit 082 (R-229): with `hora` (HH:MM, only with a section) that section of that day keeps that hour.
     """
     if papel not in PAPELES_PC:
         return papel_no_valido(papel)
@@ -273,6 +281,9 @@ def apuntar_comida_desde_pc(equipo: Equipo, papel: str, dia: Any, alimentos: Any
         return "No se ha apuntado nada: no hay nada que apuntar (alimentos, con su cantidad y sus kcal)."
     try:
         validar_seccion(seccion)
+        if hora not in (None, "") and seccion is None:
+            raise ValueError("la hora va con una sección (seccion): «Sin sección» no lleva hora")
+        la_hora = None if hora in (None, "") else validar_hora(hora)
         lista = [Alimento.desde_dict({**_de_lo_guardado(equipo.asistente.recetario, a), "dia": el_dia.isoformat()}
                                      if isinstance(a, dict) else a)
                  for a in alimentos]
@@ -284,7 +295,10 @@ def apuntar_comida_desde_pc(equipo: Equipo, papel: str, dia: Any, alimentos: Any
                                    sin_cambios=False, seccion=seccion)
     que = "; ".join(descripcion_alimento({**g, "creado": None}) + (f" {g['origen']}" if g.get("origen") else "")
                     for g in guardados)
+    if la_hora is not None:
+        Suplementacion(a.registro.db_path).poner_hora_seccion(el_dia, seccion, la_hora)
     donde = f" en la sección {seccion}" if seccion else ""
+    donde += f" a las {la_hora}" if la_hora else ""
     hecho = f"Hecho: apuntado el {el_dia.isoformat()}{donde}: {que}."
     _apuntar(equipo, papel, texto, hecho)
     return hecho
@@ -303,6 +317,86 @@ def apuntar_peso_desde_pc(equipo: Equipo, papel: str, kg: Any, dia: Any, nota: s
     a.pesos.apuntar(el_dia, el_kg, la_nota, hoy=hoy)
     hecho = f"Hecho: peso del {el_dia.isoformat()} apuntado: {numero(el_kg)} kg."
     _apuntar(equipo, papel, "", hecho)
+    return hecho
+
+
+# -- unit 082 (REC-34): coffees and B12 with their hour, and the milk of the coffees ---------------------------------
+
+LECHE = "leche de los cafés"
+
+
+def _toma_dicha(t: dict) -> str:
+    mg = f" ({numero(t['mg'])} mg{' estimados' if t.get('mg_estimado') else ''})" if t.get("mg") is not None else ""
+    return f"{describir(t)} a las {t['hora']}{mg}"
+
+
+def apuntar_toma_desde_pc(equipo: Equipo, papel: str, dia: Any, tomas: Any, texto: str = "") -> str:
+    """R-225, G-60: the doses of `dia` (all of them or none), apart from the foods and without kcal. A coffee always
+    carries its mg (the coach estimates them, S-81). R-231: today without an hour, the hour it is now; another day
+    without one, nothing and «falta la hora» so the coach asks Andrés."""
+    if papel not in PAPELES_PC:
+        return papel_no_valido(papel)
+    try:
+        el_dia = date.fromisoformat(str(dia))
+    except ValueError:
+        return "No se ha apuntado nada: el día tiene que ser una fecha AAAA-MM-DD."
+    if not isinstance(tomas, list) or not tomas or not all(isinstance(t, dict) for t in tomas):
+        return "No se ha apuntado nada: no hay ninguna toma (cada una con que, forma, hora y mg)."
+    sin_mg = [t for t in tomas if t.get("que") == "cafe" and t.get("mg") in (None, "")]
+    if sin_mg:
+        return "No se ha apuntado nada: faltan los mg de cafeína de un café: estímalos y enséñaselos a Andrés."
+    a = equipo.asistente
+    try:
+        guardadas = Suplementacion(a.registro.db_path).apuntar_varias(el_dia, tomas, hoy=a.hoy(), ahora=equipo.ahora())
+    except ValueError as exc:
+        if FALTA_LA_HORA in str(exc):
+            return f"No se ha apuntado nada: {exc}. Pregúntale a Andrés a qué hora fue y apúntala con ella."
+        return f"No se ha apuntado nada: {exc}."
+    hecho = (f"Hecho: apuntado el {el_dia.isoformat()} en Suplementación (sin kcal): "
+             f"{'; '.join(_toma_dicha(t) for t in guardadas)}.")
+    _apuntar(equipo, papel, texto, hecho)
+    return hecho
+
+
+def leche_cafes_desde_pc(equipo: Equipo, papel: str, dia: Any, ml: Any, kcal: Any = None, nombre: Any = None,
+                         texto: str = "") -> str:
+    """R-228, G-61: the milk Andrés put in the coffees of `dia`, logged ONCE as a food of that day with its kcal
+    (`RegistroComidas`, as any food) and marked as the milk of the coffees, so it is spread among them. Said again
+    the same day, the same food changes (never a second one)."""
+    if papel not in PAPELES_PC:
+        return papel_no_valido(papel)
+    try:
+        el_dia = date.fromisoformat(str(dia))
+    except ValueError:
+        return "No se ha apuntado la leche: el día tiene que ser una fecha AAAA-MM-DD."
+    if isinstance(ml, bool) or not isinstance(ml, int | float) or ml <= 0:
+        return "No se ha apuntado la leche: los ml tienen que ser más de 0."
+    el_nombre = nombre.strip() if isinstance(nombre, str) and nombre.strip() else LECHE
+    a = equipo.asistente
+    sup = Suplementacion(a.registro.db_path)
+    datos = {"nombre": el_nombre, "dia": el_dia.isoformat(), "cantidad": ml, "unidad": "ml", "kcal": kcal,
+             "estimado": True}
+    try:
+        alimento = Alimento.desde_dict(datos)
+        if alimento.kcal is None:
+            raise ValueError("faltan sus kcal (las de esos ml de leche)")
+        a.registro.validar([alimento])
+        antes = sup.leche_del_dia(el_dia)
+        if antes is not None:
+            guardada = a.registro.cambiar(antes["alimento_id"], {k: v for k, v in datos.items() if k != "dia"})
+        else:
+            (guardada,) = a.registro.guardar([alimento], hoy=a.hoy(), texto=texto.strip() or f"{TITULO} ({papel})",
+                                             sin_cambios=False)
+    except ValueError as exc:
+        return f"No se ha apuntado la leche: {exc}."
+    sup.marcar_leche(el_dia, int(guardada["id"]))
+    leche = sup.resumen(el_dia)["leche"] or {}
+    cafes = [t for t in sup.resumen(el_dia)["tomas"] if t.get("leche_ml")]
+    reparto = (f"repartida entre {len(cafes)} café{'s' if len(cafes) != 1 else ''} (+{numero(round(cafes[0]['leche_ml']))} "
+               f"ml cada uno)" if cafes else "a lo largo del día (no hay cafés con leche ese día)")
+    hecho = (f"Hecho: {'cambiada' if antes is not None else 'apuntada'} la leche de los cafés del {el_dia.isoformat()}: "
+             f"{numero(leche.get('ml'))} ml, {numero(leche.get('kcal'))} kcal, {reparto}.")
+    _apuntar(equipo, papel, texto, hecho)
     return hecho
 
 
@@ -704,7 +798,7 @@ def perfil_ruta_desde_pc(equipo: Equipo, garmin: Any = None, actividad: Any = No
 
 
 __all__ = ["NADA", "PAPELES_PC", "TITULO", "Equipo", "analiticas_pendientes", "apuntar_comida_desde_pc",
-           "apuntar_peso_desde_pc", "contexto", "conversacion_pc", "guardar_transcripcion_desde_pc", "hacer_desde_pc",
+           "apuntar_peso_desde_pc", "apuntar_toma_desde_pc", "leche_cafes_desde_pc", "contexto", "conversacion_pc", "guardar_transcripcion_desde_pc", "hacer_desde_pc",
            "huella", "importar_plan_desde_pc", "montar_equipo", "papel_no_valido", "perfil_ruta_desde_pc",
            "preparar_desde_pc", "preparar_plan_desde_pc", "preparar_transcripcion_desde_pc", "recetario_texto",
            "rutas_desde_pc", "texto_contexto", "texto_perfil"]

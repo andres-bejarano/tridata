@@ -15,6 +15,11 @@ transcribing a medical PDF). Unit 066 (REC-29, R-190 to R-197): `preparar_cambio
 (read-only) and, with Andrés's «sí», `hacer_cambio` makes it as if he had confirmed its card in the app (Google
 Calendar and the watch included); `apuntar_comida` and `apuntar_peso` log a meal or a weight as the dictation does.
 Those three are the ONLY ones that write, and each one leaves a message in the conversation «Desde el PC».
+Unit 081 (P-20261105-cf32bea5): what the app did with the paid AI, done by the coach: `preparar_plan` / `importar_plan`
+(a plan .md the coach ordered, R-131, R-132), `get_analiticas_pendientes`, `preparar_transcripcion` /
+`guardar_transcripcion` (a medical PDF the coach read, R-221, R-222), `get_recetas` (S-72; `apuntar_comida` takes the
+saved kcal of a recipe or a fixed food, R-42) and `get_rutas` / `get_perfil_ruta` (S-73, R-151..R-154). The two that
+save write their message in «Desde el PC» too. None of them calls a paid AI; only the routes read Garmin.
 
 Run it with `tridata-mcp` (stdio transport) and register that command in
 your MCP client, e.g. for Claude Code:
@@ -93,6 +98,11 @@ metrics, sleep, HRV, training load) of one triathlete.
   preparar_cambio returns (or the estimated meal, or the weight) and wait
   for his «sí» before hacer_cambio, apuntar_comida or apuntar_peso; say it
   is done only when the tool says «Hecho».
+- To import a plan .md, read a new medical PDF, log with his recipes or
+  see the profile of a route: preparar_plan / importar_plan,
+  get_analiticas_pendientes / preparar_transcripcion /
+  guardar_transcripcion, get_recetas, get_rutas / get_perfil_ruta. Same
+  rule: what saves is shown first and done only with his «sí».
 """
 
 
@@ -374,9 +384,9 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         return texto_contexto(equipo)
 
     papeles = f"papel: who you are, one of {', '.join(PAPELES_PC)}."
-    registro = (f"When it is done, it leaves a message of `papel` in the conversation «{TITULO}» of the Asistente tab "
-                "of the app. Say it is done only if the answer starts with «Hecho»; otherwise tell Andrés what it "
-                "says: nothing was done.")
+    registro = (f"When it is done, it is written down in «{TITULO}» of the app (what was done, by `papel`, and when). "
+                "Say it is done only if the answer starts with «Hecho»; otherwise tell Andrés what it says: nothing "
+                "was done.")
     forma = ("cambio: an object with `accion` (an id of the list below) and the fields that action uses: objeto, "
              "campo, valor, valores, texto, cantidad, unidad, kcal_estimadas, lineas, dia, desde, fecha (dates "
              "YYYY-MM-DD), antes_dicho, falta, hora (HH:MM, only when Andrés says it); the rest omitted or null.")
@@ -413,7 +423,11 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         "«sí» call this. If one food does not pass the checks, none is logged and the answer says why.\n"
         f"{papeles} dia: YYYY-MM-DD. alimentos: a list of objects with nombre, cantidad (> 0), unidad "
         "(g, ml or unidad), kcal (>= 0; required with a quantity), and optionally proteina_g, hidratos_g, grasa_g "
-        "and estimado (true if you estimated it). texto (optional): what he said, in Spanish.\n"
+        "and estimado (true if you estimated it). A food that is one of his saved recipes or fixed foods (by its "
+        "name or an alias, see get_recetas), or with guardado: {tipo: receta or fijo, id}, takes its kcal and its "
+        "origin from what is saved (your kcal are ignored): show him those, worked out from get_recetas. Anything "
+        "else is logged as you give it (estimado true if you estimated it); if it only looks like a saved one, ask "
+        "him first. texto (optional): what he said, in Spanish.\n"
         f"seccion (optional): use it when Andrés says which meal it goes in («en el desayuno», «un gel en la "
         f"carrera»), and all the foods go into that section of the day: one of {', '.join(SECCIONES)} "
         "(media_manana is «media mañana», carrera is «Nutrición en carrera», for gels and drinks of a race or a long "
@@ -439,6 +453,115 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
                  structured_output=False)
     def apuntar_peso_tool(papel: str, kg: float, dia: str, nota: str | None = None) -> str:
         return apuntar_peso_desde_pc(equipo, papel, kg, dia, nota)
+
+    _tools_081(server, equipo, papeles, registro)
+
+
+def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -> None:
+    """Unit 081 (P-20261105-cf32bea5): the plan .md, the medical PDF, the recipes and the routes, by the coach."""
+    from .conversaciones.desde_pc import (analiticas_pendientes, guardar_transcripcion_desde_pc,
+                                          importar_plan_desde_pc, perfil_ruta_desde_pc, preparar_plan_desde_pc,
+                                          preparar_transcripcion_desde_pc, recetario_texto, rutas_desde_pc)
+
+    lee = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+    guarda = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                             open_world_hint=False)
+
+    plan_forma = (
+        "plan: {nombre (the «# » title of the .md, optional), apartados: [one per section of the .md, in its order: "
+        "{titulo (its heading, \"\" for what comes before the first one), parte, filas, texto (the section as it is, "
+        "without its heading)}]}. parte: objetivos (races and objectives), semanas_hechas (weeks done, with what was "
+        "done), previsto (weeks to come), sesiones_clave, nutricion (race nutrition), incidencias (pains, injuries, "
+        "illnesses), comparativa (with another year) or nota (none of them: it is kept as a note, as it is). filas: "
+        "one line per thing, its kind first and its fields separated by «|», an absent field empty; dates "
+        "YYYY-MM-DD, times H:MM, km with a decimal comma:\n"
+        "- carrera|nombre|fecha|objetivo|estado o resultado (pendiente, or ✅ and the time)|principal (sí o no)\n"
+        "- semana|número|desde|hasta|tiempo previsto|sesiones clave en pocas palabras|tiempo en movimiento hecho|km "
+        "hechos\n"
+        "- sesion|fecha|título|bloques separados por «;»|clave (sí o no)|hora (HH:MM, only if it says it)\n"
+        "- fase|nombre|semana desde|semana hasta (numbers of weeks of the plan)\n"
+        "- nutricion|producto|pauta · incidencia|fecha|texto · comparativa|texto · nota|texto\n"
+        "Copy, never invent: a row that cannot be read goes to the notes with its text. elecciones (optional): for a "
+        "week with a difference, {\"4\": \"garmin\"} to keep Garmin's instead of the plan's.")
+
+    @server.tool(name="preparar_plan", annotations=lee, structured_output=False, description=(
+        "Say what importing a training plan .md would save, as the import of the app: its summary, each week already "
+        "done whose Garmin numbers are not the plan's (the plan's is proposed: it comes from Strava) and what fits "
+        "nowhere (saved as a note of the plan, as it is), with its fingerprint (`Huella`). It saves NOTHING. You "
+        "order the .md in its parts; show Andrés the result and ask; only after his «sí» call importar_plan with the "
+        "same plan, elecciones and that huella.\n" + plan_forma))
+    def preparar_plan_tool(plan: dict[str, Any] | str, elecciones: dict[str, str] | None = None) -> str:
+        return preparar_plan_desde_pc(equipo, plan, elecciones)
+
+    @server.tool(name="importar_plan", annotations=guarda, structured_output=False, description=(
+        "Save the plan preparar_plan already showed and Andrés answered «sí» to, as a new plan, as the import of the "
+        "app saves it. NEVER call it without his «sí». If anything changed since (Garmin, the plan, the choices) "
+        f"nothing is saved and the new version comes back: show it to him again.\n{papeles} plan, elecciones: the "
+        "same given to preparar_plan. huella: the `Huella` it returned. texto (optional): a short line for Andrés, "
+        f"in Spanish.\n{registro}"))
+    def importar_plan_tool(papel: str, plan: dict[str, Any] | str, huella: str,
+                           elecciones: dict[str, str] | None = None, texto: str = "") -> str:
+        return importar_plan_desde_pc(equipo, papel, plan, huella, elecciones, texto)
+
+    @server.tool(name="get_analiticas_pendientes", annotations=lee, structured_output=False, description=(
+        "The PDF of the folder of Andrés's medical documents (blood tests, stress tests) that have no transcription "
+        "yet (new, or changed since it was read) and where each one is on this PC, so you can read it. Read-only; "
+        "the ones already transcribed are in get_contexto."))
+    def get_analiticas_pendientes_tool() -> str:
+        return analiticas_pendientes(equipo)
+
+    transcripcion_forma = (
+        "fichero: its name as get_analiticas_pendientes says it (or its path). transcripcion: {tipo (analitica, "
+        "prueba_esfuerzo or otro), titulo (what document it is, short), fecha (YYYY-MM-DD of the document, or null), "
+        "valores: [{prueba, valor (as it appears, with its comma or dot), unidad, rango (its reference range), fecha "
+        "(only if it is not the document's)}] — in a stress test also each stage with its power or speed, HR, oxygen "
+        "uptake or lactate, and the thresholds and maximums —, notas: [the conclusions of the report, literal and "
+        "short]}. Transcribe, never interpret nor invent.")
+
+    @server.tool(name="preparar_transcripcion", annotations=lee, structured_output=False, description=(
+        "Say what would be kept as the transcription of one medical PDF you read: how many values and of what date, "
+        "and its fingerprint (`Huella`). It saves NOTHING. Show Andrés that and ask; only after his «sí» call "
+        "guardar_transcripcion with the same fichero, transcripcion and that huella. A file that is not in the "
+        "folder, or a transcription without values, is refused and the answer says why.\n" + transcripcion_forma))
+    def preparar_transcripcion_tool(fichero: str, transcripcion: dict[str, Any]) -> str:
+        return preparar_transcripcion_desde_pc(equipo, fichero, transcripcion)
+
+    @server.tool(name="guardar_transcripcion", annotations=guarda, structured_output=False, description=(
+        "Keep the transcription preparar_transcripcion already showed and Andrés answered «sí» to as the one of that "
+        "PDF: from then on get_contexto (and the whole team) has it. NEVER call it without his «sí». If the PDF or the "
+        f"transcription changed since, nothing is kept.\n{papeles} fichero, transcripcion: the same given to "
+        "preparar_transcripcion. huella: the `Huella` it returned. texto (optional): a short line for Andrés, in "
+        f"Spanish.\n{registro}"))
+    def guardar_transcripcion_tool(papel: str, fichero: str, transcripcion: dict[str, Any], huella: str,
+                                   texto: str = "") -> str:
+        return guardar_transcripcion_desde_pc(equipo, papel, fichero, transcripcion, huella, texto)
+
+    @server.tool(name="get_recetas", annotations=lee, structured_output=False, description=(
+        "Andrés's saved recipes and fixed foods (ingredientes), in JSON: id, nombre, alias; a recipe with its "
+        "estado (definitiva: weighed; provisional: not weighed; sin_kcal or por_revisar: cannot be used), kcal_100g "
+        "(or kcal_100g_aprox when not weighed) and kcal_receta (the whole recipe, for a fraction of it); a fixed food "
+        "with its kcal per 100g or per unidad (comun: of the list of common foods). When he names one of them (or an "
+        "alias) with a quantity, its kcal are these: a recipe by grams (unidad g) or by fraction (unidad receta, "
+        "cantidad 0.5 for half), a fixed food in its own unit. Read-only."))
+    def get_recetas_tool() -> str:
+        return recetario_texto(equipo)
+
+    garmin_lee = ToolAnnotations(read_only_hint=True, open_world_hint=True)
+
+    @server.tool(name="get_rutas", annotations=garmin_lee, structured_output=False, description=(
+        "The routes saved in Andrés's Garmin Connect and his last runs done, each with its id, to ask for the profile "
+        "of one with get_perfil_ruta. If Garmin does not answer it says so: then ask him for the GPX. Read-only."))
+    def get_rutas_tool() -> str:
+        return rutas_desde_pc(equipo)
+
+    @server.tool(name="get_perfil_ruta", annotations=garmin_lee, structured_output=False, description=(
+        "The profile of ONE route to prepare a race: its distance, climb, the altitude every 100 m and its stretches "
+        "of climb (subida), descent (bajada) and flat (llano) with their climb and slope. Never its coordinates. "
+        "Give one of: garmin (the id of a route saved in Garmin, from get_rutas), actividad (the id of a run done) or "
+        "gpx (the path of a GPX file on this PC). Without altitude, or if Garmin does not answer, it says so: ask "
+        "Andrés for a GPX. Read-only."))
+    def get_perfil_ruta_tool(garmin: int | None = None, actividad: str | None = None, gpx: str | None = None) -> str:
+        return perfil_ruta_desde_pc(equipo, garmin, actividad, gpx)
 
 
 def main() -> None:

@@ -11,7 +11,6 @@ from unittest.mock import MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from tridata.ia import ListaInterpretada
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, RegistroComidas
 from tridata.web import crear_app
 from tridata.web.calendario import Sincronizacion
@@ -201,23 +200,6 @@ def test_leer_no_mira_de_donde_viene(cliente):  # a link in another page that op
         assert respuesta.status_code == 200, ruta
     assert cliente.head("/sw.js", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200
     assert cliente.options("/api/dia", headers={"Origin": OTRA_WEB}).status_code == 405  # the route answers, not a 403
-
-
-def test_el_dictado_del_movil_llega_con_su_audio(registro, tmp_path):
-    transcriptor = MagicMock()
-    transcriptor.transcribir.return_value = "un yogur"
-    interprete = MagicMock()
-    interprete.interpretar.return_value = ListaInterpretada(alimentos=[])
-    app = crear_app(registro, interprete, _ajustes(tmp_path), hoy=lambda: HOY, transcriptor=transcriptor)
-    audio = b"\x00\x00\x00\x18ftypmp42-audio-inventado"
-    cabeceras = {"Content-Type": "audio/mp4", "Host": MOVIL, "Origin": f"https://{MOVIL}",
-                 "Sec-Fetch-Site": "same-origin"}
-    ruta = "/api/dictado?id=11111111-2222-4333-8444-555555555555&fecha=2026-03-04"
-    assert TestClient(app).post(ruta, content=audio, headers=cabeceras).status_code == 200
-    assert transcriptor.transcribir.call_args.args[0] == audio
-    assert TestClient(app).post(ruta, content=audio, headers={**cabeceras, "Sec-Fetch-Site": "cross-site"}
-                                ).status_code == 403
-    assert transcriptor.transcribir.call_count == 1
 
 
 def test_el_calendario_se_despierta_tras_un_2xx_y_no_tras_un_403(registro, tmp_path, monkeypatch):

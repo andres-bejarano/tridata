@@ -1,4 +1,4 @@
-"""Unit 029 in a real Chromium at 390 × 844, light and dark: the app in five tabs (Hoy · Nutrición · Fitness ·
+"""Unit 029 in a real Chromium at 390 × 844, light and dark: the app in five tabs (four since unit 080) (Hoy · Nutrición · Fitness ·
 Asistente · Ajustes); Nutrición with its selector Día · Balance · Recetas; Hoy, Fitness and Asistente say in one
 sentence what they will bring; the dictation box only in Nutrición › Día; the addresses of before.
 Unit 030 (decision of 2026-10-24): the app opens in Hoy, which now has its four cards and the box (R1, R8 of
@@ -6,6 +6,10 @@ unit 030); `/#hoy` and reloading in Hoy open Hoy. Fitness and Asistente still sa
 
 Uses the `conftest.py` of unit 010 (temporary SQLite, every outside service doubled). Invented data only.
 Plans v6 (surface, P-20261023-a848b00b) · `pedir-al-asistente` S-16. R1-R7 of the unit.
+
+Unit 080 (P-20261105-cf32bea5, S-23, S-6, S-27): FOUR tabs (Hoy · Nutrición · Fitness · Ajustes), without the
+Asistente; Hoy has three cards (comida, entreno, cómo llegas) and no box to write or dictate is anywhere; an old
+`#asistente` opens Nutrición › Día.
 """
 from __future__ import annotations
 
@@ -18,10 +22,9 @@ from playwright.sync_api import expect  # noqa: E402
 from tridata.nutricion.recetas import Recetario  # noqa: E402
 
 TEMAS = pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
-PESTANAS = ["Hoy", "Nutrición", "Fitness", "Asistente", "Ajustes"]
+PESTANAS = ["Hoy", "Nutrición", "Fitness", "Ajustes"]  # unit 080 (S-23)
 PARTES = ["Día", "Balance", "Recetas"]
-PRONTO = {"fitness": "tu carga, tu último entreno y tu recuperación",
-          "asistente": "tus conversaciones con el asistente"}
+PRONTO = {"fitness": "tu carga, tu último entreno y tu recuperación"}
 
 
 def _textos(locator) -> list[str]:
@@ -120,10 +123,10 @@ def test_pantallas_llega_pronto(servidor, abrir, capturar, oscuro):  # R3
     expect(p.locator("section#hoy #hoy-comida")).to_be_visible()
     expect(p.locator("section#dia")).to_be_hidden()
     expect(p.locator("#partes")).to_be_hidden()
-    expect(p.locator("#entrada")).to_be_visible()
+    expect(p.locator("#entrada")).to_have_count(0)  # unit 080 (S-6): no box
     assert _marcada(p) == "Hoy"
     _sin_scroll(p, "hoy")
-    for sitio, nombre in (("fitness", "Fitness"), ("asistente", "Asistente")):
+    for sitio, nombre in (("fitness", "Fitness"),):
         p.locator("nav.pestanas .pestana", has_text=nombre).click()
         expect(p).to_have_url(f"{servidor.url}/#{sitio}")
         pantalla = p.locator(f"section#{sitio}")
@@ -132,25 +135,21 @@ def test_pantallas_llega_pronto(servidor, abrir, capturar, oscuro):  # R3
         expect(pantalla).to_contain_text(PRONTO[sitio])
         expect(p.locator("section#dia")).to_be_hidden()
         expect(p.locator("#partes")).to_be_hidden()
-        expect(p.locator("#entrada")).to_be_hidden()
         assert _marcada(p) == nombre
         _sin_scroll(p, sitio)
         capturar(p, f"pronto-{sitio}{sufijo}")
 
 
-# -- R4: where the box shows (S-16) ------------------------------------------------------------------------------
+# -- R4 (unit 080, S-6, R2): no box to write or dictate anywhere -------------------------------------------------
 
-def test_la_caja_solo_en_dia(servidor, abrir):  # R4 · S-16
+def test_sin_caja_en_ninguna_parte(servidor, abrir):  # R4 · unit 080 R2
     p = abrir(servidor, "/#dia")
-    expect(p.locator("#entrada")).to_be_visible()
-    expect(p.locator("#grabar")).to_be_visible()
-    for sitio in ("balance", "recetas", "fitness", "asistente"):
+    for sitio in ("hoy", "dia", "balance", "recetas", "fitness"):
         p.evaluate(f"location.hash = '{sitio}'")
         expect(p.locator(f"section#{sitio}")).to_be_visible()
-        expect(p.locator("#entrada")).to_be_hidden()
-        expect(p.locator("#grabar")).to_be_hidden()
-    p.evaluate("location.hash = 'dia'")
-    expect(p.locator("#entrada")).to_be_visible()
+        expect(p.locator("#entrada")).to_have_count(0)
+        expect(p.locator("#texto")).to_have_count(0)
+        expect(p.locator("#grabar")).to_have_count(0)
     p.locator("nav.pestanas .pestana", has_text="Ajustes").click()
     expect(p).to_have_url(servidor.url + "/ajustes")
     expect(p.locator("#entrada")).to_have_count(0)
@@ -168,7 +167,7 @@ def test_la_barra_en_ajustes(servidor, abrir, capturar):  # R5
     expect(p.locator("section#dia")).to_be_visible()
     expect(p.locator("body[data-dia]")).to_have_count(1)
     assert _parte_marcada(p) == "Día"
-    for sitio, nombre in (("hoy", "Hoy"), ("fitness", "Fitness"), ("asistente", "Asistente")):
+    for sitio, nombre in (("hoy", "Hoy"), ("fitness", "Fitness")):
         p.locator("nav.pestanas .pestana", has_text="Ajustes").click()
         expect(p).to_have_url(servidor.url + "/ajustes")
         p.locator("nav.pestanas .pestana", has_text=nombre).click()
@@ -185,11 +184,13 @@ def test_la_barra_en_ajustes(servidor, abrir, capturar):  # R5
 @pytest.mark.parametrize(("ruta", "sitio", "parte"), [
     ("/#balance", "balance", "Balance"), ("/#recetas", "recetas", "Recetas"), ("/#peso", "balance", "Balance"),
     ("/#hoy", "hoy", None), ("/", "hoy", None), ("/#nada", "dia", "Día"), ("/#dia", "dia", "Día"),
-], ids=["balance", "recetas", "peso", "hoy", "ninguna", "no-existe", "dia"])
+    ("/#asistente", "dia", "Día"),  # unit 080: the Asistente is gone, an old address opens Día
+], ids=["balance", "recetas", "peso", "hoy", "ninguna", "no-existe", "dia", "asistente"])
 def test_direcciones_de_antes(servidor, abrir, ruta, sitio, parte):  # R6
     p = abrir(servidor, ruta, esperar=False)
     expect(p.locator(f"section#{sitio}")).to_be_visible()
-    for otro in ("hoy", "dia", "balance", "recetas", "fitness", "asistente"):
+    expect(p.locator("section#asistente")).to_have_count(0)  # unit 080 (S-23)
+    for otro in ("hoy", "dia", "balance", "recetas", "fitness"):
         if otro != sitio:
             expect(p.locator(f"section#{otro}")).to_be_hidden()
     if parte is None:  # Hoy: its own tab, outside Nutrición

@@ -1,8 +1,10 @@
 """The Recetas tab in a real Chromium at 390 × 844 (unit 011): E2E-1 and editing a fixed food and a pot.
 
-Uses the `conftest.py` of unit 010 as it is (temporary SQLite, every outside service doubled); the
-interpreter double is given, per test, what it «understands». Invented data only.
-R11 the three sections · R16 E2E-1 (C-42, C-43, C-44) · R18 editing · R4 the proposal on screen.
+Uses the `conftest.py` of unit 010 as it is (temporary SQLite, every outside service doubled). Invented data only.
+R11 the three sections · R16 E2E-1 (C-42, C-43, C-44) · R18 editing.
+Unit 080 (R-44, R-48 out): the ingredients of a recipe are put by hand, one line each (no «Interpretar ingredientes»
+nor dictating them), and what is eaten is logged with «Apuntar en hoy» (no box in Hoy). R4 (the proposal of what was
+said and is only alike) lived in the review of the box and went with it.
 """
 from __future__ import annotations
 
@@ -15,30 +17,9 @@ pytest.importorskip("playwright", reason="E2E needs the `e2e` extra: python -m p
 
 from playwright.sync_api import expect  # noqa: E402
 
-from tridata.ia import AlimentoInterpretado, Interpretacion  # noqa: E402
 
 ANCHO = 390
-INGREDIENTES = "garbanzo seco 600 g, aceite de oliva 50 g y cebolla 125 g"
-
-
-def _item(nombre, cantidad, unidad="g", kcal=100.0, guardado=None, coincidencia=None, dia=None):
-    return AlimentoInterpretado(nombre=nombre, cantidad=cantidad, unidad=unidad, dia=dia, kcal=kcal, proteina_g=None,
-                                hidratos_g=None, grasa_g=None, estimado=True, dudoso=False, supuestos=[],
-                                guardado=guardado, coincidencia=coincidencia)
-
-
-def _entiende(texto: str, hoy: date) -> Interpretacion:
-    respuestas = {
-        INGREDIENTES: [_item("garbanzo seco", 600, kcal=2000, guardado="garbanzo seco", coincidencia="exacta", dia=hoy),
-                       _item("aceite de oliva", 50, kcal=400, guardado="aceite de oliva", coincidencia="exacta", dia=hoy),
-                       _item("cebolla", 125, kcal=60, guardado="cebolla", coincidencia="exacta", dia=hoy)],
-        "garbanzos de la abuela 250 g": [_item("garbanzos de la abuela", 250, kcal=400, guardado="garbanzos de la abuela",
-                                               coincidencia="exacta", dia=hoy)],
-        "200 g de garbanzos": [_item("garbanzos", 200, kcal=250, guardado="garbanzos de la abuela",
-                                     coincidencia="parecida", dia=hoy)],
-        "2 guayabas": [_item("guayaba", 2, unidad="unidad", kcal=120, guardado="guayaba", coincidencia="exacta", dia=hoy)],
-    }
-    return Interpretacion(alimentos=respuestas[texto])
+INGREDIENTES = (("garbanzo seco", 600), ("aceite de oliva", 50), ("cebolla", 125))
 
 
 def _ergonomia(p, pantalla: str) -> None:
@@ -85,8 +66,13 @@ def _garbanzos(p, capturar=None, sufijo=""):
     apartado.get_by_role("button", name="＋ Añadir receta").click()
     ficha = apartado.locator(".ficha-receta")
     ficha.get_by_label("Nombre").fill("garbanzos de la abuela")
-    ficha.get_by_label("Ingredientes").fill(INGREDIENTES)
-    ficha.get_by_role("button", name="Interpretar ingredientes").click()
+    for n, (nombre, gramos) in enumerate(INGREDIENTES):  # unit 080: by hand, one line each, chosen from his
+        ficha.get_by_role("button", name="Añadir ingrediente").click()
+        linea = ficha.locator(".ingrediente").nth(n)
+        linea.get_by_role("combobox", name="Ingrediente").fill(nombre)
+        linea.locator('[role="option"]').filter(has_text=nombre).first.click()
+        linea = ficha.locator(".ingrediente").nth(n)
+        linea.get_by_label("Gramos").fill(str(gramos))
     expect(ficha.locator(".ingrediente")).to_have_count(3)
     expect(ficha.locator(".ingrediente .marca", has_text="estimado")).to_have_count(0)
     expect(ficha.locator(".total-receta")).to_contain_text("2.600 kcal")
@@ -117,8 +103,7 @@ def test_recetas_vacia_tres_apartados(servidor, abrir, capturar):  # R11
 
 
 @pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
-def test_e2e_1_receta_pesada_y_dictada(servidor, abrir, capturar, oscuro, ir_a):  # R16, E2E-1, R11
-    servidor.interprete.interpretar.side_effect = _entiende
+def test_e2e_1_receta_pesada_y_apuntada(servidor, abrir, capturar, oscuro, ir_a):  # R16, E2E-1, R11
     sufijo = "-oscuro" if oscuro else ""
     p = abrir(servidor, "/#recetas", oscuro=oscuro)
     _nuevo_fijo(p, "garbanzo seco", 350)
@@ -130,42 +115,26 @@ def test_e2e_1_receta_pesada_y_dictada(servidor, abrir, capturar, oscuro, ir_a):
     _ergonomia(p, "recetas" + sufijo)
     capturar(p, f"recetas{sufijo}", completa=True)
 
-    # in Hoy: «garbanzos de la abuela 250 g» uses the recipe
+    # «Apuntar en hoy» 250 g of the recipe (unit 080: no box in Hoy): its kcal are the recipe's
+    recetas = _apartado(p, "recetas")
+    recetas.locator(".elemento", has_text="garbanzos de la abuela").click()
+    calc = recetas.locator(".ficha .calculadora")
+    calc.get_by_label("¿Cuánto has cogido? (g)").fill("250")
+    calc.get_by_role("button", name="Apuntar en hoy").click()
+    expect(p.locator("#recetas-mensaje")).to_contain_text("Apuntado en hoy: garbanzos de la abuela")
     ir_a(p, "dia")
     expect(p.locator("#queda-cifra")).not_to_have_text("—")
-    p.locator("#texto").fill("garbanzos de la abuela 250 g")
-    p.locator("#enviar").click()
-    tarjeta = p.locator("#lista article").first
-    expect(tarjeta.get_by_label("kcal")).to_have_value("325")
-    expect(tarjeta.locator(".marca.origen")).to_contain_text("de tu receta")
-    expect(tarjeta.locator(".marca", has_text="estimad")).to_have_count(0)
-    _ergonomia(p, "revision" + sufijo)
-    capturar(p, f"revision-de-tu-receta{sufijo}")
-    p.locator("#confirmar").click()
     fila = p.locator("#lista-dia .fila").first
     expect(fila).to_contain_text("garbanzos de la abuela")
     expect(fila.locator(".kcal")).to_have_text("325")
     expect(fila).to_contain_text("de tu receta")
     expect(p.locator("#total")).to_contain_text("325 kcal")
     expect(p.locator("#queda-cifra")).to_contain_text("1.475")  # 1.800 of objective − 325
-
-    # «200 g de garbanzos» is proposed in sight, and «usar estimación» swaps it back
-    p.locator("#texto").fill("200 g de garbanzos")
-    p.locator("#enviar").click()
-    tarjeta = p.locator("#lista article").first
-    expect(tarjeta.get_by_label("kcal")).to_have_value("260")
-    expect(tarjeta.locator(".propuesta")).to_contain_text("garbanzos de la abuela")
-    capturar(p, f"revision-propuesta{sufijo}")
-    tarjeta.get_by_role("button", name="Usar estimación").click()
-    tarjeta = p.locator("#lista article").first
-    expect(tarjeta.get_by_label("kcal")).to_have_value("250")
-    expect(tarjeta.get_by_label("Alimento")).to_have_value("garbanzos")
-    expect(tarjeta.locator(".marca", has_text="kcal estimadas")).to_have_count(1)
-    expect(tarjeta.locator(".propuesta")).to_have_count(0)
+    _ergonomia(p, "dia-de-tu-receta" + sufijo)
+    capturar(p, f"dia-de-tu-receta{sufijo}")
 
 
 def test_editar_fijo_y_olla_en_pantalla(servidor, abrir, capturar, ir_a):  # R18, R14
-    servidor.interprete.interpretar.side_effect = _entiende
     p = abrir(servidor, "/#recetas")
     _nuevo_fijo(p, "dulce de guayaba de ciclismo", 90, por="por unidad", alias="guayaba")
     _nueva_olla(p, "olla grande", 1500)
@@ -212,15 +181,17 @@ def test_editar_fijo_y_olla_en_pantalla(servidor, abrir, capturar, ir_a):  # R18
     expect(taras.locator(".elemento")).to_have_count(0)
     expect(taras.locator(".vacio-apartado")).to_be_visible()
 
-    # «2 guayabas» in Hoy now counts 95 each
+    # 2 of them logged now count 95 each (unit 080: with «Apuntar en hoy», no box in Hoy)
+    fijos.locator(".elemento", has_text="dulce de guayaba de ciclismo").click()
+    calc = fijos.locator(".calculadora")
+    calc.get_by_label("¿Cuánto has cogido? (unidades)").fill("2")
+    calc.get_by_role("button", name="Apuntar en hoy").click()
+    expect(p.locator("#recetas-mensaje")).to_contain_text("Apuntado en hoy: dulce de guayaba de ciclismo")
     ir_a(p, "dia")
-    p.locator("#texto").fill("2 guayabas")
-    p.locator("#enviar").click()
-    expect(p.locator("#lista article").first.get_by_label("kcal")).to_have_value("190")
+    expect(p.locator("#lista-dia .fila", has_text="dulce de guayaba de ciclismo").locator(".kcal")).to_have_text("190")
 
 
 def test_receta_provisional_versiones_y_borrar(servidor, abrir, capturar):  # R11, R7, R14
-    servidor.interprete.interpretar.side_effect = _entiende
     rec = servidor_recetario(servidor)
     rec.crear_fijo({"nombre": "garbanzo seco", "kcal": 350, "por": "100g"})
     rec.crear_olla({"nombre": "olla grande", "tara_g": 1500})

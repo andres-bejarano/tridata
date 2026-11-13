@@ -1,7 +1,7 @@
 """E2E of the phone screen (unit 010): the real app in a real Chromium, with every outside service doubled.
 
-`crear_app` runs with uvicorn in a thread, on a free port, over a temporary SQLite; the Claude
-interpreter, the Whisper transcriber and «Actualizar Garmin» are `MagicMock`s and the Garmin data
+`crear_app` runs with uvicorn in a thread, on a free port, over a temporary SQLite (unit 080: without any AI);
+«Actualizar Garmin» is a `MagicMock` and the Garmin data
 are a temporary `DataStore` with one invented activity. «Today» is fixed on the server and on the
 phone's clock. Every value is invented. Unit 014: `Servidor.cierres` is the close of the day the app uses.
 Unit 016: `servidor.hoy = …` moves the server's «today» (`HOY` by default).
@@ -10,7 +10,7 @@ Unit 018: `servidor.ahora` (the server's clock for the Garmin warning, 10:00 of 
 `sync_de_prueba(ok_en, fallo_en=None, motivo=None)`, and `abrir()` on "/" waits for the day painted
 (`body[data-dia]`), never for the «Hoy» of the static HTML (R12).
 Unit 029: five tabs; `abrir()` opens Nutrición › Día (`/#dia`) by default, and `ir_a(pagina, sitio)` goes to a
-place the way Andrés does: hoy · dia · balance · recetas · fitness · asistente · ajustes.
+place the way Andrés does: hoy · dia · balance · recetas · fitness · ajustes (unit 080: four tabs, no Asistente).
 
 Optional: needs the `e2e` extra (`python -m pip install -e ".[dev,e2e]"` and, once,
 `python -m playwright install chromium`). Without Playwright these tests are skipped by
@@ -29,7 +29,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tridata.ia import AlimentoInterpretado, Interpretacion, ObjetivoDiaInterpretado, PesoInterpretado
 from tridata.models import Activity, DailyStats
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, Cierres, ObjetivosDia, RegistroComidas, RegistroPeso
 from tridata.storage import DataStore
@@ -40,24 +39,12 @@ AYER = HOY - timedelta(days=1)
 RELOJ_DEL_MOVIL = datetime(2026, 10, 21, 10, 0, 0)
 ANCHO, ALTO = 390, 844
 AJUSTES_DE_PRUEBA = {"basal_kcal": 1600, "kcal_por_paso": 0.04, "pasos_por_defecto": 10000, "objetivo_pct": -10}
-TEXTO_DICTADO = "avena 60 g, peso 72,4, hoy mantenimiento y algo raro"
 
 # `scripts/ci/full-suite` runs with a throwaway HOME: the browsers stay in the real user's cache.
 if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
     _cache = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".cache" / "ms-playwright"
     if _cache.is_dir():
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(_cache)
-
-
-def interpretacion_de_prueba(texto: str, hoy: date) -> Interpretacion:
-    """The interpreter double: «avena 60 g, peso 72,4, hoy mantenimiento y algo raro», every piece."""
-    return Interpretacion(
-        alimentos=[AlimentoInterpretado(nombre="avena", cantidad=60, unidad="g", dia=hoy, kcal=228, proteina_g=None,
-                                        hidratos_g=None, grasa_g=None, estimado=True, dudoso=False, supuestos=[])],
-        peso=PesoInterpretado(kg=72.4, dia=hoy, nota=None),
-        objetivo_dia=ObjetivoDiaInterpretado(tipo="descanso", porcentaje=0, niveles=None, entreno=None, pasos=None),
-        dudosas=["algo raro"],
-    )
 
 
 def _puerto_libre() -> int:
@@ -87,17 +74,13 @@ class Servidor:
         # unit 014: the close of the day over the same SQLite, so a test can close days before opening the page
         self.cierres = Cierres(self.db, ajustes=self.ajustes, pesos=self.pesos, objetivos=self.objetivos,
                                store=self.store)
-        self.interprete = MagicMock()
-        self.interprete.interpretar.side_effect = interpretacion_de_prueba
-        self.transcriptor = MagicMock(spec=["transcribir"])
-        self.transcriptor.transcribir.return_value = TEXTO_DICTADO
         self.actualizar_garmin = MagicMock()
         self.hoy = HOY  # unit 016: a test may move the server's «today» (midnight)
         self.ahora = RELOJ_DEL_MOVIL  # unit 018: the clock of the Garmin warning
         self.con_ajustes = bool(ajustes)  # without settings the day never paints (a 409 says so)
-        app = crear_app(self.registro, self.interprete, self.ajustes, hoy=lambda: self.hoy, pesos=self.pesos,
+        app = crear_app(self.registro, None, self.ajustes, hoy=lambda: self.hoy, pesos=self.pesos,
                         objetivos=self.objetivos, store=self.store, actualizar_garmin=self.actualizar_garmin,
-                        transcriptor=self.transcriptor, cierres=self.cierres, ahora=lambda: self.ahora)
+                        cierres=self.cierres, ahora=lambda: self.ahora)
         self.puerto = _puerto_libre()
         self.url = f"http://127.0.0.1:{self.puerto}"
         self._server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=self.puerto, log_level="warning"))
@@ -255,7 +238,7 @@ def capturar():
     return _capturar
 
 
-PESTANA_DE = {"hoy": "Hoy", "fitness": "Fitness", "asistente": "Asistente", "ajustes": "Ajustes"}
+PESTANA_DE = {"hoy": "Hoy", "fitness": "Fitness", "ajustes": "Ajustes"}
 PARTE_DE = {"dia": "Día", "balance": "Balance", "recetas": "Recetas"}
 
 
@@ -275,5 +258,5 @@ def _ir_a(pagina, sitio: str) -> None:
 
 @pytest.fixture
 def ir_a():
-    """`ir_a(pagina, sitio)` (unit 029): hoy · dia · balance · recetas · fitness · asistente · ajustes."""
+    """`ir_a(pagina, sitio)` (unit 029): hoy · dia · balance · recetas · fitness · ajustes."""
     return _ir_a

@@ -11,17 +11,14 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import date, timedelta
-from unittest.mock import MagicMock
 
 import pytest
-from starlette.testclient import TestClient
 
-from tridata.ia import CambioInterpretado, ListaInterpretada
+from tridata.ia import CambioInterpretado
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, ObjetivosDia, RegistroComidas, RegistroPeso
 from tridata.nutricion.asistente import (Cambiado, Contexto, Peticion, catalogo, confirmar, proponer, rehacer,
                                          texto_acciones)
 from tridata.nutricion.recetas import Recetario
-from tridata.web import crear_app
 
 HOY = date(2026, 10, 22)
 AYER = HOY - timedelta(days=1)
@@ -176,64 +173,5 @@ def test_el_peso_fuera_de_rango_no(b):
     assert r == {"tipo": "no", "texto": "el peso tiene que estar entre 30 y 250 kg"}
 
 
-# -- through the web -------------------------------------------------------------------------------------------------
-
-class Web:
-    def __init__(self, tmp_path):
-        self.b = Base(tmp_path)
-        self.interprete = MagicMock()
-        self.hoy = HOY
-        self.cliente = TestClient(crear_app(self.b.registro, self.interprete, self.b.ajustes, hoy=lambda: self.hoy,
-                                            objetivos=self.b.objetivos, recetario=self.b.recetario,
-                                            pesos=self.b.pesos))
-
-    def tarjeta(self, dicho, **campos):
-        self.interprete.interpretar.side_effect = lambda t, hoy: ListaInterpretada(
-            alimentos=[], cambios=[CambioInterpretado(**campos)])
-        r = self.cliente.post("/api/interpretar", json={"texto": dicho})
-        assert r.status_code == 200, r.text
-        (t,) = r.json()["cambios"]
-        return t
-
-    def confirmar(self, t):
-        return self.cliente.post("/api/asistente/confirmar", json={"tarjeta": t})
-
-
-@pytest.fixture
-def w(tmp_path):
-    return Web(tmp_path)
-
-
-def test_web_limite_desde_el_lunes(w):  # R10
-    t = w.tarjeta("desde el lunes el límite saludable es 20", accion="cambiar_ajuste", campo="limite_saludable_pct",
-                  valor=20, desde=LUNES)
-    r = w.confirmar(t)
-    assert r.status_code == 200, r.text
-    vista = w.cliente.get("/api/ajustes?fecha=2026-10-20").json()
-    assert vista["vigentes"]["limite_saludable_pct"] == {"valor": 20, "desde": "2026-10-19"}
-
-
-def test_web_carrera_ajustes_y_plan_dicen_el_15(w):  # R9
-    t = w.tarjeta("la carrera de prueba es el 15", accion="cambiar_carrera", objeto="carrera de prueba",
-                  fecha=date(2026, 11, 15))
-    assert w.confirmar(t).status_code == 200
-    vista = w.cliente.get("/api/ajustes").json()
-    assert [c["fecha"] for c in vista["carreras"]] == ["2026-11-15"]
-    plan = w.cliente.get("/api/ajustes?fecha=2026-11-15").json()["plan"]
-    assert plan["objetivo_pct"] == 0 and plan["motivo"] == "carrera carrera de prueba"
-
-
-def test_web_el_peso_de_ayer_un_solo_peso_y_su_media(w):  # R11
-    t = w.tarjeta("ayer pesé 71,3, no 71,8", accion="peso_dia", valor=71.3, dia=AYER)
-    r = w.confirmar(t)
-    assert r.status_code == 200, r.text
-    assert w.b.pesos_de(AYER) == [(71.3,)]
-    dia = w.cliente.get("/api/dia?fecha=2026-10-21").json()
-    assert dia["peso"]["media_7_dias"]["kg"] == 71.3
-
-
-def test_web_el_peso_confirmado_despues_de_medianoche(w):  # R8 for the weight: the day of the card
-    t = w.tarjeta("hoy peso 71,0, me equivoqué", accion="peso_dia", valor=71.0, dia=HOY)
-    w.hoy = MANANA
-    assert w.confirmar(t).status_code == 200
-    assert w.b.pesos_de(HOY) == [(71.0,)] and w.b.pesos_de(MANANA) == []
+# Unit 080 (S-5): the tests through the web (/api/interpretar + /api/asistente/*) went with those routes; the
+# cards are made by the coach from the PC with these same functions (`nutricion.asistente`).

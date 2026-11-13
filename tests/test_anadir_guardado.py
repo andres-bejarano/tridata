@@ -1,8 +1,7 @@
 """Unit 019 · add with what is saved: a recipe whole or by fractions without weighing, the kcal of what is chosen
 from the search box always worked out on the server, and «Ingredientes» on screen.
 
-Recetario over a temporary SQLite and the Starlette TestClient; the Claude interpreter is a unittest.mock
-double (no API). Every value is invented (§Criterios de aceptación of the unit).
+Recetario over a temporary SQLite and the Starlette TestClient (no API; unit 080: the app has no interpreter). Every value is invented (§Criterios de aceptación of the unit).
 
 Plans: `apuntar-comida` R-93 (C-131, C-132), R-55 · `guardar-receta` R-94 (C-133), R-57 (C-134), R-58, R-45,
 R-40, R-51 · `pedir-al-asistente` S-21. R1-R8 of the unit (R1 and R7 are on screen: tests/e2e).
@@ -11,12 +10,11 @@ import re
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from starlette.testclient import TestClient
 
-from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, RegistroComidas, RegistroPeso
+from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, RegistroComidas
 from tridata.nutricion.recetas import Recetario
 from tridata.web import crear_app
 
@@ -158,8 +156,7 @@ class Entorno:
         self.registro = RegistroComidas(db)
         self.recetario, self.ids = sembrar(db)
         self.registro.anadir(Alimento(nombre="comida de antes", dia=HOY, cantidad=500, unidad="g", kcal=1000), HOY)
-        self.interprete = MagicMock()
-        self.cliente = TestClient(crear_app(self.registro, self.interprete, self.ajustes, hoy=lambda: HOY))
+        self.cliente = TestClient(crear_app(self.registro, None, self.ajustes, hoy=lambda: HOY))
 
     def post(self, ruta, cuerpo):
         return self.cliente.post(ruta, json=cuerpo)
@@ -287,41 +284,8 @@ def test_anadir_a_mano_sin_elegir_sigue_igual(e):  # NO debe haber cambiado
 
 
 # -- R5: the review · R-93, C-132, R-55 --------------------------------------------------------------------------
-
-def _de_la_revision(**extra) -> dict:
-    return {"nombre": "unas lentejas", "dia": HOY.isoformat(), "cantidad": 300, "unidad": "g", "kcal": 350,
-            "estimado": True, "dudoso": False, "supuestos": ["un plato"], **extra}
-
-
-def test_confirmar_con_lo_elegido(e):  # R5 · C-132
-    abuela = _de_la_revision(nombre="Lentejas de la abuela", cantidad=0.5, unidad="receta", kcal=999,
-                             guardado={"tipo": "receta", "id": e.ids["Lentejas de la abuela"]})
-    bote = _de_la_revision(nombre="bote", cantidad=400, unidad="g", kcal=1,
-                           guardado={"tipo": "fijo", "id": e.ids["Lentejas cocidas bote"]})
-    guardados = e.ok("/api/confirmar", {"texto": "unas lentejas y un bote", "alimentos": [abuela, bote]})["guardados"]
-    assert [(g["nombre"], g["kcal"], g["estimado"], g["provisional"]) for g in guardados] == [
-        ("Lentejas de la abuela", 1000, False, False), ("Lentejas cocidas bote", 360, False, False)]
-    assert [g["origen"] for g in guardados] == ["de tu receta «Lentejas de la abuela»",
-                                                "de tu ingrediente «Lentejas cocidas bote»"]
-    assert e.dia()["total_kcal"] == 2360
-
-
-def test_confirmar_con_uno_roto_no_guarda_nada(e):  # R3, R5: todo o nada
-    bueno = _de_la_revision(guardado={"tipo": "fijo", "id": e.ids["Lentejas cocidas bote"]}, cantidad=400)
-    roto = _de_la_revision(nombre="otra cosa", guardado={"tipo": "receta", "id": 999}, cantidad=1, unidad="receta")
-    sin_cantidad = _de_la_revision(guardado={"tipo": "fijo", "id": e.ids["gel de prueba"]}, cantidad=0, unidad="unidad")
-    antes = e.nombres_de_hoy()
-    for lista in ([bueno, roto], [bueno, sin_cantidad]):
-        r = e.post("/api/confirmar", {"texto": "x", "alimentos": lista, "peso": {"kg": 72.4, "dia": HOY.isoformat()}})
-        assert r.status_code == 422, r.text
-        assert "no se ha guardado nada" in r.json()["error"]
-    assert e.nombres_de_hoy() == antes
-    assert RegistroPeso(e.db).entre(HOY, HOY) == []
-
-
-def test_confirmar_sin_elegir_sigue_igual(e):  # NO debe haber cambiado: la estimación de Claude se guarda tal cual
-    g = e.ok("/api/confirmar", {"texto": "unas lentejas", "alimentos": [_de_la_revision()]})["guardados"][0]
-    assert (g["nombre"], g["kcal"], g["estimado"]) == ("unas lentejas", 350, True)
+# Unit 080 (S-5): the review of what was written or dictated (/api/confirmar) is gone from the app with the box;
+# its three tests went with it. Chosen by hand it is /api/alimento (above).
 
 
 # -- R6: an ingredient chosen in a recipe · R-94, C-133, R-40 ------------------------------------------------------
@@ -367,9 +331,9 @@ def test_un_ingrediente_borrado(e):  # R8
 
 
 def test_lo_apuntado_antes_no_se_reescribe(e):  # R8 · R-55: the screen reads it, the base keeps it
-    e.ok("/api/confirmar", {"texto": "dátiles", "alimentos": [{
-        "nombre": "dátiles de prueba", "dia": HOY.isoformat(), "cantidad": 6, "unidad": "g", "kcal": 16.8,
-        "estimado": False, "dudoso": False, "supuestos": [], "origen": "de tu alimento fijo «dátiles de prueba»"}]})
+    e.registro.guardar([Alimento(nombre="dátiles de prueba", dia=HOY, cantidad=6, unidad="g", kcal=16.8,
+                                 origen="de tu alimento fijo «dátiles de prueba»")], hoy=HOY, texto="dátiles",
+                       sin_cambios=True)
     fila = next(a for a in e.dia()["alimentos"] if a["nombre"] == "dátiles de prueba")
     assert (fila["origen"], fila["kcal"]) == ("de tu alimento fijo «dátiles de prueba»", 16.8)
 

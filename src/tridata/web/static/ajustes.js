@@ -383,82 +383,8 @@ async function cargar() {
   vista = datos;
   hoyISO = datos.fecha;
   pintar();
-  cargarEquipo(); // unit 041: after the settings, so «Conexión» says what /api/ajustes said
   cargarCalendario(); // unit 043
-}
-
-// -- unit 041: Ajustes › El equipo, the model of each role (R7, G-56) ------------------------------------------------
-
-let equipo = null; // last /api/equipo answer: { papeles, modelos, tope }
-let papelAbierto = null; // id of the role whose model card is open
-
-const dolares = (x) => `${x.toFixed(2).replace(".", ",")} $`;
-
-function filaPapel(p) {
-  const modelo = equipo.modelos.find((m) => m.id === p.modelo);
-  const fila = el("button", { type: "button", className: "ajuste" },
-    el("span", { className: "que" }, `${p.icono} ${p.nombre}`,
-      el("span", { textContent: modelo ? `${modelo.nombre} (${modelo.descripcion})` : p.modelo })),
-    el("span", { className: "chev", textContent: "›" }));
-  fila.dataset.papel = p.id;
-  fila.setAttribute("aria-expanded", String(papelAbierto === p.id));
-  fila.addEventListener("click", () => {
-    papelAbierto = papelAbierto === p.id ? null : p.id;
-    mensaje("");
-    pintarEquipo();
-  });
-  return papelAbierto === p.id ? [fila, fichaPapel(p)] : [fila];
-}
-
-function fichaPapel(p) {
-  const opciones = equipo.modelos.map((m) => {
-    const radio = el("input", { type: "radio", name: `modelo-${p.id}`, value: m.id, checked: m.id === p.modelo });
-    return el("label", {}, radio, `${m.nombre} (${m.descripcion})`);
-  });
-  const aviso = el("p", { className: "aviso", hidden: true });
-  const guardar = el("button", { type: "button", className: "principal", textContent: "Guardar" });
-  const cancelar = el("button", { type: "button", textContent: "Cancelar" });
-  cancelar.addEventListener("click", () => { papelAbierto = null; mensaje(""); pintarEquipo(); });
-  guardar.addEventListener("click", async () => {
-    const elegido = opciones.map((o) => o.querySelector("input")).find((r) => r.checked);
-    if (!elegido) { aviso.textContent = "Elige un modelo."; aviso.hidden = false; return; }
-    guardar.disabled = true;
-    let ok = false;
-    let datos = {};
-    try {
-      const r = await fetch("/api/equipo", { method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ papel: p.id, modelo: elegido.value }) });
-      datos = await r.json().catch(() => ({}));
-      ok = r.ok;
-      ponerConexion(true);
-    } catch {
-      ponerConexion(false);
-      datos = { error: "No hay conexión con el PC. Inténtalo de nuevo." };
-    }
-    guardar.disabled = false;
-    if (!ok) { aviso.textContent = datos.error ?? "No se ha podido guardar."; aviso.hidden = false; return; }
-    equipo = datos;
-    papelAbierto = null;
-    const modelo = equipo.modelos.find((m) => m.id === elegido.value);
-    mensaje(`Guardado: el ${p.nombre} responde con ${modelo?.nombre ?? elegido.value}.`, "bien");
-    pintarEquipo();
-  });
-  return el("article", { className: "tarjeta nueva" }, el("div", { className: "equipo-modelos" }, ...opciones), aviso,
-    el("div", { className: "acciones" }, guardar, cancelar));
-}
-
-function pintarEquipo() {
-  const gasto = el("div", { id: "equipo-gasto", className: "ajuste estado" },
-    el("span", { className: "que" }, "Gasto de este mes",
-      el("span", { textContent: `${dolares(equipo.tope.gastado)} de un tope de ${numero.format(equipo.tope.dolares)} $` })));
-  $("equipo").replaceChildren(...equipo.papeles.flatMap(filaPapel), gasto);
-}
-
-async function cargarEquipo() {
-  const { ok, datos } = await api("/api/equipo");
-  if (!ok) return;
-  equipo = datos;
-  pintarEquipo();
+  cargarCoach(); // unit 080
 }
 
 // -- unit 043: Ajustes › Google Calendar (R1, R4, R6); unit 062: «Desconectar» ---------------------------------
@@ -530,6 +456,27 @@ function pintarCalendario(nuevo) {
 async function cargarCalendario() {
   const { ok, datos } = await api("/api/calendario");
   if (ok) pintarCalendario(datos);
+}
+
+// -- unit 080 (R-224 · C-278, C-279): «Lo que ha hecho el coach», only to look at ----------------------------------
+
+const cuando = new Intl.DateTimeFormat("es-ES", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const PAPEL = { entrenador: "Entrenador", nutricionista: "Nutricionista", fisio: "Fisio", asistente: "Asistente" };
+
+function filaCoach(c) {
+  const quien = PAPEL[c.papel] ?? "Coach";
+  return el("div", { className: "ajuste estado cambio-coach" },
+    el("span", { className: "que" }, c.texto, el("span", { textContent: `${quien} · ${cuando.format(new Date(c.hora))}` })));
+}
+
+async function cargarCoach() {
+  const { ok, datos } = await api("/api/coach");
+  if (!ok) {
+    $("coach").replaceChildren(el("p", { className: "suave nota-grupo", textContent: "No he podido cargar lo que ha hecho el coach." }));
+    return;
+  }
+  $("coach").replaceChildren(...(datos.cambios.length ? datos.cambios.map(filaCoach)
+    : [el("p", { id: "coach-vacio", className: "suave nota-grupo", textContent: "El coach aún no ha hecho ningún cambio desde el PC." })]));
 }
 
 $("anadir-carrera").addEventListener("click", () => { carreraAbierta = "nueva"; abierto = null; mensaje(""); pintar(); });

@@ -11,16 +11,13 @@ from __future__ import annotations
 import re
 import sqlite3
 from datetime import date, timedelta
-from unittest.mock import MagicMock
 
 import pytest
-from starlette.testclient import TestClient
 
-from tridata.ia import CambioInterpretado, LineaInterpretada, ListaInterpretada
+from tridata.ia import CambioInterpretado, LineaInterpretada
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, ObjetivosDia, RegistroComidas, RegistroPeso
 from tridata.nutricion.asistente import Contexto, Peticion, catalogo, confirmar, proponer, rehacer, texto_acciones
 from tridata.nutricion.recetas import Recetario
-from tridata.web import crear_app
 
 HOY = date(2026, 10, 22)  # a Thursday
 MARTES = HOY - timedelta(days=2)
@@ -282,76 +279,5 @@ def test_cambiar_una_tara_no(b):  # R6
     assert b.recetario.ollas()[0]["tara_g"] == 1500
 
 
-# -- integration: through the routes of unit 021 ---------------------------------------------------------------------------
-
-class Web:
-    def __init__(self, tmp_path):
-        self.base = Base(tmp_path)
-        self.interprete = MagicMock()
-        self.cliente = TestClient(crear_app(self.base.registro, self.interprete, self.base.ajustes, hoy=lambda: HOY,
-                                            objetivos=self.base.objetivos, pesos=self.base.pesos,
-                                            recetario=self.base.recetario))
-
-    def tarjeta(self, frase, **campos):
-        self.interprete.interpretar.side_effect = lambda t, hoy: ListaInterpretada(
-            alimentos=[], cambios=[CambioInterpretado(**campos)])
-        r = self.cliente.post("/api/interpretar", json={"texto": frase})
-        assert r.status_code == 200, r.text
-        (t,) = r.json()["cambios"]
-        return t
-
-    def confirmar(self, t):
-        r = self.cliente.post("/api/asistente/confirmar", json={"tarjeta": t})
-        assert r.status_code == 200, r.text
-        return r.json()
-
-    def total(self, dia):
-        r = self.cliente.get(f"/api/dia?fecha={dia.isoformat()}")
-        assert r.status_code == 200, r.text
-        return r.json()["total_kcal"]
-
-
-@pytest.fixture
-def w(tmp_path):
-    return Web(tmp_path)
-
-
-def test_web_receta_nueva_y_pesar_como_a_mano(w):  # R1, R3
-    t = w.tarjeta("receta nueva crema de calabaza de prueba…", **CREMA)
-    assert t["tipo"] == "propuesta" and "440 kcal la receta entera, sin pesar" in t["texto"]
-    assert w.confirmar(t)["hecho"].startswith("Hecho:")
-    recetas = w.cliente.get("/api/recetas").json()["recetas"]
-    crema = next(r for r in recetas if r["nombre"] == "crema de calabaza de prueba")
-    assert crema["en_uso"]["kcal_total"] == 440
-    t = w.tarjeta("las lentejas de prueba pesan 3.500 en la olla grande", accion="pesar_receta",
-                  objeto="lentejas de prueba", valor=3500, texto="olla grande")
-    w.confirmar(t)
-    lentejas = next(r for r in w.cliente.get("/api/recetas").json()["recetas"] if r["nombre"] == "lentejas de prueba")
-    assert lentejas["en_uso"]["estado"] == "definitiva" and lentejas["en_uso"]["kcal_100g"] == 130
-
-
-def test_web_borrar_sin_otra_confirmacion(w):  # R4
-    t = w.tarjeta("borra el queso mozzarella de prueba", accion="borrar_ingrediente",
-                  objeto="queso mozzarella de prueba")
-    w.confirmar(t)
-    fijos = w.cliente.get("/api/recetas").json()["fijos"]
-    assert not any(f["nombre"] == "queso mozzarella de prueba" for f in fijos)
-
-
-def test_web_el_martes_sigue_en_325(w):  # R5 · C-112
-    assert w.total(MARTES) == 325
-    w.confirmar(w.tarjeta("a los garbanzos de prueba les puse 40 de aceite, no 50", accion="corregir_receta",
-                          objeto="garbanzos de prueba", lineas=[_l("aceite", 40)]))
-    assert w.total(MARTES) == 325
-    w.confirmar(w.tarjeta("borra la receta garbanzos de prueba", accion="borrar_receta", objeto="garbanzos de prueba"))
-    assert w.total(MARTES) == 325
-
-
-def test_web_si_cambio_la_receta_no_aplica(w):  # R2 · G-41
-    t = w.tarjeta("a los garbanzos de prueba les puse 40 de aceite", accion="corregir_receta",
-                  objeto="garbanzos de prueba", lineas=[_l("aceite", 40)])
-    g = w.base.receta("garbanzos de prueba")
-    w.base.recetario.corregir(g["id"], {"peso_neto_g": 2600})  # by hand, meanwhile
-    r = w.cliente.post("/api/asistente/confirmar", json={"tarjeta": t})
-    assert r.status_code == 409
-    assert w.base.receta("garbanzos de prueba")["en_uso"]["kcal_total"] == 2600
+# Unit 080 (S-5): the tests through the web (/api/interpretar + /api/asistente/*) went with those routes; the
+# cards are made by the coach from the PC with these same functions (`nutricion.asistente`).

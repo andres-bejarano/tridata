@@ -891,13 +891,12 @@ def _actualizador_garmin(store: DataStore, entorno: Mapping[str, str] | None = N
 
 
 def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
+    """The app of the phone. Unit 080 (S-5): it calls no AI, so it needs no key of the API, creates no AI client and
+    loads no Whisper; what was asked to the AI is asked to the coach (Claude Code on the PC, `tridata mcp`)."""
     try:
         import uvicorn
 
-        from .ia import InterpreteClaude, TranscriptorWhisper
-        from .ia.conversacion import ConversadorClaude
         from .nutricion import Ajustes, ObjetivosDia, Recetario, RegistroComidas, RegistroPeso
-        from .nutricion.asistente import nombres_apuntados, texto_acciones
         from .web import crear_app
     except ImportError as exc:
         print(f"Missing the `app` extra ({exc}). Install it: pip install -e '.[app]'", file=sys.stderr)
@@ -913,31 +912,9 @@ def _cmd_web(host: str, port: int, db_path: Path = DEFAULT_DB_PATH) -> int:
         return 1
 
     store = DataStore(db_path)
-    # Dictation (unit 006): Whisper is the optional `voz` extra. Without it the app starts the same
-    # and writing works; with it the model loads in the background once the server is up.
-    transcriptor = None
-    if TranscriptorWhisper.disponible():
-        transcriptor = TranscriptorWhisper()
-        print(f"Dictation: loading Whisper {transcriptor.modelo} on the GPU in the background.")
-    else:
-        print("Aviso: dictado desactivado: instala el extra voz (pip install -e '.[voz]').", file=sys.stderr)
-    # Unit 011: Claude gets the NAMES and aliases of the saved recipes and fixed foods, read on every call.
-    # Unit 021: and the NAMES logged on the day of the request and the fixed list of the assistant's actions.
-    recetario = Recetario(db_path)
-    registro = RegistroComidas(db_path)
-    interprete = InterpreteClaude(guardados=recetario.nombres)
-    interprete.apuntado, interprete.acciones = nombres_apuntados(registro), texto_acciones
-    # Unit 032: the Asistente's conversations (Haiku 5.5 unless TRIDATA_MODELO_ASISTENTE says otherwise) and the
-    # folder of the medical PDFs, read once each on this PC (TRIDATA_MEDICOS_DIR; without it, the context says so).
-    medicos_dir = os.environ.get("TRIDATA_MEDICOS_DIR", "").strip()
-    if not medicos_dir:
-        print("Aviso: sin TRIDATA_MEDICOS_DIR en .env el asistente no verá tu analítica ni tu prueba de esfuerzo.",
-              file=sys.stderr)
-    app = crear_app(registro, interprete, ajustes,
+    app = crear_app(RegistroComidas(db_path), None, ajustes,
                     pesos=RegistroPeso(db_path), objetivos=ObjetivosDia(db_path),
-                    store=store, actualizar_garmin=_actualizador_garmin(store), transcriptor=transcriptor,
-                    recetario=recetario, conversador=ConversadorClaude(),
-                    medicos_dir=Path(medicos_dir).expanduser() if medicos_dir else None)
+                    store=store, actualizar_garmin=_actualizador_garmin(store), recetario=Recetario(db_path))
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(f"Warning: listening on {host}, reachable from outside this PC.", file=sys.stderr)
     print(f"TriData web on http://{host}:{port} (Ctrl+C to stop)")

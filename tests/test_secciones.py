@@ -1,7 +1,7 @@
 """Unit 035: the sections of the day (desayuno, media mañana, comida, merienda, cena).
 
-`RegistroComidas` over a temporary SQLite and the Starlette TestClient; the Claude interpreter is a
-`MagicMock` (no API). Every value is invented.
+`RegistroComidas` over a temporary SQLite and the Starlette TestClient (no API; unit 080: the app has no
+interpreter). Every value is invented.
 Plans v7: `apuntar-comida`, flow `ordenar-comida-secciones`, REC-21 (R-121..R-126, C-162..C-168), G-51, G-52,
 S-42..S-45. R1, R3, R4, R7, R8 and R9 of the unit.
 """
@@ -10,12 +10,10 @@ from __future__ import annotations
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from starlette.testclient import TestClient
 
-from tridata.ia import AlimentoInterpretado, Interpretacion
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, RegistroComidas
 from tridata.nutricion.recetas import Recetario
 from tridata.web import crear_app
@@ -169,8 +167,7 @@ class Entorno:
         ajustes = Ajustes(self.db)
         ajustes.cambiar({"basal_kcal": 1600, "kcal_por_paso": 0.04}, desde=DESDE_SIEMPRE)  # 2,000 kcal of expenditure
         self.recetario = Recetario(self.db)
-        self.interprete = MagicMock()
-        self.cliente = TestClient(crear_app(self.registro, self.interprete, ajustes, hoy=lambda: HOY,
+        self.cliente = TestClient(crear_app(self.registro, None, ajustes, hoy=lambda: HOY,
                                             recetario=self.recetario))
 
     def dia(self, fecha: date = HOY) -> dict:
@@ -265,15 +262,9 @@ def test_apuntar_por_la_web_entra_sin_seccion_aunque_la_traiga(entorno):  # R1 �
                                                     "guardado": {"tipo": "fijo", "id": fijo["id"]}})
     assert r.status_code == 200, r.text
     assert r.json()["alimento"]["seccion"] is None
-    # dictated / written: confirmed after the review
-    entorno.interprete.interpretar.return_value = Interpretacion(alimentos=[AlimentoInterpretado(
-        nombre="manzana de prueba", cantidad=150, unidad="g", dia=HOY, kcal=78, proteina_g=None, hidratos_g=None,
-        grasa_g=None, estimado=True, dudoso=False, supuestos=[])], peso=None, objetivo_dia=None, dudosas=[])
-    piezas = entorno.cliente.post("/api/interpretar", json={"texto": "una manzana"}).json()
-    r = entorno.cliente.post("/api/confirmar", json={"texto": "una manzana", "alimentos": piezas["alimentos"]})
-    assert r.status_code == 200, r.text
+    # unit 080: dictated / written is gone from the app (the coach logs from the PC, test_mcp_equipo.py)
     assert {a["nombre"]: a["seccion"] for a in entorno.dia()["alimentos"]} == {
-        "pera de prueba": None, "plátano de prueba": None, "manzana de prueba": None}
+        "pera de prueba": None, "plátano de prueba": None}
 
 
 def test_corregir_en_la_ficha_no_cambia_la_seccion(entorno):  # R8

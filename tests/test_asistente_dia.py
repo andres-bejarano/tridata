@@ -15,18 +15,15 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import date, timedelta
-from unittest.mock import MagicMock
 
 import pytest
-from starlette.testclient import TestClient
 
-from tridata.ia import CambioInterpretado, ListaInterpretada
+from tridata.ia import CambioInterpretado
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, ObjetivosDia, RegistroComidas, RegistroPeso
 from tridata.nutricion.asistente import (
     Cambiado, Contexto, Peticion, catalogo, confirmar, proponer, rehacer, texto_acciones,
 )
 from tridata.nutricion.recetas import Recetario
-from tridata.web import crear_app
 
 HOY = date(2026, 10, 22)  # a Thursday
 AYER = HOY - timedelta(days=1)
@@ -366,73 +363,5 @@ def test_un_dia_pasado_no(b, campos):  # R12
     assert b.objetivos.del_dia(MARTES) is None
 
 
-# -- R1, R3, R8 through the web: confirming writes like by hand, on the day of the card -----------------------------
-
-class Web:
-    def __init__(self, tmp_path):
-        self.b = Base(tmp_path)
-        self.interprete = MagicMock()
-        self.hoy = HOY
-        self.cliente = TestClient(crear_app(self.b.registro, self.interprete, self.b.ajustes, hoy=lambda: self.hoy,
-                                            objetivos=self.b.objetivos, recetario=self.b.recetario,
-                                            pesos=self.b.pesos))
-
-    def tarjeta(self, dicho, **campos):
-        self.interprete.interpretar.side_effect = lambda t, hoy: ListaInterpretada(
-            alimentos=[], cambios=[CambioInterpretado(**campos)])
-        r = self.cliente.post("/api/interpretar", json={"texto": dicho})
-        assert r.status_code == 200, r.text
-        (t,) = r.json()["cambios"]
-        return t
-
-    def confirmar(self, t):
-        return self.cliente.post("/api/asistente/confirmar", json={"tarjeta": t})
-
-
-@pytest.fixture
-def w(tmp_path):
-    return Web(tmp_path)
-
-
-def test_web_sustituir_y_el_dia_suma_lo_nuevo(w):  # R1
-    t = w.tarjeta("quita el yogur, al final fue una manzana", accion="cambiar_alimento", objeto="yogur",
-                  texto="manzana de prueba", cantidad=1, unidad="unidad")
-    r = w.confirmar(t)
-    assert r.status_code == 200, r.text
-    assert r.json()["hecho"].startswith("Hecho: ")
-    dia = w.cliente.get("/api/dia?fecha=2026-10-22").json()
-    assert round(dia["total_kcal"]) == 1005
-    assert any(a["nombre"] == "manzana de prueba" and a["origen"].startswith("de tu ingrediente")
-               for a in dia["alimentos"])
-
-
-def test_web_mover_a_manana(w):  # R3
-    t = w.tarjeta("el plátano pásalo a mañana", accion="mover_alimento", objeto="plátano", fecha=MANANA)
-    assert w.confirmar(t).status_code == 200
-    assert w.b.registro.alimento(w.b.platano)["estado"] == "planeado" and w.b.total() == 892
-
-
-def test_web_despues_de_medianoche_vale_el_dia_de_la_tarjeta(w):  # R8 · R-79
-    t = w.tarjeta("quita el yogur", accion="cambiar_alimento", objeto="yogur", texto="manzana de prueba", cantidad=1,
-                  unidad="unidad")
-    assert "del 22-10" in t["texto"] or "en el 22-10" in t["texto"]
-    w.hoy = MANANA  # confirmed at 00:05 of the 23rd
-    r = w.confirmar(t)
-    assert r.status_code == 200, r.text
-    assert w.b.registro.alimento(w.b.yogur)["dia"] == "2026-10-22"
-    assert w.b.registro.apuntes_del_dia(MANANA) == [] and w.b.total() == 1005
-    w.hoy = HOY  # another request on the 22nd, confirmed two days later
-    t = w.tarjeta("quita la pasta", accion="quitar_alimento", objeto="pasta")
-    w.hoy = HOY + timedelta(days=2)
-    assert w.confirmar(t).status_code == 200
-    assert all(a["nombre"] != "pasta de prueba" for a in w.b.registro.apuntes_del_dia(HOY))
-
-
-def test_web_si_lo_de_antes_cambio_no_se_aplica(w):  # G-41 with the new actions
-    t = w.tarjeta("la pasta eran 120 gramos", accion="cambiar_alimento", objeto="pasta", cantidad=120, unidad="g")
-    w.b.registro.cambiar(w.b.pasta, {"nombre": "pasta de prueba", "cantidad": 110, "unidad": "g", "kcal": 396},
-                         hoy=HOY)
-    r = w.confirmar(t)
-    assert r.status_code == 409
-    assert r.json()["tarjeta"]["texto"].endswith("110 g (396 kcal) → 120 g (432 kcal)")
-    assert w.b.registro.alimento(w.b.pasta)["cantidad"] == 110
+# Unit 080 (S-5): the tests through the web (/api/interpretar + /api/asistente/*) went with those routes; the
+# cards are made by the coach from the PC with these same functions (`nutricion.asistente`).

@@ -1,10 +1,11 @@
 """Unit 040 in a real Chromium at 390 × 844, light and dark (E2E-6 of `llevar-plan`): Fitness › Plan without a plan
-says «Importa tu plan»; importing the invented .md shows its parts and its difference with Garmin proposing the
-plan's; confirming shows the plan with its races and its weeks (today's marked); a week shows its days (a past one
-without anything, «no hecho») and a done session its laps. Fitness › Forma stays as it was.
+says so; the invented .md imported shows the plan with its races and its weeks (today's marked); a week shows its days
+(a past one without anything, «no hecho») and a done session its laps. Fitness › Forma stays as it was.
 
-Uses the `conftest.py` of unit 010; the AI is the double of `tests/test_plan_importar.py` (never the API) and the
-Garmin data its `sembrar_garmin`. Every value is invented (C-169, C-170, C-171, C-172, C-173).
+Unit 080 (R-131 to the coach): the app has no «Importar .md» any more; the coach imports it from the PC with the same
+`plan.importar.proponer` / `confirmar`, so here the plan is imported that way (with the double of
+`tests/test_plan_importar.py` as the AI, never the API) before the page is opened. Every value is invented (C-169,
+C-170, C-171, C-172, C-173).
 """
 from __future__ import annotations
 
@@ -17,7 +18,10 @@ pytest.importorskip("playwright", reason="E2E needs the `e2e` extra: python -m p
 
 from playwright.sync_api import expect  # noqa: E402
 
-from tridata.ia.plan import OrdenadorPlan  # noqa: E402
+from datetime import datetime  # noqa: E402
+
+from tridata.plan import Planes  # noqa: E402
+from tridata.plan.importar import confirmar, proponer  # noqa: E402
 
 _ruta = Path(__file__).parents[1] / "test_plan_importar.py"
 _spec = importlib.util.spec_from_file_location("doble_del_plan", _ruta)
@@ -28,16 +32,18 @@ _spec.loader.exec_module(doble)
 TEMAS = pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
 
 
-@pytest.fixture
-def ia_doblada(monkeypatch):
-    llamadas = []
+class _OrdenadorDoble:
+    """The AI of the import, doubled (`tests/test_plan_importar.py`): never the API."""
 
     def ordenar(self, titulo, texto, hoy):
-        llamadas.append(titulo)
         return doble.ordenar_como_la_ia(titulo, texto), dict(doble.USO), "claude-haiku-5-5"
 
-    monkeypatch.setattr(OrdenadorPlan, "ordenar", ordenar)
-    return llamadas
+
+def _importado_por_el_coach(servidor) -> int:
+    """The .md imported as the coach does it from the PC (unit 080): the plan's side of every difference."""
+    propuesta = proponer(doble.FIXTURE.read_text(encoding="utf-8"), _OrdenadorDoble(), servidor.store, servidor.hoy,
+                         nombre="plan-inventado")
+    return confirmar(propuesta, {}, Planes(servidor.db), datetime(2026, 10, 21, 9, 0))
 
 
 def _sin_scroll(p, pantalla: str) -> None:
@@ -46,7 +52,7 @@ def _sin_scroll(p, pantalla: str) -> None:
 
 
 @TEMAS
-def test_recorrido_del_plan(servidor, abrir, ir_a, capturar, ia_doblada, oscuro):  # E2E-6 · C-169, C-170, C-173
+def test_recorrido_del_plan(servidor, abrir, ir_a, capturar, oscuro):  # E2E-6 · C-169, C-170, C-173
     doble.sembrar_garmin(servidor.store)
     sufijo = "-oscuro" if oscuro else "-claro"
     p = abrir(servidor, "/#dia", oscuro=oscuro)
@@ -58,27 +64,15 @@ def test_recorrido_del_plan(servidor, abrir, ir_a, capturar, ia_doblada, oscuro)
     plan = p.locator("#fitness-plan")
     expect(plan).to_be_visible()
     expect(p.locator("#fitness-carga")).to_be_hidden()
-    expect(plan).to_contain_text("Importa tu plan")
+    expect(plan).to_contain_text("Aún no tienes plan")
+    expect(p.locator("#plan-fichero")).to_have_count(0)  # unit 080 (R-131): no «Importar .md»
+    expect(plan).not_to_contain_text("Importar")
     _sin_scroll(p, "plan-vacio")
 
-    # import: the parts read and the difference with Garmin, proposing the plan's
-    p.locator("#plan-fichero").set_input_files(str(doble.FIXTURE))
-    importacion = p.locator("#plan-importar")
-    expect(importacion).to_be_visible()
-    expect(importacion).to_contain_text("plan-inventado.md")
-    expect(importacion).to_contain_text("4 carreras")
-    expect(importacion).to_contain_text("1 diferencia con Garmin")
-    diferencia = importacion.locator(".diferencia")
-    expect(diferencia).to_have_count(1)
-    expect(diferencia).to_contain_text("S4")
-    expect(diferencia).to_contain_text("3h16 · 39,1 km")
-    expect(diferencia).to_contain_text("3h22 · 39,1 km")
-    expect(diferencia.get_by_role("button", name="Lo del plan")).to_have_attribute("aria-pressed", "true")
-    expect(importacion).to_contain_text("Hasta que confirmes no se guarda nada")
-    assert len(ia_doblada) == 9
-    _sin_scroll(p, "importar")
-    capturar(p, f"plan-importar{sufijo}", completa=True)
-    importacion.get_by_role("button", name="Confirmar importación").click()
+    # the coach imports the .md from the PC; the app shows it when Plan is opened again
+    _importado_por_el_coach(servidor)
+    partes.locator("a", has_text="Forma").click()
+    partes.locator("a", has_text="Plan").click()
 
     # the plan: its races (the 10K with its result) and its weeks, today's marked
     expect(p.locator("#plan-nombre")).to_have_text("Road to Ejemplo 26")
@@ -130,28 +124,6 @@ def test_recorrido_del_plan(servidor, abrir, ir_a, capturar, ia_doblada, oscuro)
     expect(plan).to_be_hidden()
 
 
-def test_si_la_ia_falla_se_puede_reintentar(servidor, abrir, ir_a, monkeypatch):  # R5
-    fallos = {"quedan": 1}
-
-    def ordenar(self, titulo, texto, hoy):
-        if fallos["quedan"]:
-            fallos["quedan"] -= 1
-            from tridata.ia.plan import ErrorPlan
-            raise ErrorPlan("no hay conexión con la API")
-        return doble.ordenar_como_la_ia(titulo, texto), dict(doble.USO), "claude-haiku-5-5"
-
-    monkeypatch.setattr(OrdenadorPlan, "ordenar", ordenar)
-    p = abrir(servidor, "/#fitness/plan", esperar=False)
-    plan = p.locator("#fitness-plan")
-    expect(plan).to_contain_text("Importa tu plan")
-    p.locator("#plan-fichero").set_input_files(str(doble.FIXTURE))
-    aviso = p.locator("#plan-aviso")
-    expect(aviso).to_contain_text("Inténtalo de nuevo")
-    expect(plan).to_contain_text("Importa tu plan")  # nothing saved
-    p.get_by_role("button", name="Reintentar").click()
-    expect(p.locator("#plan-importar")).to_be_visible()
-
-
 @TEMAS
 def test_el_plan_a_mano(servidor, abrir, capturar, oscuro):  # unit 067 · REC-30, C-247, C-249, C-250, C-253
     """A new plan built by hand on the screen: two weeks, the phase «Base» over them, a session added on Friday,
@@ -159,7 +131,7 @@ def test_el_plan_a_mano(servidor, abrir, capturar, oscuro):  # unit 067 · REC-3
     sufijo = "-oscuro" if oscuro else "-claro"
     p = abrir(servidor, "/#fitness/plan", oscuro=oscuro, esperar=False)
     vista = p.locator("#plan-vista")
-    expect(vista).to_contain_text("Importa tu plan")
+    expect(vista).to_contain_text("Aún no tienes plan")
     p.locator("#plan-nuevo-boton").click()
     nuevo = p.locator("#plan-nuevo-form")
     nuevo.locator("input[name=plan-nombre]").fill("Prueba a mano 27")
@@ -242,7 +214,7 @@ def test_la_hora_de_una_sesion_a_mano(servidor, abrir, capturar, oscuro):  # uni
     Saturday it keeps its hour; cleared, only the title."""
     sufijo = "-oscuro" if oscuro else "-claro"
     p = abrir(servidor, "/#fitness/plan", oscuro=oscuro, esperar=False)
-    expect(p.locator("#plan-vista")).to_contain_text("Importa tu plan")
+    expect(p.locator("#plan-vista")).to_contain_text("Aún no tienes plan")
     p.locator("#plan-nuevo-boton").click()
     nuevo = p.locator("#plan-nuevo-form")
     nuevo.locator("input[name=plan-nombre]").fill("Prueba de hora 27")

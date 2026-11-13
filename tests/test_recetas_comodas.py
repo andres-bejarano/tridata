@@ -1,6 +1,6 @@
 """Unit 013 · comfortable recipes: work out what was taken and log it today, weigh later, hand-written kcal
-that count, and the new icon. Recetario over a temporary SQLite and the Starlette TestClient; the Claude
-interpreter is a unittest.mock double (no API). Every value is invented.
+that count, and the new icon. Recetario over a temporary SQLite and the Starlette TestClient (no API; unit 080: the
+app has no interpreter any more). Every value is invented.
 
 Plans (version 3): `guardar-receta` REC-10 (R-57, R-58, R-59; C-67…C-72) and `apuntar-comida` R-8 as
 rewritten, R-56 (C-8, C-63…C-66).
@@ -10,12 +10,10 @@ import re
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from starlette.testclient import TestClient
 
-from tridata.ia import AlimentoInterpretado, ListaInterpretada
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, RegistroComidas
 from tridata.nutricion.recetas import Recetario
 from tridata.web import crear_app
@@ -117,8 +115,7 @@ class Entorno:
         self.registro = RegistroComidas(db)
         if preparar:
             self.recetario, self.ids = _recetario(db, hoy)
-        self.interprete = MagicMock()
-        self.cliente = TestClient(crear_app(self.registro, self.interprete, self.ajustes, hoy=lambda: hoy))
+        self.cliente = TestClient(crear_app(self.registro, None, self.ajustes, hoy=lambda: hoy))
 
     def post(self, ruta, cuerpo):
         return self.cliente.post(ruta, json=cuerpo)
@@ -264,7 +261,8 @@ def test_kcal_sin_cantidad_suman_al_confirmar_y_lo_vacio_sigue_pendiente(e):  # 
               "estimado": False, "dudoso": False, "supuestos": []},
              {"nombre": "leche en el café", "dia": HOY.isoformat(), "cantidad": None, "unidad": None, "kcal": None,
               "estimado": True, "dudoso": False, "supuestos": []}]
-    guardados = e.ok("/api/confirmar", {"texto": "dátiles y leche en el café", "alimentos": lista})["guardados"]
+    # unit 080: by hand, one by one (/api/confirmar went with the box to write)
+    guardados = [e.ok("/api/alimento", a)["alimento"] for a in lista]
     assert [g["pendiente_cantidad"] for g in guardados] == [False, True]
     dia = e.dia()
     assert dia["total_kcal"] == 17
@@ -305,23 +303,19 @@ def test_simular_cuenta_las_kcal_a_mano(e):  # R5 · R-8
 
 # -- R6: an estimate without a quantity does not count · R-8, C-64 ---------------------------------------------
 
-def test_una_estimacion_sin_cantidad_llega_sin_kcal(e):  # R6 · R-8, C-64
-    e.interprete.interpretar.side_effect = lambda texto, hoy: ListaInterpretada(alimentos=[AlimentoInterpretado(
-        nombre="nueces de prueba", cantidad=None, unidad=None, dia=hoy, kcal=40, proteina_g=None, hidratos_g=None,
-        grasa_g=None, estimado=True, dudoso=False, supuestos=["un puñado"])])
-    pieza = e.ok("/api/interpretar", {"texto": "unas nueces"})["alimentos"][0]
-    assert (pieza["cantidad"], pieza["kcal"]) == (None, None)
-    guardado = e.ok("/api/confirmar", {"texto": "unas nueces", "alimentos": [pieza]})["guardados"][0]
-    assert guardado["pendiente_cantidad"] is True
+def test_una_estimacion_sin_cantidad_llega_sin_kcal(e):  # R6 · R-8, C-64 (unit 080: by hand, /api/alimento)
+    pieza = {"nombre": "nueces de prueba", "cantidad": None, "unidad": None, "dia": HOY.isoformat(), "kcal": 40,
+             "estimado": True}
+    guardado = e.ok("/api/alimento", pieza)["alimento"]
+    assert (guardado["kcal"], guardado["pendiente_cantidad"]) == (None, True)
     dia = e.dia()
     assert dia["total_kcal"] == 0 and [p["nombre"] for p in dia["pendientes"]] == ["nueces de prueba"]
 
 
 def test_una_estimacion_con_cantidad_sigue_igual(e):  # R6: only the quantity-less estimate loses its kcal
-    e.interprete.interpretar.side_effect = lambda texto, hoy: ListaInterpretada(alimentos=[AlimentoInterpretado(
-        nombre="nueces de prueba", cantidad=30, unidad="g", dia=hoy, kcal=196, proteina_g=None, hidratos_g=None,
-        grasa_g=None, estimado=True, dudoso=False, supuestos=[])])
-    assert e.ok("/api/interpretar", {"texto": "30 g de nueces"})["alimentos"][0]["kcal"] == 196
+    pieza = {"nombre": "nueces de prueba", "cantidad": 30, "unidad": "g", "dia": HOY.isoformat(), "kcal": 196,
+             "estimado": True}
+    assert e.ok("/api/alimento", pieza)["alimento"]["kcal"] == 196
 
 
 # -- R8: the icon · (010 R13) -------------------------------------------------------------------------------------

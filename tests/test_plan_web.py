@@ -2,12 +2,11 @@
 
     GET  /api/plan                 the plan of the current objective (or ?id=) and the list of plans
     GET  /api/plan/semana/{n}      the days of one week: the planned session and what was done
-    POST /api/plan/importar        the proposal of an .md, with its differences with Garmin; saves nothing
-    POST /api/plan/confirmar       saves the proposal with what Andrés chose
     GET  /api/plan/{id}.md         the plan as a document
 
-R1, R4, R5, R7, R8, R9 · C-169, C-172, C-173, C-175, C-176, C-177. The AI is the double of test_plan_importar.py;
-every value is invented.
+R1, R4, R7, R8, R9 · C-169, C-172, C-175, C-176, C-177. Unit 080: importing an .md is the coach's (the routes
+/api/plan/importar and /api/plan/confirmar are gone, and their tests with them); the plans of these tests are
+imported with `plan.importar` itself, the AI being the double of test_plan_importar.py. Every value is invented.
 """
 from __future__ import annotations
 
@@ -18,9 +17,9 @@ import pytest
 from starlette.testclient import TestClient
 from test_plan_importar import FIXTURE, OrdenadorFalso, sembrar_garmin
 
-from tridata.conversaciones import Conversaciones
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, ObjetivosDia, RegistroComidas
 from tridata.plan import Planes
+from tridata.plan.importar import confirmar, proponer
 from tridata.storage import DataStore
 from tridata.web import crear_app
 
@@ -38,18 +37,17 @@ class Web:
         self.ordenador = OrdenadorFalso()
         self.cliente = TestClient(crear_app(RegistroComidas(self.db), MagicMock(), ajustes, hoy=lambda: HOY,
                                             objetivos=ObjetivosDia(self.db), store=self.store,
-                                            actualizar_garmin=MagicMock(), ahora=lambda: AHORA,
-                                            ordenador_plan=self.ordenador))
+                                            actualizar_garmin=MagicMock(), ahora=lambda: AHORA))
 
     def importar(self, texto: str | None = None) -> dict:
-        r = self.cliente.post("/api/plan/importar", json={"texto": texto or FIXTURE.read_text(encoding="utf-8"),
-                                                          "fichero": "plan-inventado.md"})
-        assert r.status_code == 200, r.text
-        return r.json()
+        """The proposal of the .md, saving nothing (unit 080: as the coach makes it, no longer a route)."""
+        return proponer(texto or FIXTURE.read_text(encoding="utf-8"), self.ordenador, self.store, HOY,
+                        nombre="plan-inventado")
 
     def confirmar(self, propuesta: dict, elecciones: dict | None = None) -> dict:
-        r = self.cliente.post("/api/plan/confirmar", json={"token": propuesta["token"],
-                                                           "elecciones": elecciones or {}})
+        """Saves it and answers what GET /api/plan?id= answers with it."""
+        ident = confirmar(propuesta, elecciones or {}, Planes(self.db), AHORA)
+        r = self.cliente.get(f"/api/plan?id={ident}")
         assert r.status_code == 200, r.text
         return r.json()
 
@@ -63,50 +61,6 @@ def test_sin_plan_todavia(web):  # R1
     r = web.cliente.get("/api/plan")
     assert r.status_code == 200
     assert r.json() == {"hoy": HOY.isoformat(), "plan": None, "planes": []}
-
-
-def test_importar_propone_y_no_guarda_hasta_confirmar(web):  # R5 · C-173
-    p = web.importar()
-    assert p["nombre"] == "Road to Ejemplo 26" and p["fichero"] == "plan-inventado.md"
-    assert [d["semana"] for d in p["diferencias"]] == [4]
-    assert p["resumen"]["carreras"] == 4
-    assert web.cliente.get("/api/plan").json()["plan"] is None  # nothing saved yet
-    assert Conversaciones(web.db).gasto_del_mes(AHORA) > 0  # the spending of «importar plan» counts for the cap
-
-    vista = web.confirmar(p, {"4": "plan"})
-    plan = vista["plan"]
-    assert plan["nombre"] == "Road to Ejemplo 26"
-    assert [(c["nombre"], c["estado"]) for c in plan["carreras"]][0] == ("10K de ejemplo", "✅ 38:10")
-    assert [s["n"] for s in plan["semanas"] if s["hoy"]] == [9]
-    s4 = next(s for s in plan["semanas"] if s["n"] == 4)
-    assert s4["hecho"]["fuente"] == "plan" and s4["hecho"]["carrera"]["segundos"] == 3 * 3600 + 16 * 60
-    assert web.cliente.get("/api/plan").json()["plan"]["id"] == plan["id"]
-    # a proposal is confirmed once
-    r = web.cliente.post("/api/plan/confirmar", json={"token": p["token"], "elecciones": {}})
-    assert r.status_code == 404
-
-
-def test_lo_enviado_mal_no_importa_nada(web):  # R5
-    assert web.cliente.post("/api/plan/importar", json={"texto": "  "}).status_code == 400
-    assert web.cliente.post("/api/plan/confirmar", json={"token": "no-existe"}).status_code == 404
-    assert web.cliente.post("/api/plan/confirmar", content=b"no es json").status_code == 400
-
-
-def test_si_la_ia_falla_no_hay_plan_y_se_puede_reintentar(web):  # R5
-    web.ordenador.fallar_en = "Previsto"
-    r = web.cliente.post("/api/plan/importar", json={"texto": FIXTURE.read_text(encoding="utf-8")})
-    assert r.status_code == 502
-    assert "Inténtalo de nuevo" in r.json()["error"]
-    assert web.cliente.get("/api/plan").json()["plan"] is None
-    web.ordenador.fallar_en = None
-    assert web.importar()["diferencias"]
-
-
-def test_al_tope_del_mes_no_se_importa(web):  # the cap of unit 032 (R9) and bug 038
-    Conversaciones(web.db).apuntar_gasto(AHORA, "claude-sonnet-5-5", {"entrada": 7_500_000, "salida": 0}, "mensaje")  # 15 $ (unit 041)
-    r = web.cliente.post("/api/plan/importar", json={"texto": FIXTURE.read_text(encoding="utf-8")})
-    assert r.status_code == 429 and r.json()["tope"] is True
-    assert web.ordenador.llamadas == []
 
 
 def test_la_semana_y_el_detalle_de_lo_hecho(web):  # R3, R4 · C-171, C-172
@@ -187,8 +141,6 @@ def test_nada_del_plan_en_los_registros(web, caplog):  # R9 · C-177
     web.cliente.get("/api/plan")
     web.cliente.get("/api/plan/semana/8")
     assert marcador in web.cliente.get(f"/api/plan/{ident}.md").text
-    web.ordenador.fallar_en = "Incidencias"
-    web.cliente.post("/api/plan/importar", json={"texto": texto})
     assert marcador not in caplog.text
 
 

@@ -1,15 +1,12 @@
-// Day page of the food log. Plain ES module, no build step.
-// Nothing is saved until "Confirmar y guardar"; the server computes every total.
+// Day page of the food log. Plain ES module, no build step. The server computes every total.
 // A saved food is changed, moved, deleted or marked eaten by tapping its row in the day table.
-// Every card reads its inputs when "Guardar" / "Confirmar" is pressed, not on `change`.
-// One message can bring several pieces (unit 007): weight, objective of the day, foods and
-// doubtful phrases. They are reviewed together and saved together, or nothing is saved.
+// Every card reads its inputs when "Guardar" is pressed, not on `change`.
 // Unit 008: the bar at the top, the full expenditure with Garmin and its breakdown, the
-// «Actualizar Garmin» button, today's objective, levels and planned training, and, in the
-// review, «si te lo comes» and «¿cuánto me cabe?» (a simulation: nothing is saved).
-// Unit 006: «Grabar» dictates instead of writing. The recording is kept on the phone (cola.js)
-// until the PC sends back its text and list, which wait as «pendientes de revisar» until they
-// are confirmed or discarded. The service worker (sw.js) lets the page open with the PC off.
+// «Actualizar Garmin» button, today's objective, levels and planned training.
+// Unit 080 (P-20261105-cf32bea5): the app calls no AI. Gone are the box to write or dictate (with its review of what
+// was interpreted, the assistant's cards and the recordings queue of cola.js, which is no longer loaded: what an old
+// phone kept there is never sent) and the Asistente tab. Four tabs: Hoy · Nutrición · Fitness · Ajustes. Foods are
+// added by hand («Añadir») or by the coach from the PC. The service worker (sw.js) lets the page open with the PC off.
 // Unit 010 (presentation only, no rule changes): Hoy, Peso and Recetas are sections of this page
 // chosen by #dia / #balance / #recetas (unit 029); the «Te quedan» card shows in big the level being looked at
 // (remembered on this phone) with the others as buttons; everything that adjusts the day lives in
@@ -17,50 +14,36 @@
 // tab is drawn by peso.js, always for today. Unit 027: the Peso tab is inside Balance (balance.js calls peso.js);
 // an old #peso opens #balance.
 // Unit 011: the Recetas tab is drawn by recetas.js. A food that comes from a saved recipe or fixed
-// food says so («de tu receta …», «provisional») in the review and in the day list; one that is only
-// alike comes as a visible proposal with «Usar estimación», which puts Claude's estimate back.
+// food says so («de tu receta …», «provisional») in the day list.
 // Unit 014: under the day list, the state of the day (open, food closed, waiting for Garmin, closed with
 // Garmin) with its balance and the week, the trail of Garmin's corrections, and «Cerrar el día» while it is
 // open (never on a later day). Today shows the relevant corrections in #avisos until «Entendido». The
 // breakdown says when the kcal per step were calibrated with Garmin (or why that was discarded).
 // Unit 016: every kcal on screen in whole numbers (the server keeps them exact; the kcal inputs too); the
 // page asks the day again when it comes back to the front and every minute in sight, and past midnight it
-// moves from the old today to the new one; an open card survives a repaint; confirming sends the day of the
-// list and reinterpreting a list of the queue sends the day it was recorded.
-// Unit 019: in «Añadir a mano» and in each review card the name is the search box of buscador.js; choosing a
+// moves from the old today to the new one; an open card survives a repaint.
+// Unit 019: in «Añadir a mano» the name is the search box of buscador.js; choosing a
 // saved recipe or ingredient leaves only how much (grams, units, or the whole recipe / ½ / ⅓ / ¼) with its kcal at
 // once, and the food goes with `guardado: {tipo, id}` so the server logs it with ITS kcal. «Cambiar» goes back to
 // the free fields. A fraction reads «la receta entera», «½ receta»…; an origin «de tu alimento fijo …» logged
 // before the rename reads «de tu ingrediente …» (the base is not rewritten).
-// Unit 030: the app opens in Hoy (hoy.js paints its four cards from GET /api/hoy); `/`, `#hoy` and reloading in Hoy
-// stay in Hoy. The box and the microphone show in Hoy too: what is dictated there is reviewed in Hoy (the message,
-// the queue and the review move into it while it shows) and confirming refreshes its cards.
-// Unit 021: a change asked in the box («hoy son 15 mil pasos») comes in `cambios` of the interpretation and is shown
-// by asistente.js in a block «Cambios» above the usual pieces, each card confirmed or discarded on its own;
-// «Confirmar y guardar» saves the pieces and never touches the cards, and is not shown when only changes came. The
-// review closes when no list and no card is left to decide (a dictated list of the queue is removed then).
+// Unit 030: the app opens in Hoy (hoy.js paints its cards from GET /api/hoy); `/`, `#hoy` and reloading in Hoy
+// stay in Hoy.
 // Unit 031: the Fitness tab is painted by fitness.js (GET /api/fitness) every time it is entered.
 // Unit 040: Fitness has two parts, like Nutrición: Forma (`#fitness`, unit 031 unchanged) and Plan (`#fitness/plan`,
 // plan.js); each is painted when it shows.
-// Unit 032: the Asistente tab is conversaciones.js: `#asistente` its list, `#asistente/N` one conversation. Inside a
-// conversation the box and the microphone are the chat's (S-37): what is written goes to the conversation (never to
-// /api/interpretar), what is dictated is transcribed into the box, and «Pensar más» shows next to them.
 // Unit 035: the day list goes by the sections Andrés creates (desayuno … cena, then «Sin sección»), each with its
 // eaten kcal; they replace the groups Comido / Planeado. A section is there when a food is in it, or when it was
 // just created with «Añadir sección» and the day has not changed (S-45: it only lives on this screen). Each row is
 // dragged from its handle ⠿ (pointer events, so it works with the finger on the iPhone) and dropped on another
 // section: POST /api/alimento/N/seccion saves only the section (G-52) and the day comes back painted.
 
-import * as cola from "./cola.js";
-import { MAX_SEGUNDOS, grabar, puedeGrabar } from "./dictado.js";
 import { pintarBalance } from "./balance.js";
-import { buscador, cajaElegida, cargarGuardado, cosaGuardada, cuenta, leerOrigen, origenDe, textoReceta, unidadPropia } from "./buscador.js";
+import { buscador, cajaElegida, cargarGuardado, leerOrigen, textoReceta } from "./buscador.js";
 import { pintarRecetas } from "./recetas.js";
 import { cargarHoy, iniciarHoy } from "./hoy.js";
-import { pintarCambios } from "./asistente.js";
 import { cargarFitness, iniciarFitness } from "./fitness.js";
 import { cargarPlan, iniciarPlan } from "./plan.js";
-import { dictarAlChat, enConversacion, enviarAlChat, iniciarConversaciones, mostrarAsistente } from "./conversaciones.js";
 
 const $ = (id) => document.getElementById(id);
 // kcal with a thousands point always («1.040»): es-ES does not group 4 digits by default
@@ -69,35 +52,25 @@ const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1, useGro
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
 const kcalEnteras = (n) => enteras.format(Math.round(n) === 0 ? 0 : n); // never «−0»
 const porPaso = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 3 }); // 0,04 kcal/paso must not read 0
-const kilos = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 }); // 0,25 kg/semana must not read 0,3
 const fechaLarga = new Intl.DateTimeFormat("es-ES", { weekday: "long", day: "numeric", month: "long" });
 const signo = (n) => (n > 0 ? "+" : n < 0 ? "−" : "") + numero.format(Math.abs(n));
 const etiquetaNivel = (n) => (n === 0 ? "Mantenimiento" : `${signo(n)} %`);
 const conSignoKcal = (n) => (Math.round(n) < 0 ? `−${kcalEnteras(-n)}` : kcalEnteras(Math.max(n, 0)));
 const signoKcal = (n) => (Math.round(n) > 0 ? "+" : Math.round(n) < 0 ? "−" : "") + kcalEnteras(Math.abs(n));
 const MINUTO_MS = 60_000; // unit 016 (R3): how often the day is asked again while it is in sight
-// unit 029: five tabs (Hoy · Nutrición · Fitness · Asistente · Ajustes, the last one its own page); Nutrición has
-// three parts, Día · Balance · Recetas (unit 027: Peso is inside Balance). Each place has its address.
-const SITIOS = ["hoy", "dia", "balance", "recetas", "fitness", "asistente"];
+// unit 080: four tabs (Hoy · Nutrición · Fitness · Ajustes, the last one its own page); Nutrición has three parts,
+// Día · Balance · Recetas (unit 027: Peso is inside Balance). Each place has its address; an old #asistente opens Día.
+const SITIOS = ["hoy", "dia", "balance", "recetas", "fitness"];
 const NUTRICION = ["dia", "balance", "recetas"];
 const CLAVE_NIVEL = "tridata.nivel-que-miras"; // a screen preference of this phone, never the objective
-const PESO_MIN = 30;
-const PESO_MAX = 250;
-
-let revision = null; // { texto, hoy, original, alimentos, peso, objetivo, dudosas, cambios, conCambios, origen?, dicho? }
 let hoyISO = null; // today, as the server says in every day it sends (unit 016: it moves at midnight)
 let diaVisto = null; // the day on screen (ISO)
 let ultimoDia = null;
 let editando = null; // id of the saved food whose row is open for change
 let anadiendo = false; // the "add by hand" card under the table is open
 let fichaAbierta = null; // unit 016 (R4): { clave, nodo } of the open card, kept between repaints
-let lectores = []; // one per review card: copies what is typed into the model
 let peticionDia = 0; // drops a late answer when ◀ ▶ are tapped fast
 let conectado = null; // whether the PC answered the last request (null: not known yet)
-let grabacion = null; // { parar } while recording
-let esperada = null; // id of the recording just made: its list opens by itself when it comes back
-let textoDeLista = null; // a list whose interpretation failed (502), its text put in the box, and its day
-const porCien = new WeakMap(); // unit 013: the kcal/100 g typed on a review card, by food (never saved)
 let pestanaVista = null; // the place on screen, to reload the day when coming back to Día (unit 013)
 let parteFitness = null; // unit 040: "forma" or "plan", the part of Fitness on screen
 let diaPedido = null; // unit 017: a day tapped in Balance, opened when Día shows up
@@ -124,8 +97,6 @@ const cantidad = (a) => {
   if (a.unidad === "receta") return textoReceta(a.cantidad); // unit 019: «la receta entera», «½ receta»
   return `${numero.format(a.cantidad)} ${a.unidad ?? ""}`.trim();
 };
-// unit 019: a food chosen from the saved ones (an object; Claude's `guardado` is a name, not a choice)
-const esElegido = (a) => Boolean(a.guardado) && typeof a.guardado === "object";
 const deFecha = (iso) => fechaLarga.format(new Date(`${iso}T12:00:00`)).replace(",", "");
 const sumarDias = (iso, n) => {
   const d = new Date(`${iso}T12:00:00Z`);
@@ -133,6 +104,11 @@ const sumarDias = (iso, n) => {
   return d.toISOString().slice(0, 10);
 };
 const mayuscula = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+// the phone's own date (AAAA-MM-DD), shown until the PC answers
+const fechaLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 async function api(ruta, cuerpo) {
   const opciones = cuerpo === undefined ? {} : {
@@ -153,7 +129,7 @@ function ponerConexion(hay) {
   const volvio = hay && conectado === false;
   conectado = hay;
   $("sin-conexion").hidden = hay;
-  if (volvio) { cargarDia(diaVisto); cola.enviarPendientes(); }
+  if (volvio) cargarDia(diaVisto);
 }
 
 function mensaje(texto, tipo = "") {
@@ -887,39 +863,6 @@ function enlazarControles() {
   });
 }
 
-// -- unit 008: «si te lo comes» and «¿cuánto me cabe?» over the reviewed list (saves nothing) --
-
-let turnoSimulacion = 0;
-let esperaSimulacion = null;
-let caben = [];
-
-const paraSimular = () => (revision ? revision.alimentos.filter((a) => a.nombre && a.dia && !Number.isNaN(a.kcal)
-  && !Number.isNaN(a.cantidad) && (a.cantidad === null || a.cantidad > 0) && (a.kcal === null || a.kcal >= 0)) : []);
-
-function programarSimulacion() {
-  clearTimeout(esperaSimulacion);
-  esperaSimulacion = setTimeout(simularRevision, 250);
-}
-
-async function simularRevision() {
-  // unit 021: a review of only changes (or whose pieces are saved) has nothing to eat
-  if (!revision || (revision.conCambios && !hayPiezas())) { $("simulacion").hidden = true; return; }
-  const turno = ++turnoSimulacion;
-  const alimentos = paraSimular().map(({ anadida, ...a }) => a);
-  const { ok, datos } = await api("/api/simular", { alimentos });
-  if (turno !== turnoSimulacion || !revision) return;
-  if (!ok) { $("simulacion").hidden = true; return; }
-  caben = alimentos.map((a, i) => ({ nombre: a.nombre, ...datos.caben[i] }));
-  const b = datos.barra;
-  const margenes = datos.margenes.map((m) => `${etiquetaNivel(m.nivel)}: ${kcal(m.kcal)}`).join(" · ");
-  $("simulacion").replaceChildren(
-    el("p", { className: "titulo-pieza", textContent: `Si te lo comes (${kcal(datos.kcal_lista)} de hoy)` }),
-    el("p", { textContent: `La barra quedaría en ${b.pct} % · ${b.texto}.` }),
-    el("p", { className: "suave", textContent: `Te quedaría ${margenes}. Es una simulación: no se guarda nada.` }),
-  );
-  $("simulacion").hidden = false;
-}
-
 // Inputs of a saved-food card; `leer()` takes what is typed at that moment (R7).
 // Unit 019: with `buscar` («Añadir a mano», and since unit 074 the card to change one) the name is the search box;
 // once a saved thing is chosen, quantity, unit, kcal and kcal/100 g give way to only how much of it, and `leer()`
@@ -1126,7 +1069,7 @@ function mirarElDia() {
   cargarDia(diaVisto, { callado: true });
 }
 
-// -- review of the interpreted list ---------------------------------------------
+// -- the inputs of a card --------------------------------------------------------
 
 function campo(etiqueta, valor, tipo, alCambiar = null, extra = {}) {
   const entrada = el("input", { type: tipo, value: valor ?? "", ...extra });
@@ -1152,425 +1095,9 @@ function conSigno(entrada) {
 }
 
 const comoNumero = (v) => (v.trim() === "" ? null : Number(v.replace(",", ".")));
-
-const tarjetaVacia = () => ({
-  nombre: "", cantidad: null, unidad: null, dia: hoyISO, kcal: null, proteina_g: null, hidratos_g: null,
-  grasa_g: null, estimado: false, dudoso: false, supuestos: [], anadida: true,
-});
-
-function pintarRevision() {
-  for (const leer of lectores) leer(); // repainting must not lose what is typed and not yet applied
-  lectores = [];
-  $("revision").hidden = !revision;
-  preguntarDescarte(false);
-  if (!revision) { $("simulacion").hidden = true; return; }
-  $("dicho").textContent = revision.dicho ? `Has dicho: «${revision.dicho}»` : "";
-  $("dicho").hidden = !revision.dicho;
-  const otroDia = revision.origen && revision.hoy !== hoyISO;
-  $("dia-grabacion").textContent = otroDia ? `Grabado el ${deFecha(revision.hoy)}: se apunta en ese día` : "";
-  $("dia-grabacion").hidden = !otroDia;
-  const tarjetas = revision.alimentos.map((a, i) => {
-    // Applies a typed value to the model; only a real change clears "dudoso" / "estimado".
-    const aplicar = (clave, convertir = (v) => v) => (valor) => {
-      const nuevo = convertir(valor);
-      if (nuevo === a[clave] || (Number.isNaN(nuevo) && Number.isNaN(a[clave]))) return false;
-      const antes = a[clave];
-      a[clave] = nuevo;
-      if (clave === "nombre" || clave === "kcal") a.dudoso = false; // corrected by Andrés
-      if (clave === "kcal") { a.estimado = false; a.origen = null; a.provisional = false; a.propuesta = null; }
-      // unit 011: a saved recipe or fixed food keeps its kcal per gram or unit when the quantity changes
-      if (clave === "cantidad" && a.origen && antes > 0 && nuevo > 0 && a.kcal !== null) {
-        a.kcal = Math.round(a.kcal / antes * nuevo * 10) / 10;
-      }
-      if (a.cantidad !== null && !a.unidad) a.unidad = "g"; // a quantity always has a unit
-      return true;
-    };
-    const repintar = (aplicarlo) => (valor) => { if (aplicarlo(valor)) pintarRevision(); };
-    const marcas = () => {
-      const m = [];
-      if (a.dudoso) m.push(el("span", { className: "marca alerta", textContent: "dudoso: corrígelo o quítalo" }));
-      if (a.estimado && !a.dudoso) m.push(el("span", { className: "marca", textContent: "kcal estimadas" }));
-      // unit 013 (R-8): pending only without a quantity and without kcal; kcal by hand count
-      if (a.cantidad === null && a.kcal === null && !a.dudoso) m.push(el("span", { className: "marca alerta", textContent: "pendiente de cantidad" }));
-      if (kcalAMano(a) && !a.dudoso) m.push(el("span", { className: "marca", textContent: "kcal a mano" }));
-      // unit 016 (R5): a later day is planned; an earlier one is eaten that day, only its date
-      if (a.dia > revision.hoy) m.push(el("span", { className: "marca", textContent: `planeado: ${deFecha(a.dia)}` }));
-      else if (a.dia && a.dia < revision.hoy) m.push(el("span", { className: "marca", textContent: deFecha(a.dia) }));
-      if (a.anadida) m.push(el("span", { className: "marca", textContent: "añadido a mano" }));
-      if (a.origen) m.push(el("span", { className: "marca origen", textContent: leerOrigen(a.origen) }));
-      if (a.provisional) m.push(el("span", { className: "marca", textContent: "provisional" }));
-      return m;
-    };
-    const cajaMarcas = el("div", { className: "marcas" }, ...marcas());
-    const propuesta = a.propuesta ? tarjetaPropuesta(a) : null;
-    const quitar = el("button", { type: "button", className: "quitar", textContent: "Quitar" });
-    quitar.addEventListener("click", () => { revision.alimentos.splice(i, 1); pintarRevision(); });
-    const respuesta = el("p", { className: "cabe", hidden: true });
-    const cuanto = el("button", { type: "button", className: "cuanto", textContent: "¿Cuánto me cabe?" });
-    cuanto.addEventListener("click", async () => {
-      await simularRevision();
-      const c = caben.find((x) => x.nombre === a.nombre);
-      respuesta.textContent = c ? mayuscula(c.texto) : "Pon la cantidad y las kcal para saberlo.";
-      respuesta.hidden = false;
-    });
-    const conversiones = {
-      nombre: (v) => v.trim(), cantidad: comoNumero, unidad: (v) => v.trim() || null, kcal: comoNumero, dia: (v) => v,
-    };
-    const numerico = { step: "any", min: "0", inputMode: "decimal" };
-    const actualizar = () => { cajaMarcas.replaceChildren(...marcas()); pintarBloqueo(); programarSimulacion(); };
-    const nombre = campo("Alimento", a.nombre, "text", repintar(aplicar("nombre", conversiones.nombre)));
-    // unit 019: the name is the search box; what is chosen keeps its kcal (shown here, worked out on the server)
-    const lista = buscador({ entrada: nombre.entrada, alElegir: ({ tipo, cosa }) => elegirEnRevision(a, tipo, cosa) });
-    const cosa = esElegido(a) ? cosaGuardada(a.guardado) : null;
-    let campos;
-    let cajaCuanto;
-    let por100 = null;
-    if (cosa) {
-      nombre.entrada.readOnly = true;
-      campos = { nombre, dia: campo("Día", a.dia, "date", repintar(aplicar("dia"))) };
-      const caja = cajaElegida({
-        tipo: a.guardado.tipo, cosa, cantidad: a.cantidad, unidad: a.unidad,
-        alCambiar: (c) => { Object.assign(a, { cantidad: c.cantidad, unidad: c.unidad, kcal: c.kcal, provisional: c.provisional }); actualizar(); },
-        alSoltar: () => {
-          for (const leer of lectores) leer();
-          lectores = [];
-          Object.assign(a, { guardado: null, origen: null, provisional: false });
-          pintarRevision();
-        },
-      });
-      cajaCuanto = caja.caja;
-    } else {
-      campos = {
-        nombre,
-        cantidad: campo("Cantidad", a.cantidad, "number", repintar(aplicar("cantidad", comoNumero)), numerico),
-        unidad: campo("Unidad", a.unidad, "text", repintar(aplicar("unidad", conversiones.unidad))),
-        kcal: campo("kcal", a.kcal, "number", repintar(aplicar("kcal", comoNumero)), numerico),
-        dia: campo("Día", a.dia, "date", repintar(aplicar("dia"))),
-      };
-      // unit 013 (R-56): kcal/100 g, kept per food while the review lives (never sent, never saved)
-      por100 = kcalPor100(porCien.get(a) ?? null, (k) => {
-        campos.kcal.entrada.value = String(k);
-        aplicar("kcal", comoNumero)(campos.kcal.entrada.value);
-        actualizar();
-      }, (v) => { if (v === null) porCien.delete(a); else porCien.set(a, v); });
-      cajaCuanto = el("div", { className: "cuanto" }, el("div", { className: "fila" }, campos.cantidad, campos.unidad, campos.kcal), por100.caja);
-    }
-    // Typing keeps the model, the marks and the block reason current without repainting the cards.
-    for (const [clave, c] of Object.entries(campos)) {
-      c.entrada.addEventListener("input", () => {
-        if (c.entrada.readOnly) return;
-        aplicar(clave, conversiones[clave])(c.entrada.value);
-        if (por100 && (clave === "cantidad" || clave === "unidad")) por100.cambiar(a.cantidad, a.unidad);
-        actualizar();
-      });
-    }
-    if (por100) por100.cambiar(a.cantidad, a.unidad);
-    // R9: on "Confirmar", what is in the inputs at that moment is what gets saved.
-    lectores.push(() => {
-      for (const [clave, c] of Object.entries(campos)) aplicar(clave, conversiones[clave])(c.entrada.value);
-    });
-    return el("article", { className: a.dudoso ? "tarjeta dudosa" : (a.anadida ? "tarjeta nueva" : "tarjeta") },
-      cajaMarcas,
-      propuesta,
-      campos.nombre,
-      lista,
-      cajaCuanto,
-      campos.dia,
-      a.supuestos.length && !a.propuesta ? el("p", { className: "supuestos", textContent: `Supuestos: ${a.supuestos.join("; ")}` }) : null,
-      el("div", { className: "acciones" }, cuanto, quitar), respuesta,
-    );
-  });
-  $("lista").replaceChildren(...tarjetas);
-  $("piezas").replaceChildren(...tarjetasPiezas());
-  pintarCambios($("cambios"), revision.cambios, { api, alHecho: cambioHecho, alDecidir: cambioDecidido });
-  // unit 021: with only changes (or once the pieces are saved) there is nothing for «Confirmar y guardar»
-  const soloCambios = revision.conCambios && !hayPiezas();
-  $("revision-piezas").hidden = soloCambios;
-  pintarBloqueo();
-  if (soloCambios) $("bloqueo").hidden = true;
-  programarSimulacion();
-}
-
-// -- unit 021: the assistant's cards in the review -----------------------------------------------------------------
-
-const hayPiezas = () => Boolean(revision && (revision.alimentos.length || revision.peso || revision.objetivo || revision.dudosas.length));
-
-function sinPiezas() {
-  Object.assign(revision, { alimentos: [], peso: null, objetivo: null, dudosas: [] });
-  revision.original = huella(revision);
-}
-
-// «Hecho» with today's margin, and the day and Hoy painted again (R-65)
-function cambioHecho(datos) {
-  mensaje(datos.hecho, "bien");
-  if (diaVisto === datos.dia.fecha) pintarDia(datos.dia);
-  else cargarDia(diaVisto);
-  if (pestanaActual() === "hoy") cargarHoy();
-}
-
-// A card was decided: with nothing else left to decide the review closes (and its list of the queue goes)
-async function cambioDecidido() {
-  if (!revision) return;
-  if (revision.cambios.length || hayPiezas()) { pintarRevision(); return; }
-  const origen = revision.origen;
-  revision = null;
-  pintarRevision();
-  if (origen) { await cola.borrarLista(origen); await abrirSiguienteLista(); }
-}
-
-// Unit 019 (R5): a saved recipe or ingredient chosen on a review card. What is typed in the other cards is kept;
-// this card's quantity stays only if it fits what was chosen (grams of a weighed recipe, the unit of an ingredient).
-function elegirEnRevision(a, tipo, cosa) {
-  for (const leer of lectores) leer();
-  lectores = []; // …and this card's old inputs are not read back over the choice
-  const propia = tipo === "fijo" ? unidadPropia(cosa) : "g";
-  const sirve = a.cantidad > 0 && a.unidad === propia && (tipo === "fijo" || !cuenta(tipo, cosa, a.cantidad, "g").problema);
-  const c = sirve ? cuenta(tipo, cosa, a.cantidad, propia) : null;
-  Object.assign(a, {
-    nombre: cosa.nombre, guardado: { tipo, id: cosa.id }, cantidad: sirve ? a.cantidad : null, unidad: sirve ? propia : null,
-    kcal: c ? c.kcal : null, estimado: false, dudoso: false, supuestos: [], propuesta: null, kcal_estimada: null,
-    coincidencia: null, origen: origenDe(tipo, cosa), provisional: c ? c.provisional : false,
-    proteina_g: null, hidratos_g: null, grasa_g: null,
-  });
-  pintarRevision();
-  const tarjeta = $("lista").children[revision.alimentos.indexOf(a)];
-  const foco = tarjeta && tarjeta.querySelector(".elegida input, .elegida button.fraccion");
-  if (foco) foco.focus();
-}
-
-// Unit 011 (R4): «you said X: I propose your recipe Y», and the way back to Claude's estimate.
-function tarjetaPropuesta(a) {
-  const usar = el("button", { type: "button", className: "cambiar", textContent: "Usar estimación" });
-  usar.addEventListener("click", () => {
-    for (const leer of lectores) leer(); // keep what is typed in the other cards…
-    lectores = []; // …and do not read this card's inputs back over the estimate
-    Object.assign(a, { nombre: a.propuesta.dicho, kcal: a.kcal_estimada, estimado: true, origen: null, provisional: false,
-      propuesta: null, kcal_estimada: null, supuestos: [], guardado: null, coincidencia: null });
-    pintarRevision();
-  });
-  return el("div", { className: "propuesta" },
-    el("p", { textContent: `Has dicho «${a.propuesta.dicho}»: te propongo «${a.propuesta.guardado}». ¿No es eso?` }), usar);
-}
-
-// Cards of the other pieces: weight (numeric keyboard), objective of the day, doubtful phrases.
-function tarjetaPieza(titulo, clase, ...hijos) {
-  return el("article", { className: `tarjeta ${clase}` }, el("p", { className: "titulo-pieza", textContent: titulo }), ...hijos);
-}
-
-function botonQuitar(alQuitar) {
-  const quitar = el("button", { type: "button", className: "quitar", textContent: "Quitar" });
-  quitar.addEventListener("click", () => { alQuitar(); pintarRevision(); });
-  return quitar;
-}
-
-// Inputs that copy what is typed into `modelo[clave]` on input and before confirming (R9 of 002).
-function enlazar(modelo, campos, conversiones) {
-  const leer = () => { for (const [clave, c] of Object.entries(campos)) modelo[clave] = conversiones[clave](c.entrada.value); };
-  for (const c of Object.values(campos)) c.entrada.addEventListener("input", () => { leer(); pintarBloqueo(); });
-  lectores.push(leer);
-}
-
-const comoTexto = (v) => v.trim() || null;
 const comoNiveles = (v) => (v.trim() === "" ? null : v.split(/[;\s]+|,(?=\s)|,$/).filter(Boolean).map((n) => comoNumero(n.replace("−", "-"))));
 const textoNiveles = (n) => (n ? n.map((x) => numero.format(x)).join("; ") : "");
 
-function tarjetasPiezas() {
-  const tarjetas = [];
-  const p = revision.peso;
-  if (p) {
-    const campos = {
-      kg: campo("Peso (kg)", p.kg, "text", null, { inputMode: "decimal", autocomplete: "off" }),
-      dia: campo("Día", p.dia, "date"),
-      nota: campo("Nota", p.nota, "text"),
-    };
-    campos.kg.entrada.value = p.kg === null || Number.isNaN(p.kg) ? "" : kilos.format(p.kg);
-    enlazar(p, campos, { kg: comoNumero, dia: (v) => v, nota: comoTexto });
-    const marcas = p.dia !== revision.hoy ? [el("span", { className: "marca", textContent: deFecha(p.dia) })] : [];
-    tarjetas.push(tarjetaPieza("Peso del día", "pieza peso",
-      el("div", { className: "marcas" }, ...marcas),
-      el("div", { className: "fila dos" }, campos.kg, campos.dia), campos.nota,
-      botonQuitar(() => { revision.peso = null; })));
-  }
-  const o = revision.objetivo;
-  if (o) {
-    const campos = {
-      tipo: campo("Tipo de día", o.tipo, "text"),
-      porcentaje: campo("% objetivo (con signo)", o.porcentaje, "text", null, { inputMode: "decimal" }),
-      niveles: campo("Niveles (%; separa con ;)", textoNiveles(o.niveles), "text"),
-      pasos: campo("Pasos previstos", o.pasos, "number", null, { inputMode: "numeric", min: "0", step: "1" }),
-      entreno: campo("Entreno previsto (aún no suma kcal)", o.entreno, "text"),
-    };
-    conSigno(campos.porcentaje.entrada);
-    enlazar(o, campos, { tipo: comoTexto, porcentaje: (v) => comoNumero(v.replace("−", "-")), niveles: comoNiveles, pasos: comoNumero, entreno: comoTexto });
-    tarjetas.push(tarjetaPieza("Objetivo del día", "pieza objetivo",
-      el("div", { className: "fila dos" }, campos.tipo, campos.porcentaje),
-      el("div", { className: "fila dos" }, campos.niveles, campos.pasos), campos.entreno,
-      botonQuitar(() => { revision.objetivo = null; })));
-  }
-  revision.dudosas.forEach((frase, i) => {
-    tarjetas.push(tarjetaPieza("No sé dónde ponerlo", "dudosa",
-      el("span", { className: "marca alerta", textContent: "dudoso: quítalo para poder confirmar" }),
-      el("p", { className: "frase", textContent: `«${frase}»` }),
-      botonQuitar(() => { revision.dudosas.splice(i, 1); })));
-  });
-  return tarjetas;
-}
-
-function motivoBloqueo() {
-  const lista = revision.alimentos;
-  const nombres = (filtro) => lista.filter(filtro).map((a) => `«${a.nombre}»`);
-  const dudosos = nombres((a) => a.dudoso);
-  const sinKcal = nombres((a) => !a.dudoso && a.nombre && a.cantidad !== null && a.kcal === null);
-  const malos = nombres((a) => a.nombre && ((a.cantidad !== null && !(a.cantidad > 0)) || Number.isNaN(a.kcal) || !a.dia));
-  const sinCuanto = nombres((a) => esElegido(a) && !(a.cantidad > 0)); // unit 019: chosen, only how much is missing
-  const { peso, objetivo, dudosas } = revision;
-  if (dudosas.length) return `No sé dónde poner ${dudosas.map((d) => `«${d}»`).join(", ")}: quítalo para poder confirmar.`;
-  if (!lista.length && !peso && !objetivo) return "No queda nada que guardar.";
-  if (peso && (peso.kg === null || Number.isNaN(peso.kg) || peso.kg < PESO_MIN || peso.kg > PESO_MAX)) return `El peso tiene que estar entre ${PESO_MIN} y ${PESO_MAX} kg.`;
-  if (peso && !peso.dia) return "Pon el día del peso.";
-  if (peso && peso.dia > revision.hoy) return "El peso no puede ser de un día que aún no ha llegado.";
-  if (objetivo && Number.isNaN(objetivo.porcentaje)) return "El % del objetivo del día no es un número.";
-  if (objetivo && objetivo.niveles && objetivo.niveles.some((n) => Number.isNaN(n))) return "Algún nivel del día no es un número.";
-  if (objetivo && (Number.isNaN(objetivo.pasos) || (objetivo.pasos !== null && !Number.isInteger(objetivo.pasos)))) return "Los pasos previstos tienen que ser un número entero.";
-  if (!lista.length) return "";
-  if (lista.some((a) => !a.nombre)) return "Hay un alimento sin nombre: ponle nombre o quítalo para poder confirmar.";
-  if (dudosos.length) return `No entiendo ${dudosos.join(", ")}: corrígelo o quítalo para poder confirmar.`;
-  if (sinCuanto.length) return `Pon cuánto has cogido de ${sinCuanto.join(", ")}.`;
-  if (malos.length) return `Revisa la cantidad, las kcal o el día de ${malos.join(", ")}.`;
-  if (sinKcal.length) return `Pon las kcal de ${sinKcal.join(", ")}.`;
-  return "";
-}
-
-// The button only LOOKS disabled while something is missing: a tap still reads the cards (R9),
-// in case the last input never told the page what was typed, and then says what is missing.
-function pintarBloqueo() {
-  const motivo = motivoBloqueo();
-  $("bloqueo").textContent = motivo;
-  $("bloqueo").hidden = !motivo;
-  $("confirmar").classList.toggle("bloqueado", Boolean(motivo));
-  // it stays operable (a tap reads the cards and says what is missing): the reason describes it
-  if (motivo) $("confirmar").setAttribute("aria-describedby", "bloqueo");
-  else $("confirmar").removeAttribute("aria-describedby");
-}
-
-function anadirTarjeta() {
-  revision.alimentos.push(tarjetaVacia());
-  pintarRevision();
-  const nombres = $("lista").querySelectorAll("article:last-child input[type=text]");
-  if (nombres.length) nombres[0].focus();
-}
-
-async function interpretar(evento) {
-  evento.preventDefault();
-  const texto = $("texto").value;
-  if (!texto.trim()) return;
-  if (pestanaActual() === "asistente" && enConversacion()) { // unit 032 (S-37): the box of the chat
-    if (enviarAlChat(texto.trim())) { $("texto").value = ""; $("texto").dispatchEvent(new Event("input")); }
-    return;
-  }
-  irAPestanaHoy(); // the review lives in Hoy
-  $("enviar").disabled = true;
-  mensaje("Interpretando…");
-  // unit 016 (R2): the text of a list of the queue is interpreted with the day it was recorded
-  const fecha = textoDeLista ? textoDeLista.fecha : null;
-  const { ok, datos } = await api("/api/interpretar", fecha ? { texto, fecha } : { texto });
-  $("enviar").disabled = false;
-  if (!ok) { // the written text stays in the box (R10)
-    mensaje(datos.error ?? "No he podido interpretar lo que has escrito. Inténtalo de nuevo.", "error");
-    return;
-  }
-  mensaje("");
-  revision = {
-    texto, hoy: fecha ?? hoyISO, alimentos: datos.alimentos, peso: datos.peso ?? null,
-    objetivo: datos.objetivo_dia ?? null, dudosas: datos.dudosas ?? [], cambios: datos.cambios ?? [],
-  };
-  revision.conCambios = revision.cambios.length > 0;
-  if (textoDeLista) { // a dictated list Claude could not interpret: it is closed with this review
-    revision.origen = textoDeLista.id;
-    revision.dicho = textoDeLista.texto;
-    textoDeLista = null;
-  }
-  revision.original = huella(revision);
-  $("confirmar").disabled = false; // a new review starts usable, also after an earlier confirmation
-  pintarRevision();
-  verRevision();
-}
-
-// The review sits in Hoy between the card and the list; the screen scrolls to it.
-function verRevision() {
-  $("revision").scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-// What was interpreted, to tell later whether Andrés changed anything before confirming.
-const huella = (r) => JSON.stringify([r.alimentos, r.peso, r.objetivo, r.dudosas]);
-
-async function confirmar() {
-  for (const leer of lectores) leer();
-  if (motivoBloqueo()) { pintarRevision(); return; }
-  $("confirmar").disabled = true;
-  const alimentos = revision.alimentos.map(({ anadida, ...a }) => a);
-  const { ok, datos } = await api("/api/confirmar", {
-    texto: revision.texto, dia: revision.hoy, alimentos, peso: revision.peso, objetivo_dia: revision.objetivo,
-    dudosas: revision.dudosas, sin_cambios: huella(revision) === revision.original,
-  });
-  if (!ok) {
-    mensaje(datos.error ?? "No se ha podido guardar.", "error");
-    $("confirmar").disabled = false;
-    return;
-  }
-  const partes = ["Guardado."];
-  if (datos.peso) partes.push(`Peso ${kilos.format(datos.peso.kg)} kg (${nombreDelDia(datos.peso.dia).toLowerCase()}).`);
-  if (datos.objetivo_dia) partes.push(`Objetivo del día: ${datos.objetivo_dia.tipo ?? "guardado"}.`);
-  const planeados = datos.guardados.filter((a) => a.estado === "planeado");
-  if (planeados.length) partes.push(`Planeado: ${planeados.map((a) => `${a.nombre} (${deFecha(a.dia)})`).join(", ")}.`);
-  const pendientes = datos.guardados.filter((a) => a.pendiente_cantidad);
-  if (pendientes.length) partes.push(`Falta la cantidad de ${pendientes.map((a) => a.nombre).join(", ")}: no suma.`);
-  mensaje(partes.join(" "), "bien");
-  const origen = revision.origen;
-  if (!origen || $("texto").value === revision.dicho) $("texto").value = "";
-  if (revision.cambios.length) { // unit 021 (R-72): the pieces are saved, the cards keep waiting
-    sinPiezas();
-    revision.origen = null; // its list of the queue is saved: it goes, so the foods are never saved twice
-    if (origen) await cola.borrarLista(origen);
-    $("confirmar").disabled = false;
-    pintarRevision();
-    if (diaVisto === datos.dia.fecha) pintarDia(datos.dia);
-    else cargarDia(diaVisto);
-    if (pestanaActual() === "hoy") cargarHoy();
-    return;
-  }
-  revision = null;
-  pintarRevision();
-  if (diaVisto === datos.dia.fecha) pintarDia(datos.dia);
-  else cargarDia(diaVisto); // the screen stays on the day being looked at (R6)
-  if (pestanaActual() === "hoy") cargarHoy(); // unit 030 (R8): confirmed from Hoy, its cards are refreshed
-  if (origen) { await cola.borrarLista(origen); if (await abrirSiguienteLista()) return; }
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-$("entrada").addEventListener("submit", interpretar);
-$("confirmar").addEventListener("click", confirmar);
-$("descartar").addEventListener("click", descartar);
-$("descarte-no").addEventListener("click", () => preguntarDescarte(false));
-$("descarte-si").addEventListener("click", async () => {
-  const origen = revision && revision.origen;
-  preguntarDescarte(false);
-  if (revision && revision.cambios.length) { // unit 021: the list goes, the cards keep waiting
-    sinPiezas();
-    revision.origen = null;
-    pintarRevision();
-    mensaje("Lista descartada: no se ha guardado nada. Los cambios siguen esperando.");
-    if (origen) await cola.borrarLista(origen);
-    return;
-  }
-  revision = null;
-  pintarRevision();
-  mensaje("Lista descartada: no se ha guardado nada.");
-  if (origen) { await cola.borrarLista(origen); await abrirSiguienteLista(); }
-});
-$("revisar").addEventListener("click", () => abrirSiguienteLista());
-$("grabar").addEventListener("click", alternarGrabacion);
-$("anadir-revision").addEventListener("click", anadirTarjeta);
 $("cerrar-dia").addEventListener("click", cerrarDia);
 $("anadir").addEventListener("click", () => { anadiendo = true; editando = null; mensaje(""); pintarDia(ultimoDia); });
 $("anterior").addEventListener("click", () => irA(sumarDias(diaVisto, -1)));
@@ -1581,14 +1108,14 @@ enlazarHoja();
 iniciarHoy({ api, alActualizarDia: (dia) => { if (diaVisto === dia.fecha) pintarDia(dia); } });
 iniciarFitness({ api }); // unit 031: the Fitness tab
 iniciarPlan({ api }); // unit 040: Fitness › Plan
-iniciarConversaciones({ api, alHecho: (datos) => { if (datos.dia && diaVisto === datos.dia.fecha) pintarDia(datos.dia); } });
 enlazarPestanas();
 vigilarAltoEntrada();
-$("fecha").textContent = deFecha(cola.fechaLocal()); // before the PC answers, or if it never does
+$("fecha").textContent = deFecha(fechaLocal()); // before the PC answers, or if it never does
 cargarDia();
 document.addEventListener("visibilitychange", mirarElDia);
+// unit 080 (R-223): a weight changed in Balance (peso.js) repaints it, with the mean and the projection recomputed
+document.addEventListener("peso-cambiado", () => { if (pestanaActual() === "balance") pintarBalance($("balance-contenido"), irADia); });
 setInterval(mirarElDia, MINUTO_MS);
-cola.iniciar(alCambiarCola);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 
 // -- unit 010: the sheet and the tabs ----------------------------------------------------
@@ -1603,7 +1130,7 @@ function enlazarHoja() {
 
 function pestanaActual() {
   if (location.hash === "#peso") history.replaceState(null, "", "#balance"); // unit 027: an old bookmark
-  const h = location.hash.slice(1).split("/")[0]; // unit 032: «#asistente/N» is a conversation of Asistente
+  const h = location.hash.slice(1).split("/")[0]; // «#fitness/plan» is a part of Fitness
   if (!h) return "hoy"; // unit 030 (R1): the app opens in Hoy
   return SITIOS.includes(h) ? h : "dia"; // unit 029 (R6): an address that does not exist opens Nutrición › Día
 }
@@ -1616,24 +1143,11 @@ function direccionDeAntes() {
   if (deLaBarra || !location.hash) history.replaceState(null, "", "/#hoy");
 }
 
-// Unit 030 (R8): the message, the recordings queue and the review live where the box is used: in Hoy while it
-// shows, else in Nutrición › Día between its card and its list (where they always were).
-function colocarDictado(actual) {
-  const bloque = [$("mensaje"), $("cola"), $("revision")];
-  if (actual === "hoy") $("hoy-dictado").append(...bloque);
-  else if ($("revision").parentElement !== $("dia")) $("t-comido").before(...bloque);
-}
-
 // Unit 017: from Balance, a day opens in Nutrición › Día (its list of foods, its margin).
 function irADia(fecha) {
   diaPedido = fecha;
   if (pestanaActual() === "dia") mostrarPestana();
   else location.hash = "dia";
-}
-
-// The review is shown where the box is: Hoy or Nutrición › Día (unit 030); from anywhere else, in Día.
-function irAPestanaHoy() {
-  if (!["dia", "hoy"].includes(pestanaActual())) location.hash = "dia";
 }
 
 function mostrarPestana() {
@@ -1650,17 +1164,8 @@ function mostrarPestana() {
     if (a.dataset.parte === actual) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
-  // unit 029 (S-16) and unit 030 (R8): the box and the microphone only where the day is logged: Día and Hoy;
-  // unit 032 (S-37): and inside a conversation, where they are the chat's
-  const chat = actual === "asistente" && enConversacion();
-  $("entrada").hidden = actual !== "dia" && actual !== "hoy" && !chat;
-  $("pensar").hidden = !chat;
-  $("texto").placeholder = chat ? "Escribe o dicta tu pregunta" : "Comida, «peso 72,4», «nuevo día…» o un cambio";
-  $("grabar").setAttribute("aria-label", chat ? "Dictar tu pregunta" : "Grabar lo que has comido");
-  colocarDictado(actual);
   if (actual === "hoy" && pestanaVista !== "hoy") cargarHoy();
   if (actual === "fitness") mostrarFitness(); // unit 031 and unit 040: the part of Fitness, painted on entering it
-  if (actual === "asistente") mostrarAsistente(); // unit 032: the list or a conversation, every time
   if ($("hoja").open) $("hoja").close();
   if (actual === "dia") document.title = `TriData · ${diaVisto ? nombreDelDia(diaVisto) : "Hoy"}`;
   else document.title = `TriData · ${mayuscula(actual)}`;
@@ -1702,135 +1207,7 @@ function enlazarPestanas() {
   mostrarPestana();
 }
 
-// -- unit 006: dictation and the recordings queue ---------------------------------
-
-const reloj = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`;
-const horaCorta = new Intl.DateTimeFormat("es-ES", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
-
-async function alternarGrabacion() {
-  if (grabacion) { grabacion.parar(); return; }
-  if (!puedeGrabar()) { mensaje("Este navegador no puede grabar audio.", "error"); return; }
-  const boton = $("grabar");
-  const tiempo = $("grabar-tiempo");
-  const alChat = pestanaActual() === "asistente" && enConversacion(); // unit 032: dictating a question
-  try {
-    grabacion = await grabar({
-      alSegundo: (s) => { tiempo.textContent = reloj(s); tiempo.hidden = false; },
-      alTerminar: async ({ audio, tipo, segundos }) => {
-        grabacion = null;
-        tiempo.hidden = true;
-        boton.setAttribute("aria-label", alChat ? "Dictar tu pregunta" : "Grabar lo que has comido");
-        boton.classList.remove("grabando");
-        if (alChat) { await dictarAlChat(audio, tipo); return; } // transcribed into the box, never interpreted
-        if (segundos >= MAX_SEGUNDOS) mensaje("La grabación ha llegado a 2 minutos y ha parado sola.");
-        try {
-          esperada = await cola.guardarGrabacion(audio, tipo);
-          if (conectado !== false) mensaje("Grabación guardada en el móvil. Enviándola al PC…");
-        } catch {
-          mensaje("No se ha podido guardar la grabación en el móvil.", "error");
-        }
-      },
-    });
-    boton.classList.add("grabando");
-    boton.setAttribute("aria-label", "Parar la grabación");
-    if (!alChat) mensaje("Grabando… toca el micrófono otra vez al acabar (como mucho 2 minutos).");
-  } catch (error) {
-    grabacion = null;
-    const sinPermiso = error && (error.name === "NotAllowedError" || error.name === "SecurityError");
-    mensaje(sinPermiso ? "Sin permiso para el micrófono: dáselo a esta web en los ajustes de Safari." : "No se ha podido usar el micrófono.", "error");
-  }
-}
-
-// The notices of the queue: recordings not sent, not transcribable ones, lists to review.
-async function alCambiarCola({ conexion }) {
-  if (conexion !== null) ponerConexion(conexion);
-  if (conexion === false) esperada = null; // it will come back later: it waits with the others
-  const e = await cola.estado();
-  $("sin-enviar").textContent = e.sinEnviar ? `${plural(e.sinEnviar, "grabación sin enviar", "grabaciones sin enviar")}: se enviarán solas cuando el PC responda.` : "";
-  $("sin-enviar").hidden = !e.sinEnviar;
-  $("no-transcritas").replaceChildren(...e.noTranscribibles.map(tarjetaNoTranscrita));
-  const abierta = revision && revision.origen;
-  const quedan = e.listas.filter((l) => l.id !== abierta && (!textoDeLista || l.id !== textoDeLista.id));
-  $("pendientes").hidden = !quedan.length;
-  $("pendientes-texto").textContent = plural(quedan.length, "lista pendiente de revisar", "listas pendientes de revisar");
-  if (esperada && !revision && !textoDeLista) {
-    if (e.listas.some((l) => l.id === esperada)) { mensaje(""); await abrirLista(esperada); }
-    else {
-      const fallida = e.noTranscribibles.find((g) => g.id === esperada);
-      if (fallida) { esperada = null; mensaje(fallida.error || "No se ha podido transcribir la grabación.", "error"); }
-    }
-  }
-}
-
-function tarjetaNoTranscrita(g) {
-  const quitar = el("button", { type: "button", className: "peligro", textContent: "Descartar" });
-  const si = el("button", { type: "button", className: "peligro principal", textContent: "Sí, descartar" });
-  const no = el("button", { type: "button", textContent: "No" });
-  const pregunta = el("div", { className: "acciones", hidden: true }, si, no);
-  quitar.addEventListener("click", () => { pregunta.hidden = false; quitar.hidden = true; });
-  no.addEventListener("click", () => { pregunta.hidden = true; quitar.hidden = false; });
-  si.addEventListener("click", () => cola.borrarGrabacion(g.id));
-  return el("article", { className: "tarjeta dudosa" },
-    el("p", { className: "fuerte", textContent: `Grabación del ${horaCorta.format(new Date(g.creada))}: no se ha podido transcribir.` }),
-    el("p", { className: "suave", textContent: g.error || "" }),
-    quitar, pregunta);
-}
-
-// Opens the oldest list waiting (or `id`) in the usual review. A list Claude could not interpret
-// puts its text in the box, to tap «Interpretar». False if there is none.
-async function abrirSiguienteLista() {
-  const { listas } = await cola.estado();
-  if (!listas.length) return false;
-  await abrirLista(listas[0].id);
-  return true;
-}
-
-async function abrirLista(id) {
-  const lista = (await cola.estado()).listas.find((l) => l.id === id);
-  if (!lista) return;
-  if (esperada === id) esperada = null;
-  if (revision && revision.origen === id) return;
-  if (!lista.interpretacion) {
-    textoDeLista = { id: lista.id, texto: lista.texto, fecha: lista.fecha };
-    irAPestanaHoy();
-    revision = null;
-    pintarRevision();
-    $("texto").value = lista.texto;
-    mensaje(`Has dicho: «${lista.texto}». El PC no pudo interpretarlo: revisa el texto y pulsa «Interpretar».`, "error");
-    $("texto").focus();
-    await alCambiarCola({ conexion: null });
-    return;
-  }
-  const i = lista.interpretacion;
-  revision = {
-    texto: lista.texto, hoy: lista.fecha, alimentos: i.alimentos, peso: i.peso ?? null,
-    objetivo: i.objetivo_dia ?? null, dudosas: i.dudosas ?? [], origen: lista.id, dicho: lista.texto,
-    cambios: i.cambios ?? [], // unit 021 (R-73): a change dictated without PC waits here with its list
-  };
-  revision.conCambios = revision.cambios.length > 0;
-  revision.original = huella(revision);
-  $("confirmar").disabled = false;
-  irAPestanaHoy();
-  pintarRevision();
-  await alCambiarCola({ conexion: null });
-  verRevision();
-}
-
-function preguntarDescarte(abierta) {
-  $("confirmar-descarte").hidden = !abierta;
-  $("confirmar").parentElement.hidden = abierta;
-}
-
-function descartar() {
-  if (!revision) return;
-  $("confirmar-descarte").querySelector("p").textContent = revision.origen
-    ? "¿Descartar esta lista? Lo que dijiste no se guardará." : "¿Descartar esta lista? No se guardará nada.";
-  preguntarDescarte(true);
-  $("descarte-si").focus();
-}
-
-// The fixed box and tabs at the bottom never cover the end of the page: <main> leaves their height free.
+// The fixed tabs at the bottom never cover the end of the page: <main> leaves their height free.
 function vigilarAltoEntrada() {
   const poner = () => document.documentElement.style.setProperty("--alto-abajo", `${$("abajo").offsetHeight}px`);
   poner();

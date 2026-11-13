@@ -1,4 +1,4 @@
-"""Unit 030: GET /api/hoy (the four cards in one answer) and «Actualizar Garmin» from Hoy, with the routine's lock.
+"""Unit 030: GET /api/hoy (the cards in one answer; three since unit 080, without the Asistente's) and «Actualizar Garmin» from Hoy, with the routine's lock.
 
 Plans `ver-dia-movil` REC-18: R-97, R-99..R-103 · C-138, C-140..C-144 · G-48. R1, R3, R4, R5, R7, R8 and R9 of
 the unit. `actualizar_garmin` is a `MagicMock`: Garmin is never called. Every value is invented.
@@ -66,7 +66,7 @@ def test_api_hoy_las_cuatro_tarjetas(entorno):  # R1, R3, R9 · C-138, C-140
     hoy = entorno.cliente.get("/api/hoy")
     assert hoy.status_code == 200
     h = hoy.json()
-    assert set(h) >= {"fecha", "comida", "entreno", "como_llegas", "garmin_sync", "asistente"}
+    assert set(h) >= {"fecha", "comida", "entreno", "como_llegas", "garmin_sync"}
     assert h["fecha"] == HOY.isoformat()
 
     dia = entorno.cliente.get("/api/dia").json()  # the same figures as Nutrición › Día
@@ -86,7 +86,7 @@ def test_api_hoy_las_cuatro_tarjetas(entorno):  # R1, R3, R9 · C-138, C-140
 
     assert h["garmin_sync"]["ok_en"] == "2026-10-21T09:05:00"
     assert h["garmin_sync"]["texto_hora"] == "Garmin: sincronizado a las 9:05"
-    assert h["asistente"] is None  # R9: the last answer arrives with unit 032
+    assert "asistente" not in h  # unit 080 (S-27): no card of the Asistente
 
 
 def test_api_hoy_sin_nada(entorno):  # R1, R3, R6, R9 · G-47
@@ -95,7 +95,7 @@ def test_api_hoy_sin_nada(entorno):  # R1, R3, R6, R9 · G-47
     assert h["comida"]["total_kcal"] == 0  # nothing eaten is a real 0 (of food), not a Garmin datum
     assert all(v["estado"] == "no_ha_llegado" for v in h["como_llegas"].values())
     assert h["garmin_sync"]["texto_hora"] == "Garmin: aún no se ha sincronizado"
-    assert h["asistente"] is None
+    assert "asistente" not in h
 
 
 def test_api_hoy_sin_ajustes_es_409(tmp_path):  # R1: without basal the day cannot be computed, as /api/dia
@@ -170,8 +170,9 @@ def test_el_boton_coge_el_cerrojo_de_la_rutina(entorno):  # R7 · G-48: the rout
 
 def test_la_pagina_tiene_las_tarjetas_y_hoy_js(entorno):  # R1 · R8
     html = entorno.cliente.get("/").text
-    for ident in ("hoy-comida", "hoy-entreno", "hoy-como-llegas", "hoy-asistente", "hoy-actualizar"):
+    for ident in ("hoy-comida", "hoy-entreno", "hoy-como-llegas", "hoy-actualizar"):
         assert f'id="{ident}"' in html, ident
+    assert 'id="hoy-asistente"' not in html  # unit 080
     assert "Muy pronto, aquí: el resumen de tu día." not in html
     assert entorno.cliente.get("/static/hoy.js").status_code == 200
     assert 'from "./hoy.js"' in (ESTATICOS / "app.js").read_text(encoding="utf-8")

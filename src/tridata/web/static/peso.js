@@ -2,7 +2,11 @@
 // Plain ES module, no build step. It ALWAYS shows today (decided by Andrés on 2026-10-21): the weight of today,
 // its 7-day mean, the basal and the projection come from /api/dia without a date, and the weights of the 30 days
 // that end today from /api/peso without `hasta`. It never follows the day looked at in Hoy.
-// The server does every sum; this only draws. Weights are logged by saying or writing «peso 72,4».
+// The server does every sum; this only draws.
+// Unit 080 (R-223, S-74): a new weight is said to the coach («peso 72,4»), never written here; one already written
+// down (today's, or one of «Últimos pesos») is changed with «Cambiar»: POST /api/peso/AAAA-MM-DD {kg}. «abc» or an
+// impossible weight is not saved and the server says why; a good one fires `peso-cambiado` on `document`, so the
+// Balance tab is painted again with the 7-day mean and the projection recomputed.
 // Unit 017: the basal is in whole kcal. Unit 027: the Peso tab is gone; its chart is the one of Balance
 // (grafica.js), so here only the card of today (with the weight goal) and «Últimos pesos» are left.
 
@@ -52,16 +56,64 @@ export async function cargarPeso() {
 
 function tarjetaHoy(hoy, delDia, pesos, p, objetivo) {
   const ejemplo = `«peso ${kilos.format(delDia ? delDia.kg : (pesos.at(-1)?.kg ?? 72.4))}»`;
-  let ayuda = `Para apuntarlo, di o escribe ${ejemplo}.`;
-  if (!pesos.length) ayuda = `Aún no hay pesos. Para apuntar el de hoy, di o escribe ${ejemplo}.`;
-  else if (!delDia) ayuda = `Aún no has apuntado el de hoy: di o escribe ${ejemplo}.`;
-  return el("article", { id: "peso-hoy", className: "tarjeta peso-hoy" },
+  let ayuda = "Si te has equivocado, cámbialo aquí.";
+  if (!pesos.length) ayuda = `Aún no hay pesos. Para apuntar el de hoy, díselo al coach: ${ejemplo}.`;
+  else if (!delDia) ayuda = `Aún no has apuntado el de hoy: díselo al coach, ${ejemplo}.`;
+  const tarjeta = el("article", { id: "peso-hoy", className: "tarjeta peso-hoy" },
     el("div", { id: "peso-cabecera", className: "suave fuerte", textContent: `Peso de hoy · ${sinComa(cabecera.format(comoFecha(hoy)))}` }),
     el("div", { className: "cifra num" }, el("span", { id: "peso-cifra", textContent: delDia ? kilos.format(delDia.kg) : "—" }),
       el("small", { textContent: " kg" })),
-    el("p", { className: "suave ayuda-peso", textContent: ayuda }),
-    datos(p),
-    lineaObjetivo(p, objetivo));
+    el("p", { className: "suave ayuda-peso", textContent: ayuda }));
+  if (delDia) tarjeta.append(botonCambiar(delDia, "peso-cambiar", "Cambiar el peso de hoy"));
+  tarjeta.append(datos(p), lineaObjetivo(p, objetivo));
+  return tarjeta;
+}
+
+// -- unit 080 (R-223): change a weight already written down ------------------------------------------------------
+
+// «Cambiar» opens, right after itself, the box to type the new value; only one box at a time.
+function botonCambiar(peso, id, etiqueta) {
+  const boton = el("button", { type: "button", className: "enlace-boton cambiar-peso", textContent: "Cambiar" });
+  if (id) boton.id = id;
+  boton.setAttribute("aria-label", etiqueta);
+  boton.addEventListener("click", () => {
+    document.querySelector(".editor-peso")?.remove();
+    boton.after(editorPeso(peso));
+  });
+  return boton;
+}
+
+function editorPeso(peso) {
+  const entrada = el("input", { type: "text", inputMode: "decimal", autocomplete: "off", value: kilos.format(peso.kg) });
+  const aviso = el("p", { className: "aviso", role: "alert", hidden: true });
+  const guardar = el("button", { type: "button", className: "principal", textContent: "Guardar" });
+  const cancelar = el("button", { type: "button", textContent: "Cancelar" });
+  const caja = el("div", { className: "editor-peso" },
+    el("label", { className: "campo" }, el("span", { textContent: `Peso del ${diaMes.format(comoFecha(peso.dia))} (kg)` }), entrada),
+    aviso, el("div", { className: "acciones" }, guardar, cancelar));
+  cancelar.addEventListener("click", () => caja.remove());
+  guardar.addEventListener("click", async () => {
+    guardar.disabled = true;
+    aviso.hidden = true;
+    let r = null;
+    let respuesta = {};
+    try {
+      r = await fetch(`/api/peso/${peso.dia}`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kg: entrada.value.trim() }) });
+      respuesta = await r.json().catch(() => ({}));
+    } catch { /* the PC is off */ }
+    guardar.disabled = false;
+    if (!r || !r.ok) {
+      aviso.textContent = r ? (respuesta.error ?? "No se ha podido cambiar el peso.") : "No hay conexión con el PC: no se ha cambiado nada.";
+      aviso.hidden = false;
+      entrada.focus();
+      return;
+    }
+    caja.remove();
+    document.dispatchEvent(new CustomEvent("peso-cambiado", { detail: respuesta.peso }));
+  });
+  setTimeout(() => { entrada.focus(); entrada.select(); }, 0);
+  return caja;
 }
 
 function datos(p) {
@@ -108,7 +160,9 @@ function ultimosDias(hoy, pesos) {
     if (atras === 1) return "Ayer";
     return mayuscula(semana.format(comoFecha(iso)));
   };
-  return el("article", { id: "peso-ultimos", className: "tarjeta lista" }, ...pesos.slice(-7).reverse().map((p) => el("div", { className: "fila" },
-    el("div", { className: "que" }, el("strong", { textContent: nombre(p.dia) }), p.nota ? el("span", { textContent: p.nota }) : null),
-    el("div", { className: "kcal num", textContent: `${kilos.format(p.kg)} kg` }))));
+  return el("article", { id: "peso-ultimos", className: "tarjeta lista" }, ...pesos.slice(-7).reverse().map((p) => el("div", { className: "fila-peso" },
+    el("div", { className: "fila" },
+      el("div", { className: "que" }, el("strong", { textContent: nombre(p.dia) }), p.nota ? el("span", { textContent: p.nota }) : null),
+      el("div", { className: "kcal num", textContent: `${kilos.format(p.kg)} kg` })),
+    botonCambiar(p, null, `Cambiar el peso de ${nombre(p.dia).toLowerCase()}`))));
 }

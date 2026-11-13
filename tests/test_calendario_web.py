@@ -22,10 +22,7 @@ from starlette.testclient import TestClient
 from test_calendario import AHORA, HOY, MARCADOR, SERIES, TOKEN, GoogleDoble, plan_inventado
 
 from tridata.calendario import NOMBRE, Calendario
-from tridata.ia import CambioInterpretado
-from tridata.nutricion import DESDE_SIEMPRE, Ajustes, ObjetivosDia, RegistroComidas, RegistroPeso
-from tridata.nutricion.asistente import Contexto, Peticion, proponer
-from tridata.nutricion.recetas import Recetario
+from tridata.nutricion import DESDE_SIEMPRE, Ajustes, ObjetivosDia, RegistroComidas
 from tridata.web import calendario as web_calendario
 from tridata.plan import Planes
 from tridata.web import crear_app
@@ -74,17 +71,6 @@ class Web:
     def pasadas_iniciadas(self) -> int:
         """How many passes have started: each one begins asking Google if «TriData» is still there."""
         return len([ll for ll in self.google.llamadas if ll[:2] == ("calendars", "get")])
-
-    def tarjeta_cambiar_series(self) -> dict:
-        """The card of the coach that changes the Wednesday's series, as /api/asistente/confirmar receives it."""
-        ctx = Contexto(registro=RegistroComidas(self.db), objetivos=ObjetivosDia(self.db), ajustes=self.ajustes,
-                       pesos=RegistroPeso(self.db), recetario=Recetario(self.db), hoy=lambda: HOY,
-                       planes=self.planes)
-        (tarjeta,) = proponer([CambioInterpretado(accion="plan_cambiar_sesion", dia=HOY.replace(day=28),
-                                                  texto="Series 3×10' | 20' suave | 3×10' a 4:00 | 10' suave")],
-                              ctx, Peticion(texto="texto de prueba", fecha=HOY))
-        assert tarjeta["tipo"] == "propuesta", tarjeta
-        return tarjeta
 
     def eventos(self) -> list[dict]:
         """The events of «TriData» in the doubled Google (none while it does not exist)."""
@@ -196,9 +182,15 @@ def _esperar(condicion, segundos: float = 5) -> None:
         time.sleep(0.02)
 
 
+def _cambiar_series_a_mano(web, plan_id):
+    """Unit 080: the Wednesday's series changed by hand in Fitness › Plan (the card of the app that did it is gone)."""
+    (sesion,) = [s for s in web.planes.sesiones_reloj(plan_id) if s["fecha"] == "2026-10-28"]
+    return web.cliente.post("/api/plan/sesion/cambiar", json={
+        "sesion": sesion["id"], "titulo": "Series 3×10'", "bloques": ["20' suave", "3×10' a 4:00", "10' suave"]})
+
+
 ACCIONES = {
-    "tarjeta": lambda web, plan_id: web.cliente.post("/api/asistente/confirmar",
-                                                     json={"tarjeta": web.tarjeta_cambiar_series()}),
+    "a_mano": _cambiar_series_a_mano,
     "carrera": lambda web, plan_id: web.cliente.post("/api/plan/carrera", json={
         "id": plan_id, "carrera": "Maratón inventado", "objetivo": "3:00"}),
     "garmin": lambda web, plan_id: web.cliente.post("/api/garmin/actualizar"),
@@ -221,7 +213,7 @@ def test_tras_cambiar_el_plan_el_calendario_se_actualiza_enseguida(tmp_path, acc
         _esperar(lambda: web.pasadas_iniciadas() > antes, segundos=5)  # a pass started, not in 10 minutes
         web.google.puerta.set()
         web.google.puerta = None
-        if accion == "tarjeta":
+        if accion == "a_mano":
             _esperar(lambda: [e["summary"] for e in web.eventos()] == ["🏃 Series 3×10'"])
 
 

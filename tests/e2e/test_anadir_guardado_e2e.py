@@ -17,7 +17,6 @@ pytest.importorskip("playwright", reason="E2E needs the `e2e` extra: python -m p
 
 from playwright.sync_api import expect  # noqa: E402
 
-from tridata.ia import AlimentoInterpretado, ListaInterpretada  # noqa: E402
 from tridata.nutricion import Alimento  # noqa: E402
 from tridata.nutricion.comunes import COMUNES  # noqa: E402
 from tridata.nutricion.recetas import Recetario  # noqa: E402
@@ -258,45 +257,8 @@ def test_ficha_del_porridge_entera_y_apuntar(servidor, abrir, capturar, oscuro, 
     expect(p.locator("#total")).to_have_text("500 kcal comidas")
 
 
-# -- R5: in the review · C-132 -------------------------------------------------------------------------------------
-
-def _unas_lentejas(texto: str, hoy: date) -> ListaInterpretada:
-    return ListaInterpretada(alimentos=[AlimentoInterpretado(
-        nombre="unas lentejas", cantidad=300, unidad="g", dia=hoy, kcal=350, proteina_g=None, hidratos_g=None,
-        grasa_g=None, estimado=True, dudoso=False, supuestos=["un plato"])])
-
-
-@pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
-def test_en_la_revision(servidor, abrir, capturar, oscuro):  # R5 · C-132
-    _guardado(servidor)
-    servidor.interprete.interpretar.side_effect = _unas_lentejas
-    sufijo = "-oscuro" if oscuro else ""
-    p = abrir(servidor, "/#dia", oscuro=oscuro)
-    expect(p.locator("#queda-cifra")).not_to_have_text("—")
-    p.locator("#texto").fill("unas lentejas")
-    p.locator("#enviar").click()
-    tarjeta = p.locator("#lista article").first
-    expect(tarjeta.locator(".marca", has_text="kcal estimadas")).to_be_visible()
-    nombre = tarjeta.get_by_role("combobox", name="Alimento")
-    nombre.fill("lent")
-    capturar(p, f"revision-buscador{sufijo}")
-    _opciones(tarjeta).filter(has_text="Lentejas de la abuela").click()
-    tarjeta = p.locator("#lista article").first
-    tarjeta.get_by_role("button", name="½").click()
-    tarjeta = p.locator("#lista article").first
-    expect(tarjeta.locator(".kcal-elegido")).to_have_text("1.000 kcal")
-    expect(tarjeta.locator(".marca", has_text="de tu receta «Lentejas de la abuela»")).to_be_visible()
-    expect(tarjeta.locator(".marca", has_text="kcal estimadas")).to_have_count(0)
-    expect(p.locator("#simulacion")).to_contain_text("1.000 kcal de hoy")  # the simulation with those kcal
-    tarjeta.get_by_role("button", name="¿Cuánto me cabe?").click()
-    expect(tarjeta.locator(".cabe")).to_be_visible()
-    _ergonomia(p, "revision-elegida" + sufijo)
-    capturar(p, f"revision-elegida{sufijo}", completa=True)
-    p.locator("#confirmar").click()
-    fila = p.locator("#lista-dia .fila", has_text="Lentejas de la abuela")
-    expect(fila.locator(".kcal")).to_have_text("1.000")
-    expect(fila).to_contain_text("½ receta")
-    expect(p.locator("#total")).to_have_text("2.000 kcal comidas")
+# -- R5: the review · C-132 -----------------------------------------------------------------------------------------
+# Unit 080 (S-6): the review of what was written or dictated is gone with the box (test_en_la_revision with it).
 
 
 # -- R6: the lines of a recipe · C-133 ------------------------------------------------------------------------------
@@ -388,16 +350,11 @@ def test_se_llaman_ingredientes(servidor, abrir, capturar, oscuro, ir_a):  # R8 
     servidor.registro.guardar([Alimento(
         nombre="dátiles de prueba", dia=HOY, cantidad=6, unidad="g", kcal=16.8,
         origen="de tu alimento fijo «dátiles de prueba»")], hoy=HOY, texto="dátiles", sin_cambios=True)
-    servidor.interprete.interpretar.side_effect = _unas_lentejas
     p = abrir(servidor, "/#dia", oscuro=oscuro)
     fila = p.locator("#lista-dia .fila", has_text="dátiles de prueba")
     expect(fila).to_contain_text("de tu ingrediente «dátiles de prueba»")
     expect(fila.locator(".kcal")).to_have_text("17")
     _sin_alimento_fijo(p, "hoy")
-    p.locator("#texto").fill("unas lentejas")
-    p.locator("#enviar").click()
-    expect(p.locator("#lista article")).to_have_count(1)
-    _sin_alimento_fijo(p, "revisión")
     p.goto(servidor.url + "/#recetas")
     apartado = p.locator("#apartado-fijos")
     expect(apartado).to_contain_text("Ingredientes")

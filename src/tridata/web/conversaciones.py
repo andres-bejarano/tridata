@@ -1,4 +1,12 @@
-"""The JSON routes of the Asistente's conversations (unit 032, REC-20), mounted by `crear_app` (as `web/recetas.py`).
+"""The JSON routes of the Asistente's conversations (unit 032, REC-20) and, since unit 080, «Lo que ha hecho el coach».
+
+Unit 080 (P-20261105-cf32bea5, S-5): `crear_app` mounts ONLY `rutas_coach` (below). The Asistente's routes of `rutas`
+call the API and are no longer mounted; they stay here, unreachable from the app, until the cleanup that removes the
+AI modules (the coach still uses `cambio_no_entendido`). What they answered, for that cleanup:
+
+    GET  /api/coach                             unit 080 (R-224, C-278, C-279): {cambios: the last 20 changes made
+                                                from the PC (messages of the conversation «Desde el PC»), newest
+                                                first, each {texto, hora, papel}}. Read only: any other method 405
 
     GET  /api/conversaciones                    {conversaciones: newest use first, each with its title, `usada` and
                                                 the beginning of its last message; tope: {dolares, gastado,
@@ -614,3 +622,26 @@ def rutas(conversaciones: Conversaciones, conversador: Any, medicos: Medicos, mo
         Route("/api/conversaciones/{id:int}/titulo", titulo, methods=["POST"]),
         Route("/api/conversaciones/{id:int}/borrar", borrar, methods=["POST"]),
     ]
+
+
+# -- unit 080 (R-224): «Lo que ha hecho el coach» ----------------------------------------------------------------------
+
+CAMBIOS_DEL_COACH = 20
+DESDE_EL_PC = "Desde el PC"  # the title of the conversation the coach writes in (`conversaciones.desde_pc.TITULO`)
+
+
+def lo_que_ha_hecho_el_coach(conversaciones: Conversaciones, cuantos: int = CAMBIOS_DEL_COACH) -> list[dict[str, Any]]:
+    """The last `cuantos` changes made from the PC (R-196: each one a message of the coach in «Desde el PC»), newest
+    first. Only reads."""
+    cambios = [{"texto": m["texto"], "hora": m["hora"], "papel": m["papel"], "id": m["id"]}
+               for c in conversaciones.lista() if c["titulo"] == DESDE_EL_PC
+               for m in conversaciones.mensajes(c["id"]) if m["quien"] == "asistente"]
+    cambios.sort(key=lambda m: (m["hora"], m["id"]), reverse=True)
+    return [{k: m[k] for k in ("texto", "hora", "papel")} for m in cambios[:cuantos]]
+
+
+def rutas_coach(conversaciones: Conversaciones) -> list[Route]:
+    async def ver(request: Request) -> Response:
+        return JSONResponse({"cambios": await run_in_threadpool(lo_que_ha_hecho_el_coach, conversaciones)})
+
+    return [Route("/api/coach", ver)]

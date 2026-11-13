@@ -253,8 +253,11 @@ class Planes:
         finally:
             conn.close()
 
-    def crear(self, datos: dict[str, Any], ahora: datetime) -> int:
-        """Saves a whole plan (`nombre`, `apartados` and its rows, as `leer` gives them) and returns its id."""
+    def crear(self, datos: dict[str, Any], ahora: datetime, fases: list[dict[str, Any]] | None = None) -> int:
+        """Saves a whole plan (`nombre`, `apartados` and its rows, as `leer` gives them) and returns its id.
+
+        Unit 083 (R4): and its `fases` (`[{nombre, desde_n, hasta_n}]`, checked as `anadir_fase` checks them), in the
+        SAME transaction: a phase that does not fit (ValueError) or a failure of the base saves nothing at all."""
         with self._connect() as conn:
             cursor = conn.execute("INSERT INTO plan (nombre, apartados, creado) VALUES (?, ?, ?)",
                                   (datos["nombre"], json.dumps(datos["apartados"], ensure_ascii=False),
@@ -269,6 +272,11 @@ class Planes:
                     [(ident, orden, *(hora_de(fila.get(c)) if c == "hora" else _a_la_base(tabla, c, fila.get(c))
                                       for c in columnas))
                      for orden, fila in enumerate(datos.get(clave, []))])
+            for orden, fase in enumerate(fases or []):
+                limpio, desde, hasta = self._fase_valida(conn, ident, fase["nombre"], fase["desde_n"],
+                                                         fase["hasta_n"], None)
+                conn.execute("INSERT INTO plan_fase (plan_id, orden, nombre, desde_n, hasta_n) VALUES (?, ?, ?, ?, ?)",
+                             (ident, orden, limpio, desde, hasta))
         return ident
 
     def leer(self, ident: int) -> dict[str, Any] | None:

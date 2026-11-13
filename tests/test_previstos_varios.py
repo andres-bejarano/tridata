@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from tridata.ia import CambioInterpretado
+from tridata.conversaciones.cambios import CambioInterpretado
 from tridata.models import Activity
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Cierres, ObjetivosDia, RegistroComidas, RegistroPeso
 from tridata.nutricion.asistente import Contexto, Peticion, confirmar, proponer

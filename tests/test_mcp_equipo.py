@@ -18,7 +18,7 @@ import json
 import re
 import sqlite3
 from datetime import date, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -32,7 +32,7 @@ from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, RegistroComidas,
 from tridata.nutricion.peso import FUERA_DE_RANGO
 from tridata.plan import Planes
 from tridata.storage import DataStore
-from tridata.web.conversaciones import cambio_no_entendido
+from tridata.conversaciones.cambios import cambio_no_entendido
 
 HOY = date(2026, 10, 26)  # a Monday
 AHORA = datetime(2026, 10, 26, 9, 0)
@@ -102,10 +102,9 @@ class Mundo:
         self.carpeta = tmp_path / "medicos"
         self.carpeta.mkdir()
         (self.carpeta / "analitica-inventada.pdf").write_bytes(b"%PDF-1.4 inventado")
-        self.transcriptor = MagicMock()
         self.token = tmp_path / "google-token.json"  # not written: Google Calendar is not connected unless asked
         self.equipo: Equipo = montar_equipo(self.db, store=self.store, medicos_dir=self.carpeta,
-                                            transcriptor_medico=self.transcriptor, token=self.token,
+                                            token=self.token,
                                             hoy=lambda: HOY, ahora=lambda: AHORA)
         self.garmin = GarminDoble()
         self.equipo.asistente.planes.garmin = lambda: self.garmin  # never the real Garmin Connect
@@ -189,7 +188,6 @@ def test_get_contexto_y_las_de_antes_no_escriben_ni_transcriben(mundo):  # R-190
         mundo.llamar(nombre)
     mundo.llamar("get_activity", {"activity_id": "inv1"})
     assert mundo.volcado() == antes
-    mundo.transcriptor.transcribir.assert_not_called()
 
 
 # -- R1 · R-191, C-235 ----------------------------------------------------------------------------------------------
@@ -203,7 +201,6 @@ def test_preparar_dice_lo_que_se_haria_y_no_cambia_nada(mundo):  # R1
     assert mundo.preparar(QUITAR_DOMINGO)[1] == huella  # the same change, the same fingerprint
     otro, _ = mundo.preparar(AL_RELOJ)
     assert "Garmin" in otro and mundo.volcado() == antes
-    mundo.transcriptor.transcribir.assert_not_called()
 
 
 # -- R2 · R-192, C-236 (criterio portante) ---------------------------------------------------------------------------

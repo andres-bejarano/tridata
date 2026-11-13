@@ -298,13 +298,13 @@ def crear_app(
     registro: RegistroComidas, interprete: Any, ajustes: Ajustes, hoy: Callable[[], date] = date.today, *,
     pesos: RegistroPeso | None = None, objetivos: ObjetivosDia | None = None,
     store: DataStore | None = None, actualizar_garmin: Callable[[date], None] | None = None,
-    transcriptor: Any = None, recetario: Recetario | None = None, cierres: Cierres | None = None,
-    ahora: Callable[[], datetime] = datetime.now, conversador: Any = None, medicos_dir: Path | None = None,
-    transcriptor_medico: Any = None, ordenador_plan: Any = None, calendario: Calendario | None = None,
+    recetario: Recetario | None = None, cierres: Cierres | None = None,
+    ahora: Callable[[], datetime] = datetime.now, conversador: Any = None,
+    ordenador_plan: Any = None, calendario: Calendario | None = None,
 ) -> Starlette:
-    """Unit 080 (R6): the app calls no AI. `interprete`, `transcriptor`, `conversador`, `medicos_dir`,
-    `transcriptor_medico` and `ordenador_plan` are still accepted, so the callers of before keep working, and are
-    IGNORED: nothing is interpreted, transcribed or loaded, and no AI client is created.
+    """Unit 080 (R6): the app calls no AI. Unit 083: `interprete` (positional), `conversador` and `ordenador_plan` are
+    IGNORED and only still accepted because tests outside that unit pass them (see its `hallazgos.md`); there is no
+    AI module left to give them.
 
     Every day is computed with `ajustes.vigentes(that day)`: no expenditure config is fixed at start.
     Weights and objectives of the day live in the same SQLite as `registro` unless given.

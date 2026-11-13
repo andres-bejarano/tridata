@@ -22,9 +22,10 @@ import json
 import logging
 import re
 import sqlite3
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from test_plan_importar import FIXTURE, HOY, OrdenadorFalso, sembrar_garmin
@@ -102,7 +103,7 @@ VALORES = ("123,4", "15,7", "Ferritina", "Hemoglobina", "Glucosa", "Nota inventa
 
 class Mundo:
     """A temporary SQLite with the invented Garmin runs of `test_plan_importar.py`, no plan, a folder with a new
-    medical PDF (its transcriber a double that must never be called) and Garmin's routes as a double."""
+    medical PDF (unit 083: there is no transcriber of the API any more) and Garmin's routes as a double."""
 
     def __init__(self, tmp_path: Path) -> None:
         self.tmp = tmp_path
@@ -113,9 +114,8 @@ class Mundo:
         self.carpeta.mkdir()
         self.pdf = self.carpeta / "analitica-nueva-inventada.pdf"
         self.pdf.write_bytes(b"%PDF-1.4 analitica inventada 1")
-        self.transcriptor = MagicMock()
         self.equipo = montar_equipo(self.db, store=self.store, medicos_dir=self.carpeta,
-                                    transcriptor_medico=self.transcriptor, token=tmp_path / "google-token.json",
+                                    token=tmp_path / "google-token.json",
                                     hoy=lambda: HOY, ahora=lambda: AHORA)
         self.garmin = GarminRutas()
         self.equipo.asistente.planes.garmin = lambda: self.garmin  # never the real Garmin Connect
@@ -254,7 +254,6 @@ def test_analiticas_pendientes_dice_cuales_y_donde(mundo):  # R2 · R-221
     respuesta = mundo.llamar("get_analiticas_pendientes")
     assert "analitica-nueva-inventada.pdf" in respuesta and str(mundo.pdf) in respuesta and "nuevo" in respuesta
     assert mundo.volcado() == antes
-    mundo.transcriptor.transcribir.assert_not_called()
 
 
 def test_guardar_transcripcion_con_el_si_y_el_contexto_la_lleva(mundo):  # R2 · C-274
@@ -278,7 +277,6 @@ def test_guardar_transcripcion_con_el_si_y_el_contexto_la_lleva(mundo):  # R2 ·
     assert "analitica-nueva-inventada.pdf" not in mundo.llamar("get_analiticas_pendientes")
     mundo.pdf.write_bytes(b"%PDF-1.4 analitica inventada 2")  # changed: pending again
     assert "cambiado" in mundo.llamar("get_analiticas_pendientes")
-    mundo.transcriptor.transcribir.assert_not_called()
 
 
 def _fuera(mundo) -> str:
@@ -450,7 +448,8 @@ def test_las_herramientas_no_hablan_de_la_pestana_asistente(mundo):  # R5
 # -- R6 --------------------------------------------------------------------------------------------------------------
 
 def test_ninguna_herramienta_nueva_llama_a_una_ia_de_pago(mundo, texto, recetas):  # R6
-    with patch("anthropic.Anthropic", side_effect=AssertionError("a paid AI was called")) as api:
+    # unit 083: the library of the paid API cannot even be imported; every tool still answers
+    with patch.dict(sys.modules, {"anthropic": None}):
         huella = mundo.huella(mundo.llamar("preparar_plan", {"plan": plan_del_coach(texto)}))
         mundo.llamar("importar_plan", {"papel": "entrenador", "plan": plan_del_coach(texto), "huella": huella})
         mundo.llamar("get_analiticas_pendientes")
@@ -462,8 +461,6 @@ def test_ninguna_herramienta_nueva_llama_a_una_ia_de_pago(mundo, texto, recetas)
         mundo.llamar("get_rutas")
         mundo.llamar("get_perfil_ruta", {"gpx": str(GPX)})
         mundo.llamar("get_contexto")
-    api.assert_not_called()
-    mundo.transcriptor.transcribir.assert_not_called()
 
 
 # -- límites (paso 4) ------------------------------------------------------------------------------------------------

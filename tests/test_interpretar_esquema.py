@@ -1,23 +1,9 @@
-"""Bug 036: the strict schema sent to Claude must fit the API's grammar limit (no network: the schema shape)."""
+"""Bug 036 / 055: a change given as text is read back (`conversaciones/cambios.py::CambioInterpretado`, what the
+coach's `preparar_cambio` / `hacer_cambio` validate). Unit 083: the schema sent to the API is gone with the API, and
+the two tests of its shape with it (`hallazgos.md`); how what comes as text is read stays.
+"""
 
-from tridata.ia.claude import CambioInterpretado, LineaInterpretada, esquema_enviado
-
-
-def _cambio_enviado() -> dict:
-    return esquema_enviado()["$defs"]["CambioInterpretado"]
-
-
-def test_un_cambio_no_lleva_listas_de_objetos_dentro():
-    # A list of objects inside each element of `cambios` is what made the API answer «grammar too large».
-    lineas = _cambio_enviado()["properties"]["lineas"]
-    assert lineas == {**lineas, "type": "array", "items": {"type": "string"}}
-
-
-def test_los_textos_y_fechas_de_un_cambio_no_pueden_ser_null():
-    propiedades = _cambio_enviado()["properties"]
-    for nombre in ("objeto", "campo", "texto", "unidad", "antes_dicho", "falta", "dia", "desde", "fecha"):
-        assert propiedades[nombre].get("type") == "string", nombre
-        assert "anyOf" not in propiedades[nombre], nombre
+from tridata.conversaciones.cambios import CambioInterpretado, LineaInterpretada
 
 
 def test_lo_que_llega_vacio_es_nada_y_las_lineas_vuelven_a_ser_lineas():
@@ -44,7 +30,6 @@ def test_un_cambio_hecho_en_python_sigue_igual():
 
 
 def test_varios_valores_viajan_en_un_texto_y_vuelven_a_ser_numeros():
-    assert _cambio_enviado()["properties"]["valores"].get("type") == "string"
     cambio = CambioInterpretado.model_validate({"accion": "niveles_dia", "valores": "-10; -20;0"})
     assert cambio.valores == [-10, -20, 0]
 

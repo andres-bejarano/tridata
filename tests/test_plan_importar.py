@@ -1,6 +1,7 @@
-"""Unit 040 (REC-22 of `llevar-plan`): importing the plan's .md (`plan/importar.py` + `ia/plan.py`).
+"""Unit 040 (REC-22 of `llevar-plan`): importing the plan's .md (`plan/importar.py`).
 
-The code cuts the .md by its sections, the AI (always doubled here: `OrdenadorFalso`) orders each one into rows of
+The code cuts the .md by its sections, an orderer (doubled here: `OrdenadorFalso`; since unit 083 the coach of the PC
+orders the .md itself) orders each one into rows of
 text, what fits nowhere goes to notes, and the weeks already done are crossed with Garmin. Nothing is saved until
 Andrés confirms. R5, R6, R9 · C-173, C-174, C-177 · G-54. Every value is invented (`fixtures/plan-inventado.md`).
 """
@@ -12,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from tridata.ia.plan import ApartadoOrdenado, ErrorPlan, esquema_enviado
 from tridata.models import Activity, ActivityLap
 from tridata.plan import Planes
 from tridata.plan import importar
+from tridata.plan.importar import ErrorPlan
 from tridata.storage import DataStore
 
 FIXTURE = Path(__file__).parent / "fixtures" / "plan-inventado.md"
@@ -27,6 +28,15 @@ _PARTES = (("objetivo", "objetivos"), ("semanas hechas", "semanas_hechas"), ("pr
            ("sesiones clave", "sesiones_clave"), ("nutrici", "nutricion"), ("incidencia", "incidencias"),
            ("comparativa", "comparativa"))
 _TABLAS = {"carrera": "carrera", "semana": "semana", "producto": "nutricion"}
+
+
+class ApartadoOrdenado:
+    """One section ordered: its part and its rows of text (what `importar.ordenar` reads of an orderer's answer).
+    A plain class: `tests/e2e/test_plan_e2e.py` loads this file without registering it as a module."""
+
+    def __init__(self, parte: str, filas: list[str] | None = None) -> None:
+        self.parte = parte
+        self.filas = list(filas or [])
 
 
 def ordenar_como_la_ia(titulo: str, texto: str) -> ApartadoOrdenado:
@@ -75,7 +85,7 @@ def ordenar_como_la_ia(titulo: str, texto: str) -> ApartadoOrdenado:
 
 
 class OrdenadorFalso:
-    """`ordenar(titulo, texto, hoy) -> (ApartadoOrdenado, uso, modelo)`, as `ia.plan.OrdenadorPlan`; never the API."""
+    """`ordenar(titulo, texto, hoy) -> (ApartadoOrdenado, uso, modelo)`, the shape `importar.ordenar` takes."""
 
     modelo = "claude-haiku-5-5"
 
@@ -144,10 +154,8 @@ def test_trocear_no_pierde_ni_un_caracter(texto):  # R6 · C-174
 
 def test_cada_apartado_en_su_parte_y_el_raro_en_notas(texto, store):  # R5, R6 · C-174
     ordenador = OrdenadorFalso()
-    gastos = []
-    p = importar.proponer(texto, ordenador, store, HOY, al_gastar=lambda modelo, uso: gastos.append((modelo, uso)))
+    p = importar.proponer(texto, ordenador, store, HOY)
     assert len(ordenador.llamadas) == 9  # one call per section (the beginning too)
-    assert len(gastos) == 9 and gastos[0] == ("claude-haiku-5-5", USO)  # the spending of each call is counted
     assert p["nombre"] == "Road to Ejemplo 26"
     assert [a["parte"] for a in p["apartados"]] == ["nota", "objetivos", "semanas_hechas", "previsto",
                                                     "sesiones_clave", "nutricion", "incidencias", "comparativa",
@@ -198,28 +206,6 @@ def test_lo_que_la_ia_no_sabe_leer_va_a_notas_tal_cual(store):  # R6: no piece o
     assert p["carreras"] == [] and [n["texto"] for n in p["notas"]] == ["Algo que no es una tabla."]
 
 
-def test_el_esquema_enviado_es_plano():  # R5: the 400 «grammar too large» of bug 036
-    esquema = esquema_enviado()
-    texto = repr(esquema)
-    assert "anyOf" not in texto and "'null'" not in texto
-    assert esquema["properties"]["filas"] == {**esquema["properties"]["filas"], "type": "array",
-                                              "items": {"type": "string"}}
-    assert esquema["properties"]["parte"]["type"] == "string"
-    assert set(esquema["required"]) == {"parte", "filas"}
-
-    def arrays(nodo):
-        if isinstance(nodo, dict):
-            if nodo.get("type") == "array":
-                yield nodo
-            for v in nodo.values():
-                yield from arrays(v)
-        elif isinstance(nodo, list):
-            for v in nodo:
-                yield from arrays(v)
-
-    assert all(a["items"] == {"type": "string"} for a in arrays(esquema))  # no list of objects anywhere
-
-
 def test_las_diferencias_con_garmin_proponen_lo_del_plan(texto, store):  # R5 · C-173 · G-54
     p = importar.proponer(texto, OrdenadorFalso(), store, HOY)
     # S4: 6 minutes more in Garmin; S5 (1 min) and S6 (0,2 km) are inside the tolerance (±2 min, ±0,3 km);
@@ -255,12 +241,9 @@ def test_hasta_confirmar_no_hay_plan_y_al_confirmar_lo_aceptado_gana(texto, stor
 
 def test_si_la_ia_falla_no_se_guarda_nada(texto, store, tmp_path):  # R5: retry later
     planes = Planes(tmp_path / "data.sqlite3")
-    gastos = []
     with pytest.raises(ErrorPlan):
-        importar.proponer(texto, OrdenadorFalso(fallar_en="Nutrición"), store, HOY,
-                          al_gastar=lambda modelo, uso: gastos.append(modelo))
+        importar.proponer(texto, OrdenadorFalso(fallar_en="Nutrición"), store, HOY)
     assert planes.lista() == []
-    assert len(gastos) == 8  # what was answered is paid anyway
 
 
 def test_los_registros_no_imprimen_el_plan(store, caplog):  # R9 · C-177

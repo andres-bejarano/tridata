@@ -1,57 +1,42 @@
-"""The medical documents of the Asistente's context (unit 032, R4, P1, G-50): read ONCE, kept only on this PC.
+"""The medical documents of the team's context (unit 032, R4, P1, G-50): kept only on this PC.
 
 The PDFs live in the folder `TRIDATA_MEDICOS_DIR` of `.env` (outside any repository; only its path is written down).
-Each one is sent ONCE to the API as a `document` block to transcribe its values (test, value, unit, reference range,
-date) and the notes of the report; the transcription is kept in the local SQLite (`transcripcion_medica`) with the
-SHA-256 of the file, and it is read again only when the file changes or Andrés asks for it («Volver a leerlas»). A
-PDF that is no longer in the folder leaves the context. What goes in every message is that transcription (a few
-thousand tokens), never the PDFs.
+Their transcription (test, value, unit, reference range, date, and the notes of the report) is kept in the local
+SQLite (`transcripcion_medica`) with the SHA-256 of the file. A PDF that is no longer in the folder leaves the
+context. What goes in the context is that transcription, never the PDFs.
 
 Unit 081 (REC-32, R-221, R-222): without the paid API, the coach of the PC reads the PDF itself. `pendientes` says
 which PDF of the folder have no transcription (new or changed), where they are and their SHA-256, never their
-contents; `guardar` keeps the transcription the coach made of one, as `al_dia` keeps the API's, only if the file is in
-the folder (`pdf`: a name relative to it or a path inside it, never outside) and its SHA-256 is the one given; a
-transcription without any value is not kept.
+contents; `guardar` keeps the transcription the coach made of one, only if the file is in the folder (`pdf`: a name
+relative to it or a path inside it, never outside) and its SHA-256 is the one given; a transcription without any
+value is not kept. Unit 083: the transcriber of the API (`TranscriptorPDF`) is gone; the transcriptions it made
+stay as they were.
 
 Nothing here logs a value, a test name or the contents of a document: only counts (R12, G-50). The transcription of
 this module is what `tridata comprobar-privados` also looks for (`valores_privados`).
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import logging
 import re
 import sqlite3
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-import anthropic
 from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger(__name__)
 
-MODELO_TRANSCRIPCION = "claude-haiku-5-5"
 SIN_CARPETA = ("No sé dónde están tus analíticas y tu prueba de esfuerzo: falta TRIDATA_MEDICOS_DIR en .env "
                "(la carpeta de sus PDF)")
 NO_ESTA_CARPETA = "No encuentro la carpeta de tus analíticas (TRIDATA_MEDICOS_DIR)"
 SIN_PDF = "En la carpeta de tus analíticas (TRIDATA_MEDICOS_DIR) no hay ningún PDF"
-
-INSTRUCCION = """\
-Transcribe este documento médico de la persona a datos estructurados, sin interpretar ni resumir: es para que su \
-asistente de entrenamiento y nutrición lo tenga delante. tipo: "analitica" (análisis de sangre u orina), \
-"prueba_esfuerzo" (ergometría, prueba de esfuerzo o sus fases) u "otro". titulo: qué documento es, breve. fecha: la \
-del documento (AAAA-MM-DD) o null. valores: cada prueba o medida con su valor tal cual aparece (con su coma o punto), \
-su unidad, su rango de referencia si lo da y su fecha si es distinta de la del documento; en una prueba de esfuerzo, \
-también cada fase o escalón con su potencia o velocidad, su frecuencia cardiaca, su consumo de oxígeno, su lactato o \
-lo que dé, y los umbrales y máximos. notas: las conclusiones o comentarios del informe, copiados de forma literal y \
-breve. No inventes nada que no esté en el documento.
-"""
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS transcripcion_medica (
@@ -95,44 +80,6 @@ class FueraDeLaCarpeta(LookupError):
     """Unit 081: that file is not a PDF of the folder of the medical documents (or there is no folder)."""
 
 
-class ErrorMedico(Exception):
-    """A document could not be transcribed (no key, no network, an answer that is not usable…)."""
-
-
-class TranscriptorPDF:
-    """One PDF -> its transcription, with the Claude API (`messages.parse`). The client is lazy and injectable."""
-
-    def __init__(self, cliente: Any = None, modelo: str = MODELO_TRANSCRIPCION) -> None:
-        self._cliente = cliente
-        self.modelo = modelo
-
-    def transcribir(self, pdf: bytes) -> tuple[TranscripcionMedica, dict[str, int], str]:
-        datos = base64.standard_b64encode(pdf).decode("ascii")
-        try:
-            if self._cliente is None:
-                self._cliente = anthropic.Anthropic(timeout=120.0)
-            respuesta = self._cliente.messages.parse(
-                model=self.modelo, max_tokens=16000,
-                messages=[{"role": "user", "content": [
-                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": datos}},
-                    {"type": "text", "text": INSTRUCCION},
-                ]}],
-                output_format=TranscripcionMedica,
-            )
-        except anthropic.AnthropicError as exc:
-            raise ErrorMedico(type(exc).__name__) from exc
-        except (TypeError, ValueError) as exc:  # no key, or an answer that does not validate: never its contents
-            raise ErrorMedico(type(exc).__name__) from exc
-        salida = respuesta.parsed_output
-        if respuesta.stop_reason != "end_turn" or salida is None:
-            raise ErrorMedico(f"stop_reason={respuesta.stop_reason}")
-        u = respuesta.usage
-        uso = {"entrada": int(getattr(u, "input_tokens", 0) or 0), "salida": int(getattr(u, "output_tokens", 0) or 0),
-               "cache_escritura": int(getattr(u, "cache_creation_input_tokens", 0) or 0),
-               "cache_lectura": int(getattr(u, "cache_read_input_tokens", 0) or 0)}
-        return salida, uso, self.modelo
-
-
 def _huella(ruta: Path) -> str:
     return hashlib.sha256(ruta.read_bytes()).hexdigest()
 
@@ -142,23 +89,14 @@ def _documento(fila: sqlite3.Row) -> dict[str, Any]:
             "valores": json.loads(fila["valores"]), "notas": json.loads(fila["notas"]), "leida": fila["leida"]}
 
 
-def _plural(n: int, uno: str, varios: str) -> str:
-    return f"{n} {uno if n == 1 else varios}"
-
-
 class Medicos:
-    """The transcriptions of the PDFs of `carpeta`, in the SQLite of `db_path`.
+    """The transcriptions of the PDFs of `carpeta`, in the SQLite of `db_path`."""
 
-    `transcriptor` has `transcribir(pdf) -> (TranscripcionMedica, uso, modelo)`; `al_gastar(modelo, uso)` gets the use
-    of each transcription (it counts for the cap of the month, R9)."""
-
-    def __init__(self, db_path: Path | str, carpeta: Path | str | None, transcriptor: Any = None,
-                 al_gastar: Callable[[str, dict[str, int]], Any] | None = None) -> None:
+    def __init__(self, db_path: Path | str, carpeta: Path | str | None, transcriptor: Any = None) -> None:
+        """`transcriptor` (`transcribir(pdf) -> (TranscripcionMedica, ...)`) is only for `al_dia`, see there."""
         self._db_path = Path(db_path)
         self.carpeta = Path(carpeta).expanduser() if carpeta else None
         self._transcriptor = transcriptor
-        self._al_gastar = al_gastar
-        self._fallidos = 0
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
 
@@ -178,46 +116,24 @@ class Medicos:
         return {p.relative_to(self.carpeta).as_posix(): p for p in sorted(self.carpeta.rglob("*"))
                 if p.is_file() and p.suffix.lower() == ".pdf"}
 
-    def al_dia(self, *, forzar: bool = False) -> dict[str, Any]:
-        """Transcribes each PDF new or changed (all with `forzar`) and forgets the ones that are gone. Returns
-        `estado()`. A document that cannot be read is said in `aviso` and tried again the next time."""
-        pdfs = self._pdfs()
-        self._fallidos = 0
-        if pdfs is None:
-            return self.estado()
-        with self._connect() as conn:
-            guardadas = {f["fichero"]: f["huella"] for f in conn.execute("SELECT fichero, huella FROM transcripcion_medica")}
-            for fichero in set(guardadas) - set(pdfs):
-                conn.execute("DELETE FROM transcripcion_medica WHERE fichero = ?", (fichero,))
-        leidos = 0
-        for fichero, ruta in pdfs.items():
-            huella = _huella(ruta)
-            if not forzar and guardadas.get(fichero) == huella:
-                continue
-            if self._transcriptor is None:
-                self._transcriptor = TranscriptorPDF()
-            try:
-                transcripcion, uso, modelo = self._transcriptor.transcribir(ruta.read_bytes())
-            except ErrorMedico as exc:
-                log.warning("a medical document could not be transcribed (%s)", exc)
-                self._fallidos += 1
-                continue
-            if self._al_gastar is not None:
-                self._al_gastar(modelo, uso)
-            with self._connect() as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO transcripcion_medica (fichero, huella, tipo, titulo, fecha, valores, "
-                    "notas, leida) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (fichero, huella, transcripcion.tipo, transcripcion.titulo, transcripcion.fecha,
-                     json.dumps([v.model_dump() for v in transcripcion.valores], ensure_ascii=False),
-                     json.dumps(transcripcion.notas, ensure_ascii=False),
-                     datetime.now().isoformat(timespec="seconds")))
-            leidos += 1
-            log.info("medical document transcribed: %d values, %d notes", len(transcripcion.valores),
-                     len(transcripcion.notas))
-        if leidos or self._fallidos:
-            log.info("medical documents: %d transcribed, %d failed, %d in the folder", leidos, self._fallidos, len(pdfs))
+    def al_dia(self) -> dict[str, Any]:
+        """Unit 083: kept ONLY because `tests/test_privados.py` (outside this unit) seeds its transcription with a
+        double through it; no code calls it and there is no transcriber of the API any more. Each PDF of the folder
+        without its transcription is transcribed by the injected `transcriptor` and kept; without one, nothing."""
+        if self._transcriptor is not None:
+            for p in self.pendientes():
+                transcripcion = self._transcriptor.transcribir(Path(p["ruta"]).read_bytes())[0]
+                self._escribir(p["fichero"], p["huella"], transcripcion)
         return self.estado()
+
+    def _escribir(self, nombre: str, huella: str, transcripcion: TranscripcionMedica) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO transcripcion_medica (fichero, huella, tipo, titulo, fecha, valores, notas, "
+                "leida) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (nombre, huella, transcripcion.tipo, transcripcion.titulo, transcripcion.fecha,
+                 json.dumps([v.model_dump() for v in transcripcion.valores], ensure_ascii=False),
+                 json.dumps(transcripcion.notas, ensure_ascii=False), datetime.now().isoformat(timespec="seconds")))
 
     def _guardadas(self) -> dict[str, str]:
         with self._connect() as conn:
@@ -253,7 +169,7 @@ class Medicos:
         return nombre, _huella(pdfs[nombre])
 
     def guardar(self, fichero: str, huella: str, transcripcion: TranscripcionMedica) -> str:
-        """Unit 081 (R-221): keeps `transcripcion` as the one of `fichero` (as `al_dia` keeps the API's) and returns its
+        """Unit 081 (R-221): keeps `transcripcion` as the one of `fichero` and returns its
         name in the folder. `FueraDeLaCarpeta` as `pdf`; ValueError if the file is not the one with `huella` any more
         or the transcription has no value. Logs counts only."""
         nombre, ahora = self.pdf(fichero)
@@ -261,13 +177,7 @@ class Medicos:
             raise ValueError("el PDF ha cambiado desde que se leyó")
         if not transcripcion.valores:
             raise ValueError("la transcripción no trae ningún valor")
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO transcripcion_medica (fichero, huella, tipo, titulo, fecha, valores, notas, "
-                "leida) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (nombre, huella, transcripcion.tipo, transcripcion.titulo, transcripcion.fecha,
-                 json.dumps([v.model_dump() for v in transcripcion.valores], ensure_ascii=False),
-                 json.dumps(transcripcion.notas, ensure_ascii=False), datetime.now().isoformat(timespec="seconds")))
+        self._escribir(nombre, huella, transcripcion)
         log.info("medical document transcribed on the PC: %d values, %d notes", len(transcripcion.valores),
                  len(transcripcion.notas))
         return nombre
@@ -282,8 +192,8 @@ class Medicos:
         return [_documento(f) for f in filas if f["fichero"] in pdfs]
 
     def estado(self) -> dict[str, Any]:
-        """What the Asistente knows of the medical documents (R4): each one with its values, and a warning when the
-        folder or a PDF is missing or a document could not be read."""
+        """What the team knows of the medical documents (R4): each one with its values, and a warning when the folder
+        or its PDF are missing."""
         pdfs = self._pdfs()
         documentos = self.transcripciones()
         aviso = None
@@ -293,9 +203,6 @@ class Medicos:
             aviso = NO_ESTA_CARPETA
         elif not pdfs:
             aviso = SIN_PDF
-        elif self._fallidos:
-            aviso = (f"No he podido leer {_plural(self._fallidos, 'documento', 'documentos')}: lo intentaré en el "
-                     "próximo mensaje")
         return {"carpeta": str(self.carpeta) if self.carpeta else None, "aviso": aviso, "documentos": documentos}
 
 
@@ -344,4 +251,4 @@ def valores_privados(db_path: Path | str) -> set[tuple[str, str]]:
     return pares
 
 
-__all__ = ["ErrorMedico", "FueraDeLaCarpeta", "Medicos", "TranscripcionMedica", "TranscriptorPDF", "ValorMedico", "valores_privados"]
+__all__ = ["FueraDeLaCarpeta", "Medicos", "TranscripcionMedica", "ValorMedico", "valores_privados"]

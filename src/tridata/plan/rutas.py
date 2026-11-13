@@ -2,13 +2,13 @@
 
 A route comes from three places, all of them read on this PC: a route saved in Garmin Connect (its points with
 distance and altitude, `GarminClient.ruta` -> `puntos_garmin`), an activity already run (its GPX,
-`GarminClient.gpx_actividad`) or a GPX uploaded (`puntos_gpx`, with `xml.etree`: no new dependency). Its profile
+`GarminClient.gpx_actividad`) or a GPX file of the PC (`puntos_gpx`, with `xml.etree`: no new dependency). Its profile
 (`perfil`) is the altitude every 100 m, smoothed so the wobble of a GPS does not become climbs, and its stretches
 («tramos») of climb, descent and flat, each with its climb: a stretch is at least 500 m, and a climb or a descent of
 less than 10 m is flat. A route without altitude raises `SinAltitud`: the profile is never invented (R-153).
 
 The profile carries km and metres only: latitude and longitude are used to measure the distance of a GPX and are
-dropped here, so they never reach a conversation nor the model (`perfil_para_modelo`, G-57).
+dropped here, so they never reach the coach (`conversaciones.desde_pc.perfil_ruta_desde_pc`, G-57).
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ _PENDIENTE = 1.5  # % from which 100 m climb or descend
 _TRAMO_MINIMO = 5  # 500 m: a shorter stretch joins its neighbour
 _DESNIVEL_MINIMO = 10  # m: a climb or a descent of less is flat
 _RADIO_M = 6371008.8
-FUENTES = {"garmin": "ruta guardada en Garmin", "actividad": "de una actividad hecha", "gpx": "GPX subido"}
+FUENTES = {"garmin": "ruta guardada en Garmin", "actividad": "de una actividad hecha", "gpx": "GPX"}
 
 
 class RutaMal(ValueError):
@@ -231,26 +231,10 @@ def _km(x: float) -> str:
 
 
 def resumen(p: dict[str, Any]) -> str:
-    """«Ruta inventada (GPX subido) · 20 km · +115 m / −115 m»: how the route is said on the screen and in the line."""
+    """«Ruta inventada (GPX) · 20 km · +115 m / −115 m»: how the route is said."""
     return (f"{p['nombre']} ({FUENTES.get(p['fuente'], p['fuente'])}) · {_km(p['distancia_km'])} km · "
             f"+{p['sube_m']} m / −{p['baja_m']} m")
 
 
-def perfil_para_modelo(p: dict[str, Any]) -> str:
-    """What the model is told of the route attached, in the message (R-154): km, altitude and stretches, and what to
-    answer with it (R-155). Never a coordinate: the profile has none (G-57)."""
-    tramos = "\n".join(
-        f"- km {_km(t['desde_km'])}–{_km(t['hasta_km'])} · {t['terreno']} {t['desnivel_m']:+d} m"
-        + (f" ({str(abs(t['pendiente_pct'])).replace('.', ',')} %)" if t["terreno"] != "llano" else "")
-        for t in p["tramos"])
-    return (f"[Ruta adjunta a esta conversación: {resumen(p)}. Va solo su perfil: sus coordenadas se quedan en el PC.\n"
-            f"Tramos:\n{tramos}\n"
-            f"Altitud cada {p['paso_m']} m desde el km 0 (m): {', '.join(str(a) for a in p['altitudes'])}\n"
-            "Si Andrés te pide la estrategia de la carrera de esta ruta, respóndele con una línea por tramo: sus km, "
-            "su terreno, el ritmo o el esfuerzo y el tiempo de paso acumulado al acabarlo, que sume su objetivo; y los "
-            "geles, cada uno en su km. Después propónle guardarla en el plan con proponer_cambio (accion "
-            "guardar_estrategia), en la carrera de su plan que sea.]")
-
-
 __all__ = ["FUENTES", "PASO_M", "SIN_ALTITUD", "Punto", "RutaMal", "SinAltitud", "nombre_gpx", "perfil",
-           "perfil_para_modelo", "puntos_garmin", "puntos_gpx", "resumen"]
+           "puntos_garmin", "puntos_gpx", "resumen"]

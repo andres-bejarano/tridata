@@ -11,7 +11,8 @@
   reused after deleting the last row) applies nothing: the card is redone with what is there now.
 - R6: «Bajar .md» writes under each incident of the app its state, its visits and its lesson; a plan without them
   gives the same .md as before.
-- R8: README and `.env.example` say what `TRIDATA_MODELO_ASISTENTE` does today and name `TRIDATA_GOOGLE_CLIENTE`.
+- R8: README and `.env.example` name `TRIDATA_GOOGLE_CLIENTE` (unit 083: `TRIDATA_MODELO_ASISTENTE` and «Ajustes › El
+  equipo» are gone with the paid AI, and their two lines here with them).
 
 Integration over a temporary SQLite with an invented plan; nothing calls Garmin, Google nor Anthropic.
 """
@@ -26,7 +27,7 @@ import pytest
 
 from test_plan import plan_de_prueba
 from tridata.conversaciones.contexto import plan_en_curso
-from tridata.ia import CambioInterpretado
+from tridata.conversaciones.cambios import CambioInterpretado
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, ObjetivosDia, RegistroComidas, RegistroPeso
 from tridata.nutricion.asistente import Cambiado, Contexto, Peticion, confirmar, proponer, texto_acciones
 from tridata.nutricion.recetas import Recetario
@@ -286,8 +287,6 @@ def test_readme_y_env_example_dicen_lo_que_hay():  # R8
     readme = (RAIZ / "README.md").read_text(encoding="utf-8")
     ejemplo = (RAIZ / ".env.example").read_text(encoding="utf-8")
     for texto in (readme, ejemplo):
-        assert "TRIDATA_MODELO_ASISTENTE" in texto
-        assert "Ajustes › El equipo" in texto
         assert "TRIDATA_GOOGLE_CLIENTE" in texto
         assert "google-token.json" in texto
     assert "TRIDATA_GOOGLE_CLIENTE=/path/to/your/private/google/client.json" in ejemplo

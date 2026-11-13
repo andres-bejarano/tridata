@@ -2,8 +2,7 @@
 nutritionist and the physio of `~/tridata-equipo` (Claude Code, through `tridata-mcp`) see and propose.
 
 - `texto_contexto`: the same context the team of the app sees (`conversaciones.contexto.montar`, with the same
-  repositories as `web/app.py::_contexto_conversacion`), but with only the medical transcriptions already made: it
-  never calls `Medicos.al_dia()`, which would transcribe a new PDF and spend (R-190).
+  repositories as `web/app.py`), with the medical transcriptions already made (R-190).
 - Unit 066 (REC-29, S-67, S-68, G-55, R-191 to R-197): the changes are made with Andrés's «sí», without cards.
   `preparar_desde_pc` says what would be done (the card the app would show, with its warnings) and its fingerprint,
   and writes nothing; `hacer_desde_pc` does it with the same `nutricion.asistente.proponer` + `confirmar` as the
@@ -42,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -51,7 +51,6 @@ from typing import Any
 from pydantic import ValidationError
 
 from ..calendario import Calendario
-from ..ia import CambioInterpretado
 from ..nutricion import Ajustes, Alimento, Cierres, ObjetivosDia, Recetario, RegistroComidas, RegistroPeso
 from ..nutricion.asistente import (Cambiado, Contexto as ContextoAsistente, NoValida, Peticion, TarjetaMal,
                                    confirmar, descripcion_alimento, numero, proponer)
@@ -67,8 +66,8 @@ from ..storage import DataStore
 from ..sync import RUNNING_TYPES
 from ..web.app import DIAS_RECIENTES
 from ..web.calendario import Sincronizacion
-from ..web.conversaciones import cambio_no_entendido
 from . import Conversaciones
+from .cambios import CambioInterpretado, cambio_no_entendido
 from .contexto import Contexto, montar
 from .medicos import FueraDeLaCarpeta, Medicos, TranscripcionMedica
 
@@ -96,7 +95,7 @@ class Equipo:
 
 
 def montar_equipo(db_path: Path | str, *, store: DataStore | None, medicos_dir: Path | str | None = None,
-                  transcriptor_medico: Any = None, token: Path | str | None = None,
+                  token: Path | str | None = None,
                   hoy: Callable[[], date] = date.today, ahora: Callable[[], datetime] = datetime.now) -> Equipo:
     """The same repositories `web/app.py::crear_app` builds over `db_path`; `token` is Google Calendar's (by default
     `google-token.json` next to the database), only to say whether it is connected."""
@@ -120,12 +119,12 @@ def montar_equipo(db_path: Path | str, *, store: DataStore | None, medicos_dir: 
     token = Path(token) if token is not None else Path(db_path).parent / "google-token.json"
     Suplementacion(db_path)  # unit 082: its tables, as the app makes them at start (what fails leaves no trace)
     return Equipo(conversaciones=Conversaciones(db_path), asistente=asistente,
-                  medicos=Medicos(db_path, medicos_dir, transcriptor_medico),
+                  medicos=Medicos(db_path, medicos_dir),
                   calendario=Calendario(db_path, token, None), ahora=ahora)
 
 
 def contexto(equipo: Equipo) -> Contexto:
-    """`montar` as `_contexto_conversacion` of the app, without `al_dia()`: only the transcriptions already made."""
+    """`montar` over the repositories of the team: only the transcriptions already made."""
     a = equipo.asistente
     return montar(registro=a.registro, pesos=a.pesos, ajustes=a.ajustes, store=a.store,
                   transcripciones=equipo.medicos.transcripciones(), aviso_medico=equipo.medicos.estado()["aviso"],
@@ -572,7 +571,11 @@ def importar_plan_desde_pc(equipo: Equipo, papel: str, entrada: Any, huella_vist
     planes = equipo.asistente.planes
     if planes is None:
         return f"No hay dónde guardar planes. {NADA}"
-    ident = confirmar_plan(propuesta, elegidas, planes, equipo.ahora())
+    try:  # unit 083 (R4): the plan and its phases in one write, so a failure leaves no plan to duplicate
+        ident = confirmar_plan(propuesta, elegidas, planes, equipo.ahora())
+    except (sqlite3.Error, ValueError) as exc:
+        log.warning("plan from the PC not saved (%s)", type(exc).__name__)
+        return f"No se ha podido guardar el plan: la base no lo ha aceptado. {NADA} Puedes volver a intentarlo."
     log.info("plan %d imported from the PC (%d weeks, %d sessions)", ident, len(propuesta["semanas"]),
              len(propuesta["sesiones"]))
     hecho_texto = f"Hecho: plan «{propuesta['nombre']}» importado ({_resumen_plan(propuesta)})."

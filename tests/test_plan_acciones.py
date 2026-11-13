@@ -3,8 +3,9 @@ of the 021: change, add or remove a planned session with its blocks, change the 
 note. Nothing changes until Andrés confirms; a card whose session was changed by hand in between is redone (G-41).
 
 Unit level over the catalogue with a seeded temporary SQLite (`test_plan.plan_de_prueba`, invented) and, at the end,
-the whole way through the web: the coach proposes it in a conversation (Claude doubled), the plan stays the same
-until the card is confirmed (unit 080: by the coach, or the watch's in Fitness › Plan), and then Fitness › Plan shows it.
+the whole way through the web: the coach prepares it (unit 083: as `desde_pc.preparar_desde_pc`, no longer in a
+conversation of the Asistente), the plan stays the same until the card is confirmed (unit 080: by the coach, or the
+watch's in Fitness › Plan), and then Fitness › Plan shows it.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from datetime import date, datetime
 import pytest
 
 from test_plan import plan_de_prueba
-from tridata.ia import CambioInterpretado
+from tridata.conversaciones.cambios import CambioInterpretado
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, ObjetivosDia, RegistroComidas, RegistroPeso
 from tridata.nutricion.asistente import Cambiado, Contexto, Peticion, catalogo, confirmar, descartar, proponer, \
     texto_acciones
@@ -164,21 +165,24 @@ def test_sin_plan_lo_dice(tmp_path):  # R5
     assert t["tipo"] == "no" and "plan" in t["texto"].lower()
 
 
-# -- the whole way: a conversation with the coach, the card, Fitness › Plan ---------------------------------------
+# -- the whole way: the coach prepares it, the card, Fitness › Plan ------------------------------------------------
+
+def _del_coach(web, texto: str, cambio: dict) -> dict:
+    """Unit 083: the change as the coach prepares it (`desde_pc.preparar_desde_pc`: the same validation and
+    `proponer`), which used to come in a conversation of the Asistente."""
+    (tarjeta,) = proponer([CambioInterpretado.model_validate(cambio)], web.asistente,
+                          Peticion(texto=texto, fecha=web.asistente.hoy()))
+    return tarjeta
+
 
 def test_el_entrenador_propone_y_el_plan_cambia_solo_al_confirmar(tmp_path):  # R5 · C-182, G-55
     from test_conversaciones_web import Web
 
     web = Web(tmp_path)
     Planes(web.db).crear(plan_de_prueba(sesiones=[*plan_de_prueba()["sesiones"], SERIES]), AHORA)
-    web.claude.responder("Te dejo el cambio.", ("proponer_cambio", {"accion": "plan_cambiar_sesion",
-                                                                    "dia": "2026-10-28", "texto": NUEVA}))
-    web.claude.responder(" Confírmalo si te parece.")
-    fin = web.nueva("las series de 2000 me parecen salvajes, pon 3×1000", papel="entrenador")
-    (tarjeta,) = fin["mensaje"]["tarjetas"]
+    tarjeta = _del_coach(web, "las series de 2000 me parecen salvajes, pon 3×1000",
+                         {"accion": "plan_cambiar_sesion", "dia": "2026-10-28", "texto": NUEVA})
     assert tarjeta["texto"] == "Voy a cambiar en el plan: mié 28/10 · Series 3×1000"
-    resultado = web.claude.peticiones[1]["messages"][-1]["content"][0]["content"]
-    assert "no está hecho hasta que la confirme" in resultado  # Claude is told it is not done
 
     def miercoles() -> list[dict]:
         r = web.cliente.get("/api/plan/semana/10")
@@ -381,10 +385,8 @@ def test_desde_fitness_plan_un_bloque_raro_no_da_tarjeta(tmp_path, garmin):  # R
 
 def test_el_entrenador_la_propone_y_solo_sale_al_confirmar(tmp_path, garmin):  # R1, R5 · C-199, C-203
     web, _, _ = _web_con_series(tmp_path)
-    web.claude.responder("Te la dejo lista.", ("proponer_cambio", {"accion": "mandar_a_garmin", "dia": "2026-10-28"}))
-    web.claude.responder(" Confírmala y la tienes en el reloj.")
-    fin = web.nueva("mándame las series del miércoles al reloj", papel="entrenador")
-    (tarjeta,) = fin["mensaje"]["tarjetas"]
+    tarjeta = _del_coach(web, "mándame las series del miércoles al reloj",
+                         {"accion": "mandar_a_garmin", "dia": "2026-10-28"})
     assert tarjeta["texto"] == "Voy a mandar a tu Garmin: Series de prueba 3×2000 (mié 28/10)"
     assert garmin.llamadas == []  # C-203
     confirmar(tarjeta, web.asistente)  # unit 080: confirmed as the coach does it
@@ -537,12 +539,9 @@ def test_el_fisio_la_propone_y_solo_se_abre_al_confirmar(tmp_path):  # R1 · C-1
 
     web = Web(tmp_path)
     Planes(web.db).crear(plan_de_prueba(), AHORA)
-    web.claude.responder("Te la apunto.", ("proponer_cambio", {
+    tarjeta = _del_coach(web, "al acabar el rodaje noto el lateral del tobillo", {
         "accion": "abrir_incidencia", "objeto": "tobillo", "campo": "derecho, lateral", "desde": "2026-10-20",
-        "texto": "molestia inventada al acabar el rodaje"}))
-    web.claude.responder(" Confírmala si te parece.")
-    fin = web.nueva("al acabar el rodaje noto el lateral del tobillo", papel="fisio")
-    (tarjeta,) = fin["mensaje"]["tarjetas"]
+        "texto": "molestia inventada al acabar el rodaje"})
     assert tarjeta["texto"] == "Voy a abrir una incidencia: tobillo derecho, lateral, desde el 20/10"
     assert web.cliente.get("/api/plan/incidencias").json()["incidencias"] == []  # C-204
     confirmar(tarjeta, web.asistente)  # unit 080: confirmed as the coach does it

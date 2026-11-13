@@ -1,18 +1,18 @@
-"""The Recetas tab over the web (unit 011): its routes, interpreting and dictating with what is saved,
-and `tridata importar-recetas`. Starlette TestClient over a temporary SQLite; the Claude interpreter
-and the Whisper transcriber are unittest.mock doubles (no API, no GPU). Every value is invented.
+"""The Recetas tab over the web (unit 011): its routes, logging what is saved, and `tridata importar-recetas`.
+Starlette TestClient over a temporary SQLite (no API, no GPU). Every value is invented.
+
+Unit 080 (S-5): interpreting and dictating are gone from the app; what was prepared through /api/interpretar and
+/api/confirmar is prepared by hand (/api/alimento with the saved one chosen), as Andrés does it now.
 """
 import re
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from starlette.testclient import TestClient
 
 from tridata import cli
-from tridata.ia import AlimentoInterpretado, ListaInterpretada
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, RegistroComidas
 from tridata.nutricion.comunes import COMUNES
 from tridata.nutricion.recetas import Recetario
@@ -20,29 +20,7 @@ from tridata.web import crear_app
 
 HOY = date(2026, 10, 21)
 AYER = HOY - timedelta(days=1)
-AUDIO = b"\x00\x00\x00\x18ftypmp42-audio-inventado"
 FIXTURE = Path(__file__).parent / "fixtures" / "recetas_inventado.md"
-
-
-def _item(nombre, cantidad, unidad="g", kcal=100.0, guardado=None, coincidencia=None, dia=HOY, **extra):
-    return AlimentoInterpretado(nombre=nombre, cantidad=cantidad, unidad=unidad, dia=dia, kcal=kcal, proteina_g=None,
-                                hidratos_g=None, grasa_g=None, estimado=True, dudoso=extra.pop("dudoso", False),
-                                supuestos=["supuesto de Claude"], guardado=guardado, coincidencia=coincidencia)
-
-
-# What the double «understands», by text (Claude is never called).
-RESPUESTAS = {
-    "garbanzo seco 600 g, aceite de oliva 50 g y cebolla 125 g": [
-        _item("garbanzo seco", 600, kcal=2000, guardado="garbanzo seco", coincidencia="exacta"),
-        _item("aceite de oliva", 50, kcal=400, guardado="aceite de oliva", coincidencia="exacta"),
-        _item("cebolla", 125, kcal=60, guardado="cebolla", coincidencia="exacta")],
-    "garbanzos de la abuela 250 g": [
-        _item("garbanzos de la abuela", 250, kcal=400, guardado="garbanzos de la abuela", coincidencia="exacta")],
-    "200 g de garbanzos": [
-        _item("garbanzos", 200, kcal=250, guardado="garbanzos de la abuela", coincidencia="parecida")],
-    "300 g de lentejas de la vecina": [_item("lentejas de la vecina", 300, kcal=350)],
-    "2 guayabas": [_item("guayaba", 2, unidad="unidad", kcal=120, guardado="guayaba", coincidencia="exacta")],
-}
 
 
 class Entorno:
@@ -51,12 +29,7 @@ class Entorno:
         ajustes = Ajustes(self.db)
         ajustes.cambiar({"basal_kcal": 1600, "kcal_por_paso": 0.04, "objetivo_pct": -10}, desde=DESDE_SIEMPRE)
         self.registro = RegistroComidas(self.db)
-        self.interprete = MagicMock()
-        self.interprete.interpretar.side_effect = lambda texto, hoy: ListaInterpretada(
-            alimentos=[a.model_copy(update={"dia": hoy}) for a in RESPUESTAS[texto]])
-        self.transcriptor = MagicMock(spec=["transcribir"])
-        self.cliente = TestClient(crear_app(self.registro, self.interprete, ajustes, hoy=lambda: HOY,
-                                            transcriptor=self.transcriptor))
+        self.cliente = TestClient(crear_app(self.registro, None, ajustes, hoy=lambda: HOY))
 
     def post(self, ruta, cuerpo=None):
         return self.cliente.post(ruta, json=cuerpo if cuerpo is not None else {})
@@ -73,9 +46,17 @@ class Entorno:
 
     def garbanzos(self):
         olla = self.fijos_de_prueba()
-        ingredientes = self.ok("/api/interpretar", {"texto": "garbanzo seco 600 g, aceite de oliva 50 g y cebolla 125 g"})
-        return self.ok("/api/recetas", {"nombre": "garbanzos de la abuela", "ingredientes": ingredientes["alimentos"],
+        ingredientes = [{"nombre": "garbanzo seco", "cantidad": 600, "unidad": "g", "kcal": 2000},
+                        {"nombre": "aceite de oliva", "cantidad": 50, "unidad": "g", "kcal": 400},
+                        {"nombre": "cebolla", "cantidad": 125, "unidad": "g", "kcal": 60}]
+        return self.ok("/api/recetas", {"nombre": "garbanzos de la abuela", "ingredientes": ingredientes,
                                         "olla_id": olla["id"], "peso_lleno_g": 3500})["receta"]
+
+    def apuntar(self, tipo, ident, cantidad, unidad=None, dia=HOY):
+        """By hand, chosen from the saved ones (unit 019): the kcal are the server's."""
+        cuerpo = {"nombre": "lo que diga la página", "cantidad": cantidad, "unidad": unidad or "g", "kcal": 1,
+                  "dia": dia.isoformat(), "guardado": {"tipo": tipo, "id": ident}}
+        return self.ok("/api/alimento", cuerpo)["alimento"]
 
     def tablas(self):
         with sqlite3.connect(self.db) as conn:
@@ -119,56 +100,23 @@ def test_el_servidor_recalcula_los_fijos(e):  # R1
     assert receta["en_uso"]["kcal_total"] == 2600 and receta["en_uso"]["kcal_100g"] == 130.0
 
 
-# -- R3, R4: interpreting and dictating with what is saved -------------------------------------------
+# -- R3, R6: what is saved, logged with its origin --------------------------------------------------------------
 
-def test_interpretar_usa_la_receta_y_al_confirmar_guarda_el_origen(e):  # R3
-    e.garbanzos()
-    r = e.ok("/api/interpretar", {"texto": "garbanzos de la abuela 250 g"})
-    a = r["alimentos"][0]
-    assert (a["nombre"], a["kcal"], a["estimado"], a["provisional"], a["propuesta"]) == (
-        "garbanzos de la abuela", 325, False, False, None)
-    assert a["origen"].startswith("de tu receta «garbanzos de la abuela»") and a["supuestos"] == []
-    confirmado = e.ok("/api/confirmar", {"texto": r["texto"], "alimentos": r["alimentos"]})
-    assert confirmado["guardados"][0]["origen"] == a["origen"]
+def test_apuntar_de_la_receta_guarda_el_origen(e):  # R3
+    receta = e.garbanzos()
+    a = e.apuntar("receta", receta["id"], 250)
+    assert (a["nombre"], a["kcal"], a["provisional"]) == ("garbanzos de la abuela", 325, False)
+    assert a["origen"].startswith("de tu receta «garbanzos de la abuela»")
     fila = e.cliente.get("/api/dia").json()["alimentos"][0]
     assert (fila["kcal"], fila["origen"], fila["provisional"]) == (325, a["origen"], False)
 
 
-def test_dictar_usa_la_receta_igual(e):  # R3
-    e.garbanzos()
-    e.transcriptor.transcribir.return_value = "garbanzos de la abuela 250 g"
-    r = e.cliente.post(f"/api/dictado?id=11111111-2222-4333-8444-555555555555&fecha={HOY}", content=AUDIO,
-                       headers={"Content-Type": "audio/mp4"})
-    assert r.status_code == 200, r.text
-    a = r.json()["interpretacion"]["alimentos"][0]
-    assert (a["kcal"], a["estimado"]) == (325, False) and a["origen"].startswith("de tu receta")
-
-
-def test_fijo_por_unidad_y_lo_desconocido(e):  # R3, R4
-    e.ok("/api/fijos", {"nombre": "dulce de guayaba de ciclismo", "kcal": 90, "por": "unidad", "alias": ["guayaba"]})
-    guayaba = e.ok("/api/interpretar", {"texto": "2 guayabas"})["alimentos"][0]
-    assert (guayaba["nombre"], guayaba["kcal"], guayaba["estimado"]) == ("dulce de guayaba de ciclismo", 180, False)
-    lentejas = e.ok("/api/interpretar", {"texto": "300 g de lentejas de la vecina"})["alimentos"][0]
-    assert (lentejas["kcal"], lentejas["estimado"], lentejas.get("origen"), lentejas.get("propuesta")) == (
-        350, True, None, None)  # untouched: it goes out as before unit 011, without the new keys
-
-
-def test_lo_parecido_llega_como_propuesta(e):  # R4
-    e.garbanzos()
-    a = e.ok("/api/interpretar", {"texto": "200 g de garbanzos"})["alimentos"][0]
-    assert (a["nombre"], a["kcal"], a["kcal_estimada"]) == ("garbanzos de la abuela", 260, 250)
-    assert a["propuesta"] == {"dicho": "garbanzos", "guardado": "garbanzos de la abuela"}
-
-
-def test_confirmar_lleva_provisional(e):  # R6, D8
-    e.ok("/api/recetas", {"nombre": "lasaña de la tía", "ingredientes": [
+def test_apuntar_lleva_provisional(e):  # R6, D8
+    lasana = e.ok("/api/recetas", {"nombre": "lasaña de la tía", "ingredientes": [
         {"nombre": "pasta de lasaña", "cantidad": 400, "unidad": "g", "kcal": 1400},
         {"nombre": "carne picada", "cantidad": 800, "unidad": "g", "kcal": 2000},
-        {"nombre": "tomate frito", "cantidad": 500, "unidad": "g", "kcal": 600}]})
-    cuarto = {"nombre": "lasaña de la tía", "cantidad": 0.25, "unidad": "receta", "dia": HOY.isoformat(), "kcal": 1000,
-              "estimado": False, "dudoso": False, "supuestos": [], "origen": "de tu receta «lasaña de la tía»",
-              "provisional": True}
-    e.ok("/api/confirmar", {"texto": "un cuarto de lasaña de la tía", "alimentos": [cuarto]})
+        {"nombre": "tomate frito", "cantidad": 500, "unidad": "g", "kcal": 600}]})["receta"]
+    e.apuntar("receta", lasana["id"], 0.25, "receta")  # a quarter of a recipe not weighed: provisional
     fila = e.cliente.get("/api/dia").json()["alimentos"][0]
     assert (fila["kcal"], fila["provisional"], fila["origen"]) == (1000, True, "de tu receta «lasaña de la tía»")
 
@@ -255,14 +203,11 @@ def test_borrar_solo_con_confirmado(e):  # R14, C-59, C-61
 def test_editar_fijo_y_olla(e):  # R18
     guayaba = e.ok("/api/fijos", {"nombre": "dulce de guayaba de ciclismo", "kcal": 90, "por": "unidad",
                                   "alias": ["guayaba"]})["fijo"]
-    ayer = {"nombre": "dulce de guayaba de ciclismo", "cantidad": 2, "unidad": "unidad", "dia": AYER.isoformat(),
-            "kcal": 180, "estimado": False, "dudoso": False, "supuestos": [],
-            "origen": "de tu ingrediente «dulce de guayaba de ciclismo»"}
-    e.ok("/api/confirmar", {"texto": "2 guayabas", "alimentos": [ayer]})
+    assert e.apuntar("fijo", guayaba["id"], 2, "unidad", dia=AYER)["kcal"] == 180
     cambiado = e.ok(f"/api/fijos/{guayaba['id']}", {"nombre": "dulce de guayaba de ciclismo", "kcal": 95,
                                                     "por": "unidad", "alias": ["guayaba"]})["fijo"]
     assert cambiado["kcal"] == 95
-    assert e.ok("/api/interpretar", {"texto": "2 guayabas"})["alimentos"][0]["kcal"] == 190
+    assert e.apuntar("fijo", guayaba["id"], 2, "unidad")["kcal"] == 190  # what is logged from now on
     assert e.cliente.get(f"/api/dia?fecha={AYER}").json()["alimentos"][0]["kcal"] == 180
     e.ok("/api/ollas", {"nombre": "olla grande", "tara_g": 1500})
     for malo in ({"nombre": "dulce de guayaba de ciclismo", "kcal": 1500, "por": "100g"},
@@ -281,29 +226,15 @@ def test_e2e_1_sin_navegador(e):  # R16, E2E-1
     receta = e.garbanzos()
     assert (receta["en_uso"]["kcal_total"], receta["en_uso"]["kcal_100g"], receta["en_uso"]["estado"]) == (
         2600, 130.0, "definitiva")
-    lista = e.ok("/api/interpretar", {"texto": "garbanzos de la abuela 250 g"})
-    assert lista["alimentos"][0]["kcal"] == 325 and lista["alimentos"][0]["estimado"] is False
-    dia = e.ok("/api/confirmar", {"texto": lista["texto"], "alimentos": lista["alimentos"]})["dia"]
+    a = e.apuntar("receta", receta["id"], 250)
+    assert a["kcal"] == 325 and a["estimado"] is False
+    dia = e.cliente.get("/api/dia").json()
     assert dia["total_kcal"] == 325
     assert dia["alimentos"][0]["origen"].startswith("de tu receta")
     assert e.cliente.get("/api/dia").json()["total_kcal"] == 325
 
 
-# -- `tridata web` gives Claude the names, `tridata importar-recetas` loads deficit.md ---------------------
-
-def test_tridata_web_pasa_los_nombres_al_interprete(tmp_path, monkeypatch):  # R5
-    monkeypatch.setenv("TRIDATA_BASAL_KCAL", "1600")
-    monkeypatch.setenv("TRIDATA_KCAL_POR_PASO", "0.04")
-    monkeypatch.setattr("uvicorn.run", MagicMock())
-    creados = []
-    monkeypatch.setattr("tridata.ia.InterpreteClaude.__init__",
-                        lambda self, cliente=None, modelo=None, guardados=None: creados.append(guardados))
-    db = tmp_path / "data.sqlite3"
-    Recetario(db).crear_fijo({"nombre": "gel de prueba", "kcal": 100, "por": "unidad", "alias": ["gel"]})
-    assert cli._cmd_web("127.0.0.1", 8765, db_path=db) == 0
-    assert creados and creados[0] is not None and sorted(creados[0]()) == sorted(
-        ["gel", "gel de prueba", *(c["nombre"] for c in COMUNES)])  # unit 026: the common foods too
-
+# -- `tridata importar-recetas` loads deficit.md (unit 080: `tridata web` creates no interpreter any more) ---------------------
 
 @pytest.fixture
 def carga(tmp_path, monkeypatch):

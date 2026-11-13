@@ -6,16 +6,17 @@
     GET  /api/plan/semana/N           one week of that plan (?id= too) with its seven days (404 without it)
     GET  /api/plan/actividad/ID       the detail of a done session: the one of Fitness (`fitness.detalle_actividad`)
                                       plus the cadence and the climb of the activity and of each lap (R4)
-    POST /api/plan/importar           {texto, fichero}: the proposal of the .md (`plan.importar.proponer`) with a
-                                      `token`; NOTHING is saved. 400 empty, 429 at the spending cap of the month,
-                                      502 if the AI failed (it can be tried again)
-    POST /api/plan/confirmar          {token, elecciones: {"4": "plan" | "garmin"}}: saves that proposal (once; 404
-                                      if it is not there any more) and answers like GET /api/plan with it
     GET  /api/plan/N.md               the plan as a document (`plan.markdown.escribir`), to download
-    POST /api/plan/sesion/ID/garmin   unit 042: {tarjeta} «Voy a mandar a tu Garmin» for that session (it is confirmed
-                                      or discarded with /api/asistente/*, like every card: nothing goes to Garmin
-                                      here, G-55); 422 with why if it cannot be sent (a block it cannot read, a day
-                                      that is over), 404 without that session
+    POST /api/plan/sesion/ID/garmin   unit 042: {tarjeta} «Voy a mandar a tu Garmin» for that session (nothing goes to
+                                      Garmin here, G-55); 422 with why if it cannot be sent (a block it cannot read, a
+                                      day that is over), 404 without that session
+    POST /api/plan/sesion/ID/garmin/confirmar   unit 080: {tarjeta} that card, redone and compared as every card
+                                      (`nutricion.asistente.confirmar`, G-41): 200 {hecho, tarjeta} when it is sent;
+                                      409 {error, tarjeta} with the card redone and nothing sent when it changed; 422
+                                      when Garmin does not take it; 400 for what is not the card of THAT session
+    POST /api/plan/sesion/ID/garmin/descartar   unit 080: {tarjeta} nothing is sent; the card is written down as
+                                      `descartada` (R-70). Until unit 080 both were /api/asistente/confirmar and
+                                      /api/asistente/descartar, gone with the rest of the assistant
     GET  /api/plan/sesion/ID.fit      unit 042: the session as a FIT workout file, made here (R-159); 422, 404 as above
     GET  /api/plan/incidencias        unit 044: {plan: {id, nombre} | None, incidencias}: the incidents of that plan
                                       (?id= too), the open ones first, with their visits and lesson (R-147)
@@ -67,16 +68,14 @@ Unit 076: each session of a day with an hour also brings its `hora` («HH:MM»);
 Unit 044: each day also brings its `notas` (how it went, R-150), and GET /api/plan its `abiertas`, how many incidents
 are open («⚠️ Incidencias (1)»).
 
-The proposals live only in memory until confirmed (the last few). The spending of every call to the AI goes to the
-month's cap as «importar plan» (`Conversaciones.apuntar_gasto`). Nothing here logs a text of the plan (R9).
+Unit 080: importing a .md (/api/plan/importar, /api/plan/confirmar) called the AI and is gone: the coach imports it
+from the PC. Nothing here logs a text of the plan (R9).
 """
 from __future__ import annotations
 
 import json
 import logging
 import re
-import secrets
-from collections import OrderedDict
 from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
@@ -86,20 +85,18 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from ..conversaciones import TOPE_DOLARES_MES, Conversaciones
 from ..fitness import detalle_actividad
-from ..ia.plan import ErrorPlan
 from ..nutricion.ajustes import Ajustes
+from ..nutricion.asistente import CAMBIADO, Cambiado, Contexto, NoValida, TarjetaMal, confirmar, descartar
 from ..plan import ABIERTA, CONSERVA, Planes, semanas
 from ..plan.acciones import tarjeta_garmin
-from ..plan.importar import confirmar, proponer
 from ..plan.markdown import escribir
 from ..plan.reloj import GarminNoLlega, NoTraducible, fit_local, quitar
 from ..storage import DataStore
 
 log = logging.getLogger(__name__)
 
-PROPUESTAS_GUARDADAS = 5
+MANDAR_A_GARMIN = "mandar_a_garmin"  # the only card the app still confirms (unit 080)
 NO_ESTA = "Ese plan ya no está."
 
 
@@ -120,9 +117,9 @@ def _nombre_de_fichero(nombre: str) -> str:
     return f"{limpio or 'plan'}.md"
 
 
-def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: Any,
-          conversaciones: Conversaciones, hoy: Callable[[], date], ahora: Callable[[], datetime]) -> list[Route]:
-    propuestas: OrderedDict[str, dict[str, Any]] = OrderedDict()
+def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, contexto: Contexto, hoy: Callable[[], date],
+          ahora: Callable[[], datetime]) -> list[Route]:
+    """`contexto` is what the card of the watch is confirmed with (the same of the screens by hand, unit 021)."""
 
     def _plan_pedido(request: Request) -> tuple[dict | None, bool]:
         """(the plan of ?id= or the current one, whether an ?id= was asked that is not there)."""
@@ -435,6 +432,34 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
             return _error(f"{resultado['texto']}.", 422)
         return JSONResponse({"tarjeta": resultado})
 
+    async def _tarjeta_de(request: Request) -> dict:
+        """The card of the watch of THAT session; `TarjetaMal` for anything else."""
+        tarjeta = (await _cuerpo(request) or {}).get("tarjeta")
+        if (not isinstance(tarjeta, dict) or tarjeta.get("accion") != MANDAR_A_GARMIN
+                or not isinstance(tarjeta.get("parametros"), dict)
+                or tarjeta["parametros"].get("sesion") != request.path_params["id"]):
+            raise TarjetaMal("eso no es la tarjeta de mandar esta sesión a tu Garmin")
+        return tarjeta
+
+    async def confirmar_reloj(request: Request) -> Response:
+        try:
+            tarjeta = await _tarjeta_de(request)
+            hecho = await run_in_threadpool(confirmar, tarjeta, contexto)
+        except TarjetaMal as exc:
+            return _error(f"No se ha mandado nada: {exc}.", 400)
+        except Cambiado as exc:
+            return _error(f"{CAMBIADO}. No se ha mandado nada.", 409, tarjeta=exc.tarjeta)
+        except NoValida as exc:
+            return _error(str(exc), 422)
+        return JSONResponse({"hecho": f"Hecho: {hecho['hecho']}.", "tarjeta": hecho["tarjeta"]})
+
+    async def descartar_reloj(request: Request) -> Response:
+        try:
+            await run_in_threadpool(descartar, await _tarjeta_de(request), contexto)
+        except TarjetaMal as exc:
+            return _error(f"No se ha descartado nada: {exc}.", 400)
+        return JSONResponse({"descartada": True})
+
     async def bajar_fit(request: Request) -> Response:
         sesion = await run_in_threadpool(planes.sesion, request.path_params["id"])
         if sesion is None:
@@ -467,46 +492,6 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
             return _error("Esa actividad no está.", 404)
         return JSONResponse(detalle)
 
-    def _importar(texto: str, fichero: str) -> dict[str, Any]:
-        nombre = re.sub(r"\.(md|markdown|txt)$", "", fichero, flags=re.I) or None
-        propuesta = proponer(texto, ordenador, store, hoy(), nombre=nombre,
-                             al_gastar=lambda modelo, uso: conversaciones.apuntar_gasto(ahora(), modelo, uso,
-                                                                                        "importar plan"))
-        token = secrets.token_urlsafe(16)
-        propuestas[token] = propuesta
-        while len(propuestas) > PROPUESTAS_GUARDADAS:
-            propuestas.popitem(last=False)
-        return {"token": token, "fichero": fichero, **propuesta}
-
-    async def importar(request: Request) -> Response:
-        cuerpo = await _cuerpo(request) or {}
-        texto, fichero = cuerpo.get("texto"), cuerpo.get("fichero")
-        if not isinstance(texto, str) or not texto.strip():
-            return _error("Elige tu plan (.md): no se ha importado nada.", 400)
-        fichero = fichero if isinstance(fichero, str) else ""
-        if await run_in_threadpool(conversaciones.tope_alcanzado, ahora()):
-            return _error(f"Has llegado al tope de {TOPE_DOLARES_MES:g} $ de este mes: importar el plan vuelve el "
-                          "día 1. No se ha importado nada.", 429, tope=True)
-        try:
-            return JSONResponse(await run_in_threadpool(_importar, texto, fichero))
-        except ErrorPlan as exc:
-            log.warning("plan import failed (%s)", type(exc).__name__)  # never a text of the plan (R9)
-            return _error(f"No he podido leer tu plan ({exc}). No se ha guardado nada. Inténtalo de nuevo.", 502)
-
-    async def confirmar_importacion(request: Request) -> Response:
-        cuerpo = await _cuerpo(request)
-        if cuerpo is None:
-            return _error("Lo enviado no se entiende: no se ha guardado nada.", 400)
-        token, elecciones = cuerpo.get("token"), cuerpo.get("elecciones") or {}
-        propuesta = propuestas.pop(token, None) if isinstance(token, str) else None
-        if propuesta is None:
-            return _error("Esa importación ya no está: vuelve a elegir tu plan.", 404)
-        if not isinstance(elecciones, dict):
-            elecciones = {}
-        ident = await run_in_threadpool(confirmar, propuesta, {str(k): str(v) for k, v in elecciones.items()},
-                                        planes, ahora())
-        return JSONResponse(await run_in_threadpool(lambda: _vista(planes.leer(ident))))
-
     async def bajar(request: Request) -> Response:
         plan = await run_in_threadpool(planes.leer, request.path_params["id"])
         if plan is None:
@@ -519,10 +504,10 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, ordenador: 
         Route("/api/plan", ver),
         Route("/api/plan/semana/{n:int}", ver_semana),
         Route("/api/plan/actividad/{id}", ver_actividad),
-        Route("/api/plan/importar", importar, methods=["POST"]),
-        Route("/api/plan/confirmar", confirmar_importacion, methods=["POST"]),
         Route("/api/plan/{id:int}.md", bajar),
         Route("/api/plan/sesion/{id:int}/garmin", tarjeta_reloj, methods=["POST"]),
+        Route("/api/plan/sesion/{id:int}/garmin/confirmar", confirmar_reloj, methods=["POST"]),
+        Route("/api/plan/sesion/{id:int}/garmin/descartar", descartar_reloj, methods=["POST"]),
         Route("/api/plan/sesion/{id:int}.fit", bajar_fit),
         Route("/api/plan/carrera", editar_carrera, methods=["POST"]),
         Route("/api/plan/nuevo", nuevo_plan, methods=["POST"]),

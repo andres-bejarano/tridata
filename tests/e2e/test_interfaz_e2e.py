@@ -1,7 +1,7 @@
 """Walks of the new phone screen (unit 010) in a real Chromium at 390 × 844. Invented data only.
 
 R1-R2 the «Te quedan» card · R4 the day list · R5 the sheet «Ajustar el día» · R6-R7 input,
-dictation, queue and review · R8 tabs · R9 Peso (unit 027: inside Balance) · R11 Recetas · R12 Ajustes · R13 offline ·
+dictation, queue and review (unit 080: gone with the box; S-6) · R8 tabs · R9 Peso (unit 027: inside Balance) · R11 Recetas · R12 Ajustes · R13 offline ·
 R14 ergonomics and screenshots · R16 edge cases. R15 (nothing is lost) is the sum of all of them.
 """
 from __future__ import annotations
@@ -16,7 +16,6 @@ pytest.importorskip("playwright", reason="E2E needs the `e2e` extra: python -m p
 
 from playwright.sync_api import expect  # noqa: E402
 
-from tridata.ia import ErrorTranscripcion  # noqa: E402
 
 HOY = date(2026, 10, 21)  # the same fixed «today» as conftest.py (a Wednesday)
 AYER = HOY - timedelta(days=1)
@@ -319,131 +318,14 @@ def test_hoja_de_ajustes_del_dia(arrancar, abrir):  # R5
         expect(p.locator(oculto)).to_be_hidden()
 
 
-# -- R6, R7: input, review, dictation and queue --------------------------------------------------
-
-def test_revision_con_todas_las_piezas(servidor, abrir, ir_a):  # R6, R7
-    servidor.dia_de_prueba()
-    p = abrir(servidor)
-    _listo(p)
-    expect(p.locator("#entrada")).to_be_visible()
-    micro = p.locator("#grabar").bounding_box()
-    assert round(micro["width"]) == 64 and round(micro["height"]) == 64
-    expect(p.locator("#texto")).to_have_attribute("placeholder", re.compile("peso"))
-
-    # unit 029 (S-16): the box is only in Nutrición › Día (not in Balance any more); what is interpreted shows there
-    ir_a(p, "balance")
-    expect(p.locator("#entrada")).to_be_hidden()
-    ir_a(p, "dia")
-    expect(p.locator("#entrada")).to_be_visible()
-    p.locator("#texto").fill("avena 60 g, peso 72,4, hoy mantenimiento y algo raro")
-    p.locator("#enviar").click()
-    expect(p).to_have_url(re.compile(r"#dia$"))
-    revision = p.locator("#revision")
-    expect(revision).to_be_visible()
-    expect(revision).to_contain_text("Esto he entendido")
-    expect(revision.locator("#lista input[type=text]").first).to_have_value("avena")
-    expect(revision.locator(".tarjeta.peso input").first).to_have_value("72,4")
-    expect(revision.locator(".tarjeta.objetivo")).to_be_visible()
-    expect(revision.locator(".tarjeta.objetivo button.signo")).to_be_visible()
-    expect(revision.locator(".tarjeta.dudosa")).to_contain_text("algo raro")
-    # the card sits above the review, the list below it
-    y_tarjeta = p.locator("#queda").bounding_box()["y"]
-    y_revision = revision.bounding_box()["y"]
-    y_lista = p.locator("#lista-dia").bounding_box()["y"]
-    assert y_tarjeta < y_revision < y_lista
-
-    # the doubtful phrase blocks the confirmation
-    expect(p.locator("#bloqueo")).to_contain_text("algo raro")
-    p.locator("#confirmar").click()
-    assert _api_dia(p, servidor)["total_kcal"] == 760
-    # «si te lo comes» and «¿cuánto me cabe?» save nothing
-    expect(p.locator("#simulacion")).to_contain_text("Si te lo comes")
-    revision.get_by_role("button", name="¿Cuánto me cabe?").click()
-    expect(revision.locator(".cabe")).to_contain_text("Te caben")
-    assert _api_dia(p, servidor)["total_kcal"] == 760
-    # «Añadir alimento» adds an empty card
-    revision.get_by_role("button", name="Añadir alimento").click()
-    expect(revision.locator("#lista .tarjeta")).to_have_count(2)
-    revision.locator("#lista .tarjeta").nth(1).get_by_role("button", name="Quitar").click()
-    revision.locator(".tarjeta.dudosa").get_by_role("button", name="Quitar").click()
-    expect(p.locator("#bloqueo")).to_be_hidden()
-    p.locator("#confirmar").click()
-    expect(p.locator("#mensaje")).to_contain_text("Guardado.")
-    expect(revision).to_be_hidden()
-    expect(p.locator("#queda-cifra")).to_contain_text("1.012")  # maintenance today: 2000 − 988
-    assert _textos(_filas(p, "comido").locator(".que strong")) == ["Avena", "Arroz con pollo", "avena"]
-    pesos = p.request.get(servidor.url + "/api/peso").json()["pesos"]
-    assert [x["kg"] for x in pesos] == [72.4]
-
-    # «Descartar» asks first
-    p.locator("#texto").fill("avena 60 g, peso 72,4, hoy mantenimiento y algo raro")
-    p.locator("#enviar").click()
-    expect(revision).to_be_visible()
-    p.locator("#descartar").click()
-    expect(p.locator("#confirmar-descarte")).to_contain_text("¿Descartar esta lista?")
-    p.locator("#descarte-no").click()
-    expect(revision).to_be_visible()
-    p.locator("#descartar").click()
-    p.locator("#descarte-si").click()
-    expect(revision).to_be_hidden()
-
-
-def _grabar(p, segundos=1.2):
-    p.locator("#grabar").click()
-    expect(p.locator("#grabar")).to_have_attribute("aria-label", "Parar la grabación")
-    expect(p.locator("#grabar-tiempo")).to_have_text(re.compile(r"^0:0\d$"))
-    p.wait_for_timeout(segundos * 1000)
-    p.locator("#grabar").click()
-    expect(p.locator("#grabar")).to_have_attribute("aria-label", "Grabar lo que has comido")
-
-
-def test_dictado_y_cola_sin_conexion(servidor, abrir):  # R6, R7
-    servidor.dia_de_prueba()
-    p = abrir(servidor)
-    _listo(p)
-    # dictation: the list of the recording opens by itself, with what was said
-    _grabar(p)
-    expect(p.locator("#revision")).to_be_visible()
-    expect(p.locator("#dicho")).to_contain_text("algo raro")
-    p.locator("#descartar").click()
-    p.locator("#descarte-si").click()
-
-    # without the PC: notice, the recording waits, and when it comes back, «Revisar»
-    p.context.set_offline(True)
-    p.locator("#anterior").click()
-    expect(p.locator("#sin-conexion")).to_contain_text("Sin conexión con el PC")
-    _grabar(p)
-    expect(p.locator("#sin-enviar")).to_contain_text("1 grabación sin enviar")
-    p.context.set_offline(False)
-    pendientes = p.locator("#pendientes")
-    expect(pendientes).to_contain_text("1 lista pendiente de revisar")
-    expect(p.locator("#sin-enviar")).to_be_hidden()
-    assert pendientes.bounding_box()["y"] < p.locator("#lista-dia").bounding_box()["y"]
-    pendientes.get_by_role("button", name="Revisar").click()
-    expect(p.locator("#revision")).to_be_visible()
-    expect(p.locator("#dicho")).to_contain_text("avena 60 g")
-
-
-def test_grabacion_no_transcrita_se_quita_con_confirmacion(servidor, abrir):  # R6
-    servidor.transcriptor.transcribir.side_effect = ErrorTranscripcion("vacio")
-    p = abrir(servidor)
-    _listo(p)
-    _grabar(p)
-    tarjeta = p.locator("#no-transcritas .tarjeta")
-    expect(tarjeta).to_contain_text("no se ha podido transcribir")
-    tarjeta.get_by_role("button", name="Descartar").click()
-    tarjeta.get_by_role("button", name="Sí, descartar").click()
-    expect(p.locator("#no-transcritas .tarjeta")).to_have_count(0)
-
-
 # -- R8: tabs -----------------------------------------------------------------------------------------
 
 def test_pestanas_hash_y_atras(servidor, abrir, ir_a):  # R8, R6
     p = abrir(servidor)
     _listo(p)
     pestanas = p.locator("nav.pestanas .pestana")
-    # unit 029: five tabs; Balance and Recetas are parts of Nutrición (unit 027: Peso is inside Balance)
-    assert _textos(pestanas) == ["Hoy", "Nutrición", "Fitness", "Asistente", "Ajustes"]
+    # unit 029: five tabs (unit 080: four); Balance and Recetas are parts of Nutrición (unit 027: Peso is in Balance)
+    assert _textos(pestanas) == ["Hoy", "Nutrición", "Fitness", "Ajustes"]
     assert _textos(p.locator("#partes a")) == ["Día", "Balance", "Recetas"]
     assert round(p.locator("nav.pestanas .pestana").first.bounding_box()["height"]) >= 56
     expect(pestanas.nth(1)).to_have_attribute("aria-current", "page")
@@ -457,10 +339,9 @@ def test_pestanas_hash_y_atras(servidor, abrir, ir_a):  # R8, R6
     expect(p.locator("section#dia")).to_be_hidden()
     expect(pestanas.nth(1)).to_have_attribute("aria-current", "page")
     expect(p.locator('#partes a[data-parte="balance"]')).to_have_attribute("aria-current", "page")
-    expect(p.locator("#entrada")).to_be_hidden()  # unit 029 (S-16): the box only in Nutrición › Día
+    expect(p.locator("#entrada")).to_have_count(0)  # unit 080 (S-6): no box anywhere
     ir_a(p, "recetas")
     expect(p.locator("section#recetas")).to_be_visible()
-    expect(p.locator("#entrada")).to_be_hidden()
     p.go_back()
     expect(p.locator("section#balance")).to_be_visible()
     p.go_back()
@@ -475,8 +356,8 @@ def test_pestanas_hash_y_atras(servidor, abrir, ir_a):  # R8, R6
     ir_a(p, "ajustes")
     expect(p).to_have_url(servidor.url + "/ajustes")
     en_ajustes = p.locator("nav.pestanas .pestana")
-    assert _textos(en_ajustes) == ["Hoy", "Nutrición", "Fitness", "Asistente", "Ajustes"]
-    expect(en_ajustes.nth(4)).to_have_attribute("aria-current", "page")
+    assert _textos(en_ajustes) == ["Hoy", "Nutrición", "Fitness", "Ajustes"]
+    expect(en_ajustes.nth(3)).to_have_attribute("aria-current", "page")
     expect(p.get_by_text("◀ Hoy")).to_have_count(0)
     expect(p.locator("#entrada")).to_have_count(0)
     ir_a(p, "balance")
@@ -494,7 +375,7 @@ def test_peso_siempre_de_hoy_con_grafica(arrancar, abrir, ir_a):  # R9
     seccion = p.locator("section#balance")
     expect(p.locator("#peso-cabecera")).to_have_text("Peso de hoy · miércoles 21 oct")
     expect(p.locator("#peso-cifra")).to_contain_text("72,4")
-    expect(seccion).to_contain_text("Para apuntarlo, di o escribe «peso 72,4».")
+    expect(seccion).to_contain_text("Si te has equivocado, cámbialo aquí.")  # unit 080: a new one, to the coach
     expect(p.locator("#peso-media")).to_contain_text("72,5 kg")
     expect(p.locator("#peso-media")).to_contain_text("2 días con peso")
     expect(p.locator("#peso-basal")).to_contain_text("1.600")

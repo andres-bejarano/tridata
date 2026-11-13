@@ -105,6 +105,20 @@ class RegistroPeso:
             )
         return {"dia": dia_ok.isoformat(), "kg": kg_ok, "nota": nota_ok, "creado": ahora}
 
+    def cambiar(self, dia: date | str, kg: Any) -> dict:
+        """Unit 080 (R-223): another value for the weight of `dia`, which must have one (`KeyError` otherwise: no new
+        weight is written down here, S-74); its note stays. `ValueError` if `kg` is not a valid weight."""
+        dia_ok = _como_fecha(dia)
+        kg_ok = _kg(kg)
+        ahora = datetime.now().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            if conn.execute("UPDATE peso_dia SET kg = ?, creado = ? WHERE dia = ?",
+                            (kg_ok, ahora, dia_ok.isoformat())).rowcount == 0:
+                raise KeyError(dia_ok.isoformat())
+            fila = conn.execute("SELECT dia, kg, nota, creado FROM peso_dia WHERE dia = ?",
+                                (dia_ok.isoformat(),)).fetchone()
+        return dict(fila)
+
     def del_dia(self, dia: date) -> dict | None:
         with self._connect() as conn:
             fila = conn.execute("SELECT dia, kg, nota, creado FROM peso_dia WHERE dia = ?", (dia.isoformat(),)).fetchone()

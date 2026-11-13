@@ -1,5 +1,5 @@
 """Unit 013 in a real Chromium at 390 × 844, light and dark: the calculator and «Apuntar en hoy», «Pesar
-ahora», and hand-written kcal (and kcal/100 g) in Hoy and in the review.
+ahora», and hand-written kcal (and kcal/100 g) in Hoy (unit 080: the review is gone with the box).
 
 Uses the `conftest.py` of unit 010 as it is (temporary SQLite, every outside service doubled); the saved
 recipes, fixed foods and pot are written straight into that SQLite. Invented data only.
@@ -16,7 +16,6 @@ pytest.importorskip("playwright", reason="E2E needs the `e2e` extra: python -m p
 
 from playwright.sync_api import expect  # noqa: E402
 
-from tridata.ia import AlimentoInterpretado, Interpretacion  # noqa: E402
 from tridata.nutricion.recetas import Recetario  # noqa: E402
 
 ANCHO = 390
@@ -174,50 +173,7 @@ def test_kcal_a_mano_en_hoy(servidor, abrir, capturar, oscuro):  # R5, R7, R9c �
     expect(p.locator("#total")).to_have_text("17 kcal comidas")
 
 
-def _entiende(texto: str, hoy: date) -> Interpretacion:
-    def item(nombre, cantidad, unidad, kcal, estimado=True):
-        return AlimentoInterpretado(nombre=nombre, cantidad=cantidad, unidad=unidad, dia=hoy, kcal=kcal,
-                                    proteina_g=None, hidratos_g=None, grasa_g=None, estimado=estimado, dudoso=False,
-                                    supuestos=[])
-    return Interpretacion(alimentos=[item("dátiles de prueba", 6, "g", 20), item("leche en el café", None, None, 40),
-                                     item("yogur de prueba", 2, "unidad", 150)])
-
-
-def test_kcal_a_mano_y_kcal_100g_en_la_revision(servidor, abrir, capturar):  # R5, R6, R7 · R-8, R-56, C-64, C-65, C-66
-    servidor.interprete.interpretar.side_effect = _entiende
-    p = abrir(servidor, "/#dia")
-    p.locator("#texto").fill("dátiles, leche en el café y dos yogures")
-    p.locator("#enviar").click()
-    tarjetas = p.locator("#lista article")
-    expect(tarjetas).to_have_count(3)
-    datiles, leche, yogur = tarjetas.nth(0), tarjetas.nth(1), tarjetas.nth(2)
-    # R6: the estimate without a quantity arrives without kcal, pending
-    expect(leche.get_by_label("kcal", exact=True)).to_have_value("")
-    expect(leche.locator(".marca", has_text="pendiente de cantidad")).to_be_visible()
-    # C-65: 6 g and 280 kcal/100 g → 16,8; 10 g → 28
-    datiles.get_by_role("button", name="kcal/100 g").click()
-    datiles.get_by_label("kcal/100 g", exact=True).fill("280")
-    expect(datiles.get_by_label("kcal", exact=True)).to_have_value("16.8")
-    datiles.get_by_label("Cantidad").fill("10")
-    expect(datiles.get_by_label("kcal", exact=True)).to_have_value("28")
-    # C-66: not in grams, it does not compute
-    yogur.get_by_role("button", name="kcal/100 g").click()
-    yogur.get_by_label("kcal/100 g", exact=True).fill("60")
-    expect(yogur.locator(".solo-gramos")).to_contain_text("solo con gramos")
-    expect(yogur.get_by_label("kcal", exact=True)).to_have_value("150")
-    # R5: 17 kcal written by hand on the milk: «kcal a mano», and Confirmar is not blocked
-    leche.get_by_label("kcal", exact=True).fill("17")
-    expect(leche.locator(".marca", has_text="kcal a mano")).to_be_visible()
-    expect(leche.locator(".marca", has_text="pendiente de cantidad")).to_have_count(0)
-    expect(p.locator("#bloqueo")).to_be_hidden()
-    _ergonomia(p, "revision-kcal-a-mano")
-    capturar(p, "revision-kcal-a-mano", completa=True)
-    p.locator("#confirmar").click()
-    expect(p.locator("#lista-dia .fila", has_text="dátiles de prueba").locator(".kcal")).to_have_text("28")
-    leche_fila = p.locator("#lista-dia .fila", has_text="leche en el café")
-    expect(leche_fila.locator(".kcal")).to_have_text("17")
-    expect(leche_fila.locator(".marca", has_text="kcal a mano")).to_be_visible()
-    expect(p.locator("#total")).to_have_text("195 kcal comidas")  # 28 + 17 + 150
+# Unit 080 (S-6): the walk of «kcal a mano» and kcal/100 g in the review went with the box to write or dictate.
 
 
 def test_el_icono_nuevo(servidor, abrir, capturar):  # R8 (010 R13)

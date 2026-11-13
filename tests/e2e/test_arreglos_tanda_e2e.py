@@ -4,6 +4,8 @@ corrected, and every kcal in whole numbers.
 
 Uses `conftest.py` (temporary SQLite, every outside service doubled); `servidor.hoy` moves the server's
 «today» and `page.clock` the phone's. Invented data only. R1, R2, R3, R4, R5, R7, R8 of the unit.
+Unit 080 (S-6): R1, R2 and R5 lived in the review of what was written or dictated, gone with the box; their walks went
+with it, and R8 is looked at without the review.
 """
 from __future__ import annotations
 
@@ -16,15 +18,12 @@ pytest.importorskip("playwright", reason="E2E needs the `e2e` extra: python -m p
 
 from playwright.sync_api import expect  # noqa: E402
 
-from tridata.ia import AlimentoInterpretado, ErrorInterpretacion, Interpretacion, ObjetivoDiaInterpretado  # noqa: E402
 from tridata.nutricion import Alimento  # noqa: E402
 from tridata.nutricion.recetas import Recetario  # noqa: E402
 
 HOY = date(2026, 10, 21)  # the same Wednesday as conftest.py
 MARTES = HOY - timedelta(days=1)
-LUNES = HOY - timedelta(days=2)
 JUEVES = HOY + timedelta(days=1)
-NUEVO_DIA = "nuevo día, descanso, mantenimiento, avena de prueba 60 g"
 CON_DECIMAL = re.compile(r"\d,\d")
 
 
@@ -37,68 +36,9 @@ def _api_dia(p, servidor, fecha: date | None = None) -> dict:
     return p.request.get(servidor.url + ruta).json()
 
 
-def _item(nombre, dia, cantidad=60, kcal=228.0, unidad="g"):
-    return AlimentoInterpretado(nombre=nombre, cantidad=cantidad, unidad=unidad, dia=dia, kcal=kcal, proteina_g=None,
-                                hidratos_g=None, grasa_g=None, estimado=True, dudoso=False, supuestos=[])
-
-
-def _nuevo_dia(texto: str, hoy: date) -> Interpretacion:
-    return Interpretacion(alimentos=[_item("avena de prueba", hoy)],
-                          objetivo_dia=ObjetivoDiaInterpretado(tipo="descanso", porcentaje=0, niveles=None,
-                                                               entreno=None, pasos=None))
-
-
-def _grabar(p, segundos=1.2):
-    p.locator("#grabar").click()
-    expect(p.locator("#grabar")).to_have_attribute("aria-label", "Parar la grabación")
-    p.wait_for_timeout(segundos * 1000)
-    p.locator("#grabar").click()
-    expect(p.locator("#grabar")).to_have_attribute("aria-label", "Grabar lo que has comido")
-
-
 def _a_la_vista(p):
     """The app comes back to the front (iOS: back from another app)."""
     p.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
-
-
-# -- R2 + R1: a list of Tuesday whose Claude failed, interpreted and confirmed on Wednesday --------------
-
-def test_lista_de_ayer_reinterpretada_va_a_ayer(servidor, abrir, capturar):  # R2, R1 · R-10, R-31
-    servidor.hoy = MARTES
-    servidor.transcriptor.transcribir.return_value = NUEVO_DIA
-    servidor.interprete.interpretar.side_effect = ErrorInterpretacion("Claude no responde (prueba)")
-    p = abrir(servidor)
-    p.clock.set_system_time(datetime(2026, 10, 20, 21, 30))
-    _listo(p)
-    _grabar(p)
-    expect(p.locator("#mensaje")).to_contain_text("El PC no pudo interpretarlo")
-    expect(p.locator("#texto")).to_have_value(NUEVO_DIA)
-
-    # Wednesday morning: the phone and the PC are on the 21st, and Claude answers again
-    servidor.hoy = HOY
-    servidor.interprete.interpretar.side_effect = _nuevo_dia
-    p.clock.set_system_time(datetime(2026, 10, 21, 9, 0))
-    p.reload()
-    _listo(p)
-    p.locator("#pendientes").get_by_role("button", name="Revisar").click()
-    expect(p.locator("#texto")).to_have_value(NUEVO_DIA)
-    p.locator("#enviar").click()
-    expect(p.locator("#revision")).to_be_visible()
-    expect(p.locator("#dia-grabacion")).to_have_text("Grabado el martes 20 de octubre: se apunta en ese día")
-    servidor.interprete.interpretar.assert_called_with(NUEVO_DIA, MARTES)
-    tarjeta = p.locator("#lista article").first
-    expect(tarjeta.get_by_label("Día")).to_have_value(MARTES.isoformat())
-    expect(tarjeta.locator(".marca", has_text="planeado")).to_have_count(0)
-    capturar(p, "r2-revision-lista-de-ayer", completa=True)
-
-    p.locator("#confirmar").click()
-    expect(p.locator("#mensaje")).to_contain_text("Guardado.")
-    martes = _api_dia(p, servidor, MARTES)
-    assert martes["objetivo"]["origen"] == "dia" and martes["objetivo"]["porcentaje"] == 0
-    assert [(a["nombre"], a["estado"]) for a in martes["alimentos"]] == [("avena de prueba", "comido")]
-    hoy = _api_dia(p, servidor)
-    assert hoy["objetivo"]["origen"] == "plan" and hoy["objetivo"]["porcentaje"] == -10
-    assert hoy["alimentos"] == []
 
 
 # -- R3: midnight with the app open ----------------------------------------------------------------------
@@ -227,32 +167,6 @@ def test_la_ficha_de_cambio_sobrevive_y_se_cierra_si_lo_borran(servidor, abrir):
     expect(p.locator("#lista-dia .tarjeta")).to_have_count(0)
 
 
-# -- R5: a past day in the review is not «planeado» --------------------------------------------------------
-
-def _cena_y_comida(texto: str, hoy: date) -> Interpretacion:
-    return Interpretacion(alimentos=[_item("cena de prueba", hoy - timedelta(days=1), 200, 300),
-                                     _item("comida de prueba", hoy + timedelta(days=1), 250, 400)])
-
-
-def test_dia_pasado_sin_planeado_en_la_revision(servidor, abrir):  # R5 · R-6
-    servidor.interprete.interpretar.side_effect = _cena_y_comida
-    p = abrir(servidor)
-    _listo(p)
-    p.locator("#texto").fill("ayer cené cena de prueba y mañana comida de prueba")
-    p.locator("#enviar").click()
-    tarjetas = p.locator("#lista article")
-    expect(tarjetas).to_have_count(2)
-    cena, comida = tarjetas.nth(0), tarjetas.nth(1)
-    expect(cena.locator(".marca", has_text="martes 20 de octubre")).to_have_text("martes 20 de octubre")
-    expect(cena.locator(".marca", has_text="planeado")).to_have_count(0)
-    expect(comida.locator(".marca", has_text="planeado")).to_have_text("planeado: jueves 22 de octubre")
-
-    p.locator("#confirmar").click()
-    expect(p.locator("#mensaje")).to_contain_text("Guardado.")
-    assert [(a["nombre"], a["estado"]) for a in _api_dia(p, servidor, MARTES)["alimentos"]] == [("cena de prueba", "comido")]
-    assert [(a["nombre"], a["estado"]) for a in _api_dia(p, servidor, JUEVES)["alimentos"]] == [("comida de prueba", "planeado")]
-
-
 # -- R7: correcting the kcal of a recipe food drops its marks -----------------------------------------------
 
 def test_corregir_kcal_de_una_receta_quita_las_marcas(servidor, abrir):  # R7 · R-8
@@ -307,15 +221,6 @@ def test_todas_las_kcal_en_enteros(servidor, abrir, capturar):  # R8 · R-5, R-2
     _sin_decimal(p, "#desglose .linea span:last-child")
     _sin_decimal(p, "#objetivo-kcal")
     p.locator("#cerrar-hoja").click()
-
-    # the review: «Si te lo comes» in whole kcal, the kcal box keeps its exact number
-    servidor.interprete.interpretar.side_effect = lambda texto, hoy: Interpretacion(
-        alimentos=[_item("dátiles de prueba", hoy, 6, 16.8)])
-    p.locator("#texto").fill("6 g de dátiles de prueba")
-    p.locator("#enviar").click()
-    expect(p.locator("#lista article").first.get_by_label("kcal", exact=True)).to_have_value("16.8")
-    expect(p.locator("#simulacion")).to_contain_text("Si te lo comes (17 kcal de hoy)")
-    _sin_decimal(p, "#simulacion p")
 
     # what the server answers and saves is not rounded
     dia = _api_dia(p, servidor)

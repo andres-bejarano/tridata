@@ -105,7 +105,7 @@ def test_una_pestana_balance_con_todo_en_orden(arrancar, abrir, capturar, oscuro
     expect(p.locator("section#balance")).to_be_visible()
     expect(p.locator("section#peso")).to_have_count(0)
     # unit 029: Balance is a part of Nutrición, the second tab of five
-    assert _textos(p.locator("nav.pestanas .pestana")) == ["Hoy", "Nutrición", "Fitness", "Asistente", "Ajustes"]
+    assert _textos(p.locator("nav.pestanas .pestana")) == ["Hoy", "Nutrición", "Fitness", "Ajustes"]  # unit 080: four tabs
     assert _textos(p.locator("#partes a")) == ["Día", "Balance", "Recetas"]
     expect(p.locator('.pestana[data-ir="nutricion"]')).to_have_attribute("aria-current", "page")
     expect(p.locator('#partes a[data-parte="balance"]')).to_have_attribute("aria-current", "page")
@@ -139,7 +139,7 @@ def test_una_pestana_balance_con_todo_en_orden(arrancar, abrir, capturar, oscuro
 
     # Ajustes has the same five tabs (unit 029)
     p.locator(".pestana", has_text="Ajustes").click()
-    assert _textos(p.locator("nav.pestanas .pestana")) == ["Hoy", "Nutrición", "Fitness", "Asistente", "Ajustes"]
+    assert _textos(p.locator("nav.pestanas .pestana")) == ["Hoy", "Nutrición", "Fitness", "Ajustes"]  # unit 080: four tabs
 
 
 # -- R2: what to show --------------------------------------------------------------------------------------
@@ -383,7 +383,7 @@ def test_kcal_enteras_con_punto_de_millar(arrancar, abrir, ir_a):  # R6
 def test_sin_ningun_peso(servidor, abrir, capturar, oscuro):  # R7
     servidor.semana_de_prueba()
     p = abrir(servidor, "/#balance", oscuro=oscuro)
-    expect(p.locator("#peso-hoy")).to_contain_text("Aún no hay pesos. Para apuntar el de hoy, di o escribe «peso")
+    expect(p.locator("#peso-hoy")).to_contain_text("Aún no hay pesos. Para apuntar el de hoy, díselo al coach: «peso")  # unit 080
     expect(p.locator("#peso-cifra")).to_have_text("—")
     expect(p.locator("#balance-semana .fila-dia")).to_have_count(7)
     grafica = p.locator("#balance-grafica svg")

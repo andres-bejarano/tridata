@@ -4,9 +4,12 @@
 // from a cache and nothing that is not a GET is touched. Served from the root (/sw.js) so its
 // scope is the whole app.
 
-const VERSION = "tridata-cascaron-v13"; // change it when the list below changes (v11: unit 032, conversaciones.js; v12: unit 035, the sections of the day; v13: unit 040, plan.js)
+// change it when the list below changes (v11: unit 032, the chat; v12: unit 035, the sections of the day; v13:
+// unit 040, plan.js; v14: unit 080, the app without the paid AI: the queue, the dictation, the cards and the chat
+// are gone, and the new version makes the phone let go of the old cache and its pages)
+const VERSION = "tridata-cascaron-v14";
 const CASCARON = [
-  "/", "/static/app.js", "/static/cola.js", "/static/dictado.js", "/static/estilos.css",
+  "/", "/static/app.js", "/static/estilos.css",
   // unit 010: the Peso tab, the settings page and the home-screen icon
   "/static/peso.js", "/ajustes", "/static/ajustes.js", "/static/manifest.json",
   "/static/icono.svg", "/static/icono-32.png", "/static/icono-180.png", "/static/icono-512.png",
@@ -20,12 +23,8 @@ const CASCARON = [
   "/static/balance.css",
   // unit 030: the cards of Hoy
   "/static/hoy.js",
-  // unit 021: the assistant's cards in the review
-  "/static/asistente.js",
   // unit 031: the Fitness tab
   "/static/fitness.js",
-  // unit 032: the Asistente's conversations
-  "/static/conversaciones.js",
   // unit 040: Fitness › Plan
   "/static/plan.js",
 ];

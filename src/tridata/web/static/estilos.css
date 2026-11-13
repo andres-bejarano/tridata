@@ -215,76 +215,16 @@ button.signo { min-width: 48px; font-size: 1.1rem; padding: 0 12px; }
 .opciones-seccion { display: flex; flex-wrap: wrap; gap: 8px; }
 .opciones-seccion button { flex: 1 1 auto; color: var(--acento); border-color: var(--acento); }
 
-/* -- the recordings queue and the review (units 006, 007, 008) -------------------------- */
-.cola { display: grid; gap: 8px; margin-top: 8px; }
-.cola > p { margin: 0; }
-.aviso-cola { color: var(--acento); background: var(--tarjeta); border: 1px solid var(--acento); padding: 10px 12px; border-radius: 12px; margin: 0; }
-.pendientes { grid-template-columns: 1fr auto; align-items: center; border-color: var(--acento); margin: 0; }
-.pendientes p { margin: 0; }
-.cola .tarjeta.dudosa { margin: 0; }
-.cola .tarjeta.dudosa p { margin: 0; }
-#revision { margin-top: 12px; }
-#revision h2 { margin-top: 12px; }
-.dicho { margin: 4px 0 8px; font-style: italic; }
-#dia-grabacion { display: inline-block; margin: 0 0 8px; font-size: .85rem; }
-.simulacion p { margin: 0; }
-.cabe { margin: 0; font-weight: 600; color: var(--acento); }
-
-/* -- the sheet «Ajustes de hoy» (<dialog>) ----------------------------------------------- */
-dialog.hoja {
-  position: fixed; inset: auto 0 0 0; margin: 0 auto; width: 100%; max-width: 640px; max-height: 90vh; max-height: 90dvh;
-  padding: 0; border: 0; border-radius: 22px 22px 0 0; background: var(--fondo); color: var(--texto);
-  box-shadow: 0 -8px 30px rgba(0, 0, 0, .18); overflow-y: auto; overscroll-behavior: contain;
-}
-dialog.hoja::backdrop { background: rgba(10, 14, 20, .45); }
-.hoja-in { padding: 8px 16px calc(28px + env(safe-area-inset-bottom)); }
-.asa { width: 40px; height: 5px; border-radius: 3px; background: var(--borde); margin: 2px auto 8px; }
-.hoja-cab { display: flex; align-items: center; justify-content: space-between; }
-.hoja-cab h3 { margin: 0; font-size: 1.25rem; }
-.cerrar { min-height: 44px; padding: 0 14px; border: 0; background: transparent; color: var(--acento); font-weight: 700; }
-.bloque { padding: 12px 14px; margin: 10px 0 0; gap: 6px; }
-.bloque h4 { margin: 0; font-size: 1rem; }
-.bloque p { margin: 2px 0; font-size: .93rem; }
-.dato-fila { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.enlace-boton { min-height: 44px; padding: 0 2px; border: 0; background: transparent; color: var(--acento); font-weight: 500; font-size: .9rem; text-decoration: underline; }
-.segmentado { display: flex; background: var(--pista); border-radius: 12px; padding: 3px; gap: 3px; }
-.segmentado button { flex: 1; min-width: 0; min-height: 44px; padding: 0 4px; border: 0; border-radius: 10px; background: transparent; font-size: .95rem; }
-.segmentado button[aria-pressed="true"] { background: var(--tarjeta); color: var(--acento); box-shadow: 0 1px 3px rgba(0, 0, 0, .15); }
-.botones { display: flex; gap: 8px; margin-top: 4px; }
-.botones .boton { flex: 1; }
-.boton.ancho { width: 100%; }
-.desplegable { display: grid; gap: 8px; padding-top: 4px; }
-.objetivo-dia { color: var(--texto); }
-.desglose { display: grid; gap: 0; font-size: .95rem; }
-.desglose .linea { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--borde); }
-.desglose .linea:first-child { border-top: 0; }
-.desglose .linea span:last-child { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.desglose .linea.suma { font-weight: 700; }
-.desglose p { font-size: .9rem; }
-.desglose .aviso { margin: 4px 0 0; }
 .garmin { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
 .garmin p { flex: 1; min-width: 8em; margin: 0; }
 .garmin p.error { color: var(--error); }
 
-/* -- at the bottom, always: the round box with its arrow, the microphone and the tabs ---- */
+/* -- at the bottom, always: the tabs (unit 080: no box to write or dictate) ------------- */
 .abajo { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; max-width: 640px; margin: 0 auto; }
-.caja { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--tarjeta); border-top: 1px solid var(--borde); }
-.texto-caja { flex: 1; min-width: 0; min-height: 52px; border-radius: 26px; border: 1px solid var(--borde); background: var(--fondo); display: flex; align-items: center; padding: 4px 4px 4px 16px; gap: 4px; }
-.texto-caja:focus-within { border-color: var(--acento); }
-.texto-caja textarea { flex: 1; min-width: 0; min-height: 44px; max-height: 7.5em; border: 0; padding: 10px 0; background: transparent; resize: none; font-size: 1rem; line-height: 1.35; }
-.texto-caja textarea:focus { outline: none; }
-.texto-caja textarea:placeholder-shown { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.texto-caja textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--suave); }
-.enviar { width: 44px; height: 44px; min-height: 44px; padding: 0; flex-shrink: 0; border-radius: 50%; border: 0; background: var(--acento); color: var(--acento-texto); display: grid; place-items: center; }
-.texto-caja textarea:placeholder-shown + .enviar { background: var(--pista); color: var(--suave); }
-.micro { width: 64px; height: 64px; min-height: 64px; padding: 0; flex-shrink: 0; border-radius: 50%; border: 0; background: var(--acento); color: var(--acento-texto); display: grid; place-items: center; box-shadow: var(--sombra-micro); }
-.micro.grabando { background: var(--peligro); }
-.micro.grabando .micro-icono { display: none; }
-.micro-tiempo { font-weight: 700; font-size: 1rem; font-variant-numeric: tabular-nums; }
 .pestanas { display: flex; background: var(--tarjeta); border-top: 1px solid var(--borde); padding: 4px 4px calc(6px + env(safe-area-inset-bottom)); }
 .pestana { flex: 1; min-width: 0; min-height: 56px; color: var(--suave); text-decoration: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: .72rem; font-weight: 600; border-radius: 12px; }
 .pestana[aria-current="page"] { color: var(--acento); }
-.pestana svg { width: 24px; height: 24px; } /* unit 029: five tabs fit at 390 px */
+.pestana svg { width: 24px; height: 24px; } /* unit 080: four tabs */
 @media (min-width: 680px) {
   .abajo { border-left: 1px solid var(--borde); border-right: 1px solid var(--borde); border-radius: 14px 14px 0 0; overflow: hidden; }
 }
@@ -319,6 +259,22 @@ dialog.hoja::backdrop { background: rgba(10, 14, 20, .45); }
 .bloque-objetivo { padding: 14px; gap: 4px; }
 .bloque-objetivo p { margin: 0; }
 #peso-ultimos .fila { cursor: default; }
+/* unit 080 (R-223): «Cambiar» a weight already written down, and its box */
+#peso-ultimos .fila-peso { border-top: 1px solid var(--borde); }
+#peso-ultimos .fila-peso:first-child { border-top: 0; }
+#peso-ultimos .fila-peso .fila { border-top: 0; }
+/* the row inside its wrapper keeps the look and the 60 px of a row of the list (`.lista > .fila`) */
+#peso-ultimos .fila-peso > .fila { display: flex; align-items: center; gap: 10px; min-height: 60px; padding: 8px 14px; }
+#peso-ultimos .fila-peso > .fila .que { flex: 1; min-width: 0; }
+#peso-ultimos .fila-peso > .fila .que strong { display: block; font-weight: 600; font-size: 1.02rem; overflow-wrap: anywhere; }
+#peso-ultimos .fila-peso > .fila .que span { font-size: .9rem; color: var(--suave); }
+#peso-ultimos .fila-peso > .fila .kcal { font-weight: 700; font-size: 1.05rem; text-align: right; min-width: 56px; white-space: nowrap; }
+#peso-ultimos .cambiar-peso { margin: 0 14px 10px; }
+.peso-hoy .cambiar-peso { margin: 0 0 10px; }
+.editor-peso { display: grid; gap: 8px; margin: 0 14px 12px; }
+.peso-hoy .editor-peso { margin: 0 0 12px; }
+/* unit 080 (R-224): «Lo que ha hecho el coach», only to look at */
+#coach .cambio-coach .que { white-space: normal; }
 
 /* -- Recetas: the section headers of the 010 mockup (used by unit 011) ---------------------- */
 .vacio { padding: 28px 20px; text-align: center; display: block; }
@@ -406,7 +362,6 @@ dialog.hoja::backdrop { background: rgba(10, 14, 20, .45); }
 .version .que strong { display: block; }
 .version .que span { display: block; font-size: .85rem; color: var(--suave); }
 .ficha .ancho { width: 100%; }
-button.dictar { flex-shrink: 0; }
 /* the review and the day list: where the kcal come from, and a proposal for what is only alike */
 .marca.origen { color: var(--bien); border-color: var(--bien); white-space: normal; }
 .propuesta { display: grid; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--acento-suave); }
@@ -588,9 +543,7 @@ button.anadir-linea { margin-top: 0; }
 #hoy-actualizar:disabled { opacity: .75; }
 #hoy-garmin-error { margin: 6px 0 0; }
 
-/* Unit 021: the assistant's cards in the review («Voy a …»), with the variables of unit 010 (light and dark) */
-.cambios { display: grid; gap: 0; margin: 4px 0 6px; }
-.titulo-cambios { font-size: .95rem; margin: 6px 4px 8px; color: var(--suave); text-transform: uppercase; letter-spacing: .04em; }
+/* Unit 021: the cards «Voy a …»; since unit 080 only the one of the watch in Fitness › Plan (light and dark) */
 .tarjeta-cambio { border-color: var(--acento); }
 .tarjeta-cambio.con-error, .tarjeta-no { border-color: var(--alerta); }
 .tarjeta-cambio .voy { margin: 0; font-weight: 650; overflow-wrap: break-word; }
@@ -655,66 +608,6 @@ button.candidato { min-height: 48px; text-align: left; padding: 8px 12px; white-
 .zonas-pulso { display: grid; gap: 6px; }
 .zonas-pulso .fila.dos { margin: 0; }
 .campo select { font: inherit; }
-
-/* -- unit 032: the Asistente's conversations (conversaciones.js), with the variables of unit 010 (light and dark) -- */
-.intro-asistente { margin: -4px 4px 12px; }
-#conv-aviso { margin: 0 4px 10px; }
-#conv-aviso.error { color: var(--error); }
-#conv-aviso.bien { color: var(--bien); }
-.lista-conversaciones { list-style: none; padding: 0; margin: 0 0 12px; overflow: hidden; }
-.lista-conversaciones li + li { border-top: 1px solid var(--borde); }
-button.conversacion { width: 100%; min-height: 64px; display: grid; gap: 2px; text-align: left; padding: 12px 16px; border: 0; border-radius: 0; background: transparent; color: var(--texto); font: inherit; cursor: pointer; }
-.conv-cab { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; min-width: 0; }
-.conv-cab strong { font-size: 1.05rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.conv-cab .suave { margin: 0; flex: none; font-size: .88rem; }
-.conv-ultima { margin: 0; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conv-vacia { display: block; padding: 16px; color: var(--suave); margin-bottom: 12px; }
-#conv-ver-medicos { display: block; min-height: 44px; margin: 0 4px 8px; }
-.conv-medicos { display: block; padding: 12px 14px; margin-bottom: 12px; }
-.doc-medico + .doc-medico { border-top: 1px solid var(--borde); margin-top: 10px; padding-top: 10px; }
-.doc-medico .valores { margin: 6px 0; padding-left: 1.1em; font-size: .92rem; overflow-wrap: anywhere; }
-button.conv-nueva { position: sticky; bottom: calc(var(--alto-abajo, 80px) + 12px); display: block; margin: 16px 0 0 auto; min-height: 52px; padding: 0 22px; border-radius: 999px; font-size: 1.05rem; font-weight: 700; box-shadow: var(--sombra-micro); }
-.conv-cabecera { display: flex; align-items: center; gap: 6px; margin: 6px 0 10px; }
-.conv-cabecera h2 { flex: 1; min-width: 0; margin: 0; font-size: 1.3rem; overflow-wrap: anywhere; }
-.conv-cabecera .flecha { width: 44px; height: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--acento); font-size: 1.15rem; flex: none; }
-button.icono-boton { width: 44px; height: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; font-size: 1.1rem; flex: none; color: var(--suave); }
-#conv-renombrar-caja, #conv-borrar-caja { display: block; padding: 12px 14px; margin-bottom: 10px; }
-.conv-linea { display: block; padding: 10px 14px; margin: 0 0 12px; color: var(--suave); font-size: .92rem; }
-.conv-mensajes { display: grid; gap: 10px; }
-.burbuja, .burbuja-espera { max-width: 86%; padding: 10px 14px; border-radius: 18px; overflow-wrap: anywhere; }
-.burbuja.andres { justify-self: end; background: var(--acento); color: var(--acento-texto); border-bottom-right-radius: 6px; }
-.burbuja.asistente, .burbuja-espera { justify-self: start; background: var(--tarjeta); border: 1px solid var(--borde); border-bottom-left-radius: 6px; }
-.con-cambios { display: grid; gap: 6px; }
-.con-cambios .burbuja { max-width: 86%; }
-.texto-burbuja { margin: 0; white-space: pre-wrap; }
-.texto-burbuja.escribiendo { color: var(--suave); letter-spacing: .2em; }
-.sin-respuesta-fila { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
-.sin-respuesta { font-size: .85rem; font-weight: 650; opacity: .9; }
-.burbuja.andres button.reintentar { min-height: 40px; padding: 0 14px; border-radius: 999px; background: var(--acento-texto); color: var(--acento); border-color: var(--acento-texto); font-weight: 650; }
-button.pensar { flex: none; width: 60px; min-height: 44px; padding: 4px 6px; border-radius: 14px; font-size: .78rem; line-height: 1.1; font-weight: 650; color: var(--suave); }
-button.pensar[aria-pressed="true"] { background: var(--acento-suave); color: var(--acento); border-color: var(--acento); }
-
-/* -- unit 041: the team in the Asistente (conversaciones.js) and Ajustes › El equipo (ajustes.js) ------------------ */
-.conv-icono { flex: none; font-size: 1.3rem; line-height: 1; }
-.conv-icono:empty { display: none; }
-.titulo-equipo { text-transform: uppercase; letter-spacing: .06em; font-size: .85rem; color: var(--suave); margin: 4px 4px 8px; }
-.conv-papeles { display: grid; gap: 8px; margin-bottom: 12px; }
-button.papel { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 10px 14px; text-align: left;
-  border: 1px solid var(--borde); border-radius: 16px; background: var(--tarjeta); color: var(--texto); font: inherit; font-weight: 400; }
-button.papel[aria-pressed="true"] { border-color: var(--acento); background: var(--acento-suave); box-shadow: 0 0 0 1px var(--acento) inset; }
-.papel-icono { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--acento-suave); font-size: 1.15rem; }
-.papel-texto { flex: 1; min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
-.papel-texto .suave { font-size: .9rem; }
-button.conversacion.con-papel { grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; align-items: center; }
-button.conversacion.con-papel .papel-icono { grid-row: span 2; }
-.papel-nombre { margin: 0 0 4px; font-size: .82rem; font-weight: 700; color: var(--acento); }
-.papel-nombre.papel-fisio { color: var(--alerta); }
-.papel-nombre.papel-nutricionista { color: var(--bien); }
-.conv-opinion { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 4px; }
-.conv-opinion > .suave { font-size: .9rem; }
-button.opinion { min-height: 40px; padding: 0 14px; border-radius: 999px; font-size: .92rem; font-weight: 650; background: var(--tarjeta); }
-.equipo-modelos { display: grid; gap: 6px; margin: 4px 0 10px; }
-.equipo-modelos label { display: flex; align-items: center; gap: 10px; min-height: 44px; }
 
 /* -- unit 040: Fitness › Plan (plan.js); the selector Forma · Plan is the `.segmentado.partes` of Nutrición ------- */
 #fitness-partes { margin: 0 0 12px; }
@@ -788,26 +681,6 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .cerrar-incid .aviso { margin: 0; }
 .nota-dia { margin: 0; font-size: .92rem; color: var(--suave); }
 
-/* unit 045: «Adjuntar ruta» and the profile of the route, on top of a conversation */
-.conv-ruta-zona { display: grid; gap: 8px; margin: 0 0 12px; }
-.conv-ruta { display: block; padding: 12px 14px; border-color: var(--acento); }
-.conv-ruta p { margin: 0; }
-.ruta-titulo { font-size: 1.02rem; overflow-wrap: anywhere; }
-.ruta-datos, .ruta-nota { font-size: .88rem; margin-top: 2px; }
-.ruta-perfil { display: block; width: 100%; height: auto; margin: 8px 0 4px; overflow: visible; }
-.ruta-subida { fill: var(--alerta-fondo); stroke: none; }
-.ruta-area { fill: var(--acento-suave); stroke: none; }
-.ruta-linea { fill: none; stroke: var(--acento); stroke-width: 1.6; stroke-linejoin: round; }
-.ruta-eje { stroke: var(--borde); stroke-width: 1; }
-.ruta-km { fill: var(--suave); font-size: 10px; }
-button.conv-adjuntar { justify-self: start; min-height: 44px; margin: 0 4px; }
-.conv-rutas { display: grid; gap: 8px; padding: 12px 14px; }
-.conv-rutas .aviso, .conv-rutas .titulo-bloque { margin: 0; }
-.lista-rutas { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-button.opcion-ruta { display: grid; gap: 2px; width: 100%; min-height: 48px; padding: 8px 12px; text-align: left; overflow-wrap: anywhere; }
-.opcion-ruta .suave { font-size: .88rem; }
-.subir-gpx { display: grid; gap: 4px; }
-.subir-gpx input[type="file"] { max-width: 100%; min-height: 44px; }
 /* unit 045: the strategy of a race in Fitness › Plan (painted by plan.js once the patch of the 045 is applied) */
 .carrera-plan { flex-wrap: wrap; }
 .estrategia-carrera { flex-basis: 100%; margin-top: 6px; font-size: .92rem; }

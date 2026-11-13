@@ -1,17 +1,7 @@
 """Starlette app: the day page and its JSON routes.
 
     GET  /                        the page (static HTML + JS modules + CSS)
-    POST /api/interpretar         text -> every piece in it (foods, weight, objective of the day,
-                                  doubtful phrases); saves NOTHING (R-1, R-31). Unit 016: optional `fecha`
-                                  (a list of the queue: «hoy» = the day it was recorded; after today is 400)
-    POST /api/dictado             raw audio (?id=<uuid>&fecha=AAAA-MM-DD) -> its text, transcribed on this PC,
-                                  and the same interpretation /api/interpretar gives, with «hoy» = the day
-                                  of the recording; saves NOTHING, keeps no audio (unit 006: R-1, R-10, R-12)
     GET  /sw.js                   the service worker, at the root so it serves the page offline (unit 006)
-    POST /api/confirmar           reviewed pieces (at least one) -> each saved in its place, all or
-                                  nothing; a doubtful phrase blocks it; returns today (R-4, R-5, R-32).
-                                  Unit 016: optional `dia` of the list, where the objective of the day goes
-                                  (after today or not a date: 400, nothing saved)
     POST /api/alimento            add a food by hand (no AI, no interpretation); body with `dia`; unit 019:
                                   or chosen from the saved ones (`guardado`, see below)
     POST /api/alimento/N          change a saved food (name, quantity, unit, kcal; `dia` optional
@@ -30,6 +20,12 @@
     GET  /api/peso                the weights of the 30 days up to ?hasta=AAAA-MM-DD (default today), the
                                   7-day mean of each of those days that has one and the weight goal
                                   (unit 010); writes nothing
+    POST /api/peso/AAAA-MM-DD     unit 080 (R-223): {"kg"} changes the weight of that day, only if it HAS one (404
+                                  otherwise: no weight is written down here, S-74); its note stays. A value that is
+                                  not a weight is 422 and nothing changes. Answers {"peso", "resumen"}: the weight
+                                  block of that day (7-day mean, basal, projection) recomputed
+    GET  /api/coach               unit 080 (R-224): «Lo que ha hecho el coach», the last 20 changes made from the PC
+                                  (the conversation «Desde el PC»), newest first; read only
     POST /api/dia/objetivo        today or a future day: {"fecha"? (today by default), "porcentaje"?, "niveles"?,
                                   "previsto"?: {"actividad_id", "minutos"} | null}; changes `objetivo_dia` of that
                                   day, never the plan (R-16, R-18), and returns it recomputed. Unit 034: a past day
@@ -51,8 +47,7 @@
                                   left at the marked level, from the same day as /api/dia), `entreno` (today's
                                   activities), `como_llegas` (sleep, resting HR, HRV and its 7-day mean, TSB, each
                                   with its `estado`, `hoy.py`), `garmin_sync` (/api/dia's plus `texto_hora` and the
-                                  routine's `motivos`) and `asistente` (unit 032: the beginning of the last answer,
-                                  its conversation and title, R-97; null without any). Writes nothing new.
+                                  routine's `motivos`). Unit 080: without the card of the Asistente. Writes nothing new.
                                   Unit 030 (G-48): «Actualizar Garmin» also takes the routine's lock (`sync.lock`
                                   next to the database): with `tridata sync` running it is the same 409 «en_marcha»,
                                   and it brings at least yesterday and today
@@ -63,7 +58,8 @@
     GET  /api/actividad/ID        unit 031: one activity with its laps (pace or speed, mean HR and its zone) and its
                                   weather; 404 if it does not exist
     GET  /api/plan*               unit 040 (REC-22): Fitness › Plan, the routes of `web/plan.py` (the plan of the
-                                  current objective, its weeks, importing the .md and downloading it)
+                                  current objective, its weeks and downloading the .md; unit 080: importing it is
+                                  the coach's)
     GET  /api/calendario*         unit 043 (REC-27): Ajustes › Google Calendar, the routes of `web/calendario.py`
                                   (connect once; every planned session of the plan in course, an all-day event of
                                   «TriData»); the pass also runs at start and every 10 minutes, in its own thread,
@@ -111,18 +107,12 @@ same `resumen_completo` as /api/dia. Unit 017 also adds `barras` (the 30 days, b
 
 Unit 016: every day the screen gets also says `hoy` (today on the server), so the page sees midnight pass.
 
-Unit 021 (the assistant that acts, REC-12): /api/interpretar and /api/dictado also bring `cambios`, one result per
-change Claude understood (`nutricion.asistente.proponer` with «hoy» = the day of the request): a card «Voy a …», a
-choice between candidates or a `no` that says why; still nothing is saved (R-1). Confirming, correcting and
-discarding a card are the routes of `web/asistente.py` (/api/asistente/*); /api/confirmar does not touch them.
-
-Unit 032 (REC-20): the Asistente's conversations are the routes of `web/conversaciones.py` (/api/conversaciones*):
-every conversation sees all the context of this PC (`conversaciones.contexto`), its answer arrives as it is written and
-a change it proposes is a card of the 021. `conversador` (`ia.conversacion.ConversadorClaude`, or a test double),
-`medicos_dir` (the folder of `TRIDATA_MEDICOS_DIR`) and `transcriptor_medico` are given by `tridata web`.
-Unit 041 (REC-23): the team (Entrenador, Fisio, Nutricionista, Asistente) answers in those conversations, sees the
-plan in course and its incidents, and proposes cards that change the plan (`plan/acciones.py`); `/api/equipo` is the
-model of each role, chosen in Ajustes › El equipo.
+Unit 080 (P-20261105-cf32bea5, S-5): the app calls no AI. Gone are the box to write or dictate (/api/interpretar,
+/api/dictado, /api/confirmar), the cards of the assistant (/api/asistente/*), the Asistente's conversations
+(/api/conversaciones*, /api/equipo, /api/rutas) and importing a plan (/api/plan/importar, /api/plan/confirmar): all
+that is asked to the coach (Claude Code on the PC, `mcp_server.py`), which uses the same mechanisms underneath. The
+conversations, cards and transcriptions already saved stay in the base (R10). The card of the watch («Mandar al
+reloj») is confirmed or discarded with the routes of `web/plan.py`.
 
 Unit 018 (R-91): today's day also brings `garmin_sync` = `{ok_en, fallo_en, fallo_motivo, aviso, texto}`
 (`sync.aviso_sync` with the clock `ahora`); any other day brings it as null.
@@ -134,22 +124,19 @@ days, closes with Garmin those it can, looks at the corrections and recalibrates
 Garmin computes its margins, objective and bar with the real expenditure (`gasto.kcal`).
 
 Unit 013 (R-8): a food without a quantity but with kcal counts («kcal a mano»); only one with neither is
-pending. An interpreted food without a quantity whose kcal are estimated goes out with `kcal: null`, so an
-estimate never passes for hand-written kcal.
+pending. A food sent with estimated kcal and no quantity loses those kcal, so an estimate never passes for
+hand-written kcal.
 
-Unit 011: every food /api/interpretar and /api/dictado give back has gone through the saved recipes
-and fixed foods (`Recetario.resolver`): `origen` («de tu receta …»), `provisional`, `propuesta` (what
-was said and the saved one proposed, when it is only alike) and `kcal_estimada` (Claude's, to go
-back to it). /api/confirmar keeps `origen` and `provisional` in the row, and /api/dia shows them.
+Unit 011: a food that comes from a saved recipe or fixed food keeps `origen` («de tu receta …») and `provisional`
+in its row, and /api/dia shows them.
 
-Unit 019 (R-93, R-57): a food of /api/alimento, /api/alimento/N (unit 074) or /api/confirmar chosen from the
-saved ones carries `guardado: {"tipo": "receta"|"fijo", "id": N}` with its `cantidad` and `unidad` ("g", "unidad",
-or "receta" for a fraction of a recipe). It goes through `Recetario.para_apuntar` before anything else: its name,
+Unit 019 (R-93, R-57): a food of /api/alimento or /api/alimento/N (unit 074) chosen from the saved ones carries
+`guardado: {"tipo": "receta"|"fijo", "id": N}` with its `cantidad` and `unidad` ("g", "unidad", or "receta" for a
+fraction of a recipe). It goes through `Recetario.para_apuntar` before anything else: its name,
 quantity, unit, kcal, origin and provisional are the server's (never the page's kcal), not estimated nor doubtful;
 its day stays (and, in a change, its row and section).
 Gone is 422 «"…" ya no está guardado», one that cannot be worked out is 422 with why, a malformed one is 400, and
-nothing is saved (in /api/confirmar, nothing of the list: every one is resolved before writing). A `guardado` that
-is not an object (the name Claude matched, unit 011) is not a choice and is ignored as before.
+nothing is saved. A `guardado` that is not an object is not a choice and is ignored as before.
 
 Every /api/alimento route answers {"alimento": ..., "dia": ...}, where `dia` is the day the food
 was in BEFORE the action (the screen being looked at; for an added food, its day).
@@ -179,10 +166,9 @@ from starlette.staticfiles import StaticFiles
 from garminconnect import GarminConnectTooManyRequestsError
 
 from ..garmin_client import GarminAuthError, GarminRateLimitError
-from ..ia import ErrorInterpretacion, ErrorTranscripcion
 from ..nutricion import (
     DESDE_SIEMPRE, Ajustes, Alimento, Cierres, ObjetivosDia, RegistroComidas, RegistroPeso, gramos_que_caben, kcal_previstas,
-    objetivo_valido, peso_valido, Recetario, media_7_dias, simular,
+    Recetario, media_7_dias, simular,
 )
 from ..nutricion.balance import (
     NADA, SIN_DIAS, dias_que_quedan, lunes_de, reparto_de_la_semana, semana as semana_balance, semanas, serie,
@@ -191,21 +177,16 @@ from ..nutricion.balance import (
 from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
 from ..nutricion.margen import cabe_de_receta
 from ..nutricion.objetivo_dia import PREVISTOS_MAX
-from ..nutricion.asistente import Contexto as ContextoAsistente, Peticion, proponer as proponer_cambios
+from ..nutricion.asistente import Contexto as ContextoAsistente
 from ..nutricion.recetas import ErrorDatos, _numero
 from ..fitness import detalle_actividad, fitness, texto_pulso
 from ..hoy import como_llegas, entreno, texto_sync
 from ..storage import DataStore
 from ..sync import MOTIVOS, SyncEnMarcha, aviso_sync, cerrojo_sync
 from ..conversaciones import Conversaciones
-from ..conversaciones.contexto import Contexto as ContextoConversacion, montar as montar_contexto
-from ..conversaciones.medicos import Medicos
-from ..ia.conversacion import ConversadorClaude
-from .asistente import rutas as rutas_asistente
-from .conversaciones import rutas as rutas_conversaciones
+from .conversaciones import rutas_coach
 from .recetas import rutas as rutas_recetas
 from .plan import rutas as rutas_plan
-from ..ia.plan import OrdenadorPlan
 from ..plan import Planes
 from ..calendario import Calendario
 from .calendario import Despertar, Sincronizacion, rutas as rutas_calendario
@@ -228,26 +209,11 @@ EN_MARCHA = "Ya estoy actualizando Garmin: espera a que acabe."
 # unit 030 (R-101): the button of Hoy says why with the words of the routine's warning (`sync.MOTIVOS`)
 MOTIVOS_BOTON = {"sesion": MOTIVOS["sesion"], "limite": MOTIVOS["limite"], "red": MOTIVOS["conexion"]}
 AL_REVES = "La fecha de inicio tiene que ser anterior o igual a la de fin"
-AUDIO_MAX_BYTES = 10 * 1024 * 1024  # a 2-minute recording is far below this (R4)
-TIPOS_AUDIO = frozenset({"audio/mp4", "audio/x-m4a", "audio/aac", "audio/webm", "audio/ogg", "audio/wav", "audio/mpeg"})
-DICTADO_NO_DISPONIBLE = "El dictado no está disponible en el PC ahora mismo. Se reintentará más tarde."
+SIN_PESO = "Ese día no tiene peso apuntado: no se ha cambiado nada. Un peso nuevo se le dice al coach."  # unit 080
 
 
 def _error(mensaje: str, estado: int, **extra: Any) -> JSONResponse:
     return JSONResponse({"error": mensaje, **extra}, status_code=estado)
-
-
-def _dia_de_la_lista(valor: Any, hoy: date) -> date:
-    """Unit 016 (R1, R2): the day a list was recorded or written; ValueError if it is not a date or is after today."""
-    if not isinstance(valor, str):
-        raise ValueError(f"el día de la lista no es una fecha: {valor!r}")
-    try:
-        dia = date.fromisoformat(valor)
-    except ValueError:
-        raise ValueError(f"el día de la lista no es una fecha: {valor!r}") from None
-    if dia > hoy:
-        raise ValueError("la lista es de un día que aún no ha llegado")
-    return dia
 
 
 def _fecha_ajustable(valor: Any, hoy: date) -> date | None:
@@ -267,16 +233,6 @@ async def _cuerpo(request: Request) -> dict | None:
     except (ValueError, json.JSONDecodeError):
         return None
     return datos if isinstance(datos, dict) else None
-
-
-_NUEVAS = ("guardado", "coincidencia", "origen", "provisional", "propuesta", "kcal_estimada")
-
-
-def _sin_lo_vacio(alimento: dict) -> dict:
-    """A food nothing saved touched goes out exactly as before unit 011: without its new, empty keys."""
-    if alimento.get("origen") or alimento.get("propuesta") or alimento.get("provisional"):
-        return alimento
-    return {k: v for k, v in alimento.items() if k not in _NUEVAS or v not in (None, False)}
 
 
 class NoSeGuarda(Exception):
@@ -321,24 +277,6 @@ def _sin_estimacion_suelta(alimento: dict) -> dict:
     return alimento
 
 
-def _piezas(resultado: Any, resolver: Callable[[dict], dict] = lambda a: a) -> dict:
-    """The interpretation as JSON: every piece, empty when absent. A bare list is foods only.
-
-    Each food goes through `resolver` (the saved recipes and fixed foods, unit 011).
-    """
-    if isinstance(resultado, list):
-        alimentos, peso, objetivo, dudosas = resultado, None, None, []
-    else:
-        alimentos, peso, objetivo, dudosas = (resultado.alimentos, resultado.peso, resultado.objetivo_dia,
-                                              resultado.dudosas)
-    return {
-        "alimentos": [_sin_estimacion_suelta(_sin_lo_vacio(resolver(a.model_dump(mode="json")))) for a in alimentos],
-        "peso": peso.model_dump(mode="json") if peso is not None else None,
-        "objetivo_dia": objetivo.model_dump(mode="json") if objetivo is not None else None,
-        "dudosas": list(dudosas),
-    }
-
-
 def _actividad_corta(a: dict) -> dict:
     return {"actividad_id": a.get("activity_id"), "fecha": a.get("activity_date"),
             "nombre": a.get("name") or a.get("activity_type"), "tipo": a.get("activity_type"),
@@ -353,24 +291,19 @@ def crear_app(
     ahora: Callable[[], datetime] = datetime.now, conversador: Any = None, medicos_dir: Path | None = None,
     transcriptor_medico: Any = None, ordenador_plan: Any = None, calendario: Calendario | None = None,
 ) -> Starlette:
-    """`interprete` is anything with `interpretar(texto, hoy)` (the Claude one, or a test double).
+    """Unit 080 (R6): the app calls no AI. `interprete`, `transcriptor`, `conversador`, `medicos_dir`,
+    `transcriptor_medico` and `ordenador_plan` are still accepted, so the callers of before keep working, and are
+    IGNORED: nothing is interpreted, transcribed or loaded, and no AI client is created.
 
     Every day is computed with `ajustes.vigentes(that day)`: no expenditure config is fixed at start.
     Weights and objectives of the day live in the same SQLite as `registro` unless given.
     `store` is the Garmin data (`DataStore`); without it every day has no Garmin data.
     `actualizar_garmin(dia)` brings that day from Garmin (the «Actualizar Garmin» button); without
     it the button says the Garmin credentials are missing.
-    `transcriptor` is anything with `transcribir(audio) -> str` (Whisper, or a test double); with a
-    `cargar()` too, it is loaded in a background thread when the server starts, never blocking it.
-    Without it, /api/dictado says «try again later» (503) and writing works as always.
     `recetario` holds the recipes, fixed foods and pots (unit 011); by default, in the same SQLite.
     `cierres` is the close of the day (unit 014); by default, in the same SQLite with these settings and `store`.
     `ahora` is the clock of the Garmin warning and of the sync record (unit 018).
-    Unit 032: `conversador` answers the Asistente's conversations (by default the Claude one, created lazily: nothing
-    is called until a message is sent); `medicos_dir` is the folder of the medical PDFs (None: the context goes
-    without them and says so) and `transcriptor_medico` reads each one once (by default the Claude one).
-    Unit 040: `ordenador_plan` orders each section of an imported plan (by default the Claude one, created lazily);
-    the plans live in the same SQLite (`plan.Planes`) and their routes are `web/plan.py`.
+    Unit 040: the plans live in the same SQLite (`plan.Planes`) and their routes are `web/plan.py`.
     Unit 043: `calendario` is Google Calendar (by default the token next to the database, `google-token.json`, and the
     client's JSON where TRIDATA_GOOGLE_CLIENTE says); without a token nothing talks to Google.
     """
@@ -388,8 +321,8 @@ def crear_app(
         dia_hoy = hoy()  # today's own activities already count as done: they are not offered
         return store.activities_between(dia_hoy - timedelta(days=DIAS_RECIENTES), dia_hoy - timedelta(days=1))
 
-    # unit 021: what the assistant's actions read and change, the same repositories as the screens by hand; unit 041:
-    # the training plans too (the cards that change the plan, and the plan in the context of the team)
+    # unit 021: what the cards read and change, the same repositories as the screens by hand; unit 080: only the card
+    # of the watch is confirmed in the app now (`web/plan.py`); the coach makes the rest from the PC
     planes = Planes(registro.db_path)
     # unit 043: the sessions of the plan in Google Calendar, a pass at start and every 10 minutes (`ciclo`)
     if calendario is None:
@@ -401,16 +334,8 @@ def crear_app(
                                   recetario=recetario, hoy=hoy, store=store, cierres=cierres, recientes=_recientes,
                                   planes=planes)
 
-    # unit 032: the conversations, what they cost and the medical documents, in the same SQLite
+    # unit 080 (R-224): the conversation «Desde el PC», only read (what the coach has done)
     conversaciones = Conversaciones(registro.db_path)
-    medicos = Medicos(registro.db_path, medicos_dir, transcriptor_medico,
-                      al_gastar=lambda modelo, uso: conversaciones.apuntar_gasto(ahora(), modelo, uso, "transcripcion"))
-
-    def _contexto_conversacion() -> ContextoConversacion:
-        estado = medicos.al_dia()
-        return montar_contexto(registro=registro, pesos=pesos, ajustes=ajustes, store=store,
-                               transcripciones=medicos.transcripciones(), aviso_medico=estado["aviso"], hoy=hoy(),
-                               planes=planes, calendario_conectado=calendario.conectado)
 
     def _dia(fecha: date) -> dict:
         """The day as the screen shows it: `nutricion.dia.resumen_completo` (unit 015), the same nutricion.md uses."""
@@ -608,6 +533,24 @@ def crear_app(
             "barras": barras,  # unit 017 (R12): the balance of each of those days, for the chart
         })
 
+    async def cambiar_peso(request: Request) -> Response:
+        """Unit 080 (R-223, C-276, C-277): another value for a weight already written down; never a new one (S-74)."""
+        try:
+            fecha = date.fromisoformat(request.path_params["dia"])
+        except ValueError:
+            return _error(f"Fecha no válida: {request.path_params['dia']!r}", 400)
+        cuerpo = await _cuerpo(request)
+        if cuerpo is None or "kg" not in cuerpo:
+            return _error("No se ha cambiado nada: falta el peso (kg).", 400)
+        try:
+            cambiado = pesos.cambiar(fecha, cuerpo["kg"])
+        except KeyError:
+            return _error(SIN_PESO, 404)
+        except ValueError as exc:
+            return _error(f"No se ha cambiado nada: {exc}.", 422)
+        resumen = await run_in_threadpool(_dia, fecha)
+        return JSONResponse({"peso": cambiado, "resumen": resumen["peso"]})
+
     async def balance_semana(request: Request) -> Response:
         texto = request.query_params.get("fecha")
         try:
@@ -714,134 +657,8 @@ def crear_app(
                 objetivos.cambiar(dia_q, porcentaje=None)
         return JSONResponse({"semana": _vista_semana(dia_hoy), "dia": _dia(dia_hoy)})
 
-    async def _interpretacion(texto: str, dia: date) -> dict:
-        """What /api/interpretar answers for `texto` with «hoy» = `dia`. Raises ErrorInterpretacion.
-
-        Unit 021: plus `cambios`, the cards of what Claude understood as changes, proposed with the day `dia`."""
-        resultado = await run_in_threadpool(interprete.interpretar, texto.strip(), dia)
-        piezas = _piezas(resultado, recetario.resolver)
-        cambios = getattr(resultado, "cambios", None) or []
-        tarjetas = await run_in_threadpool(proponer_cambios, list(cambios), asistente, Peticion(texto=texto, fecha=dia))
-        return {"texto": texto, **piezas, "cambios": tarjetas}
-
-    async def interpretar(request: Request) -> Response:
-        cuerpo = await _cuerpo(request) or {}
-        texto = cuerpo.get("texto")
-        if not isinstance(texto, str) or not texto.strip():
-            return _error("Escribe lo que has comido o vas a comer.", 400, texto=texto or "")
-        dia = hoy()
-        if cuerpo.get("fecha") is not None:  # unit 016 (R2): a list of the queue, with the day it was recorded
-            try:
-                dia = _dia_de_la_lista(cuerpo["fecha"], dia)
-            except ValueError as exc:
-                return _error(f"No he interpretado nada: {exc}.", 400, texto=texto)
-        try:
-            return JSONResponse(await _interpretacion(texto, dia))
-        except ErrorInterpretacion as exc:
-            return _error(f"No he podido interpretar lo que has escrito ({exc}). Inténtalo de nuevo.", 502,
-                          texto=texto)
-
-    async def dictado(request: Request) -> Response:
-        """A recording -> its text and its interpretation. Nothing is saved and the audio stays in memory.
-
-        Every error says `reintentar`: the phone keeps the recording and tries again only when True.
-        """
-        id_grabacion = request.query_params.get("id")
-        texto_fecha = request.query_params.get("fecha")
-        try:
-            fecha = date.fromisoformat(texto_fecha) if texto_fecha else hoy()
-        except ValueError:
-            return _error(f"Fecha de la grabación no válida: {texto_fecha!r}", 400, reintentar=False)
-        tipo = request.headers.get("content-type", "").split(";")[0].strip().lower()
-        if tipo not in TIPOS_AUDIO:
-            return _error("Eso no es una grabación de audio.", 415, reintentar=False)
-        largo = request.headers.get("content-length", "")
-        if largo.isdigit() and int(largo) > AUDIO_MAX_BYTES:
-            return _error("La grabación pasa de 10 MB.", 413, reintentar=False)
-        trozos = bytearray()
-        async for trozo in request.stream():
-            trozos.extend(trozo)
-            if len(trozos) > AUDIO_MAX_BYTES:
-                return _error("La grabación pasa de 10 MB.", 413, reintentar=False)
-        audio = bytes(trozos)
-        if not audio:
-            return _error("La grabación está vacía.", 422, reintentar=False)
-        if transcriptor is None:
-            return _error(DICTADO_NO_DISPONIBLE, 503, reintentar=True)
-        try:
-            texto = await run_in_threadpool(transcriptor.transcribir, audio)
-        except ErrorTranscripcion as exc:
-            if exc.motivo == "vacio":
-                return _error("No he oído nada en la grabación.", 422, reintentar=False)
-            if exc.motivo == "audio_no_valido":
-                return _error("No se ha podido transcribir la grabación.", 422, reintentar=False)
-            return _error(DICTADO_NO_DISPONIBLE, 503, reintentar=True)
-        try:
-            interpretacion = await _interpretacion(texto, fecha)
-        except ErrorInterpretacion as exc:
-            return _error(f"He entendido lo que has dicho, pero no he podido interpretarlo ({exc}). "
-                          "Revísalo y pulsa «Interpretar».", 502, reintentar=False, texto=texto)
-        return JSONResponse({"id": id_grabacion, "fecha": fecha.isoformat(), "texto": texto,
-                             "interpretacion": interpretacion})
-
     async def service_worker(request: Request) -> Response:
         return FileResponse(ESTATICOS / "sw.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
-
-    async def confirmar(request: Request) -> Response:
-        """Validate EVERY piece first; only if all are valid is anything written (R11)."""
-        cuerpo = await _cuerpo(request) or {}
-        dia_hoy = hoy()
-        dia_lista = dia_hoy  # unit 016 (R1): the objective of the day goes to the day of the list
-        if cuerpo.get("dia") is not None:
-            try:
-                dia_lista = _dia_de_la_lista(cuerpo["dia"], dia_hoy)
-            except ValueError as exc:
-                return _error(f"No se ha guardado nada: {exc}.", 400)
-        crudos = cuerpo.get("alimentos")
-        if crudos is None:
-            crudos = []
-        if not isinstance(crudos, list):
-            return _error("Los alimentos tienen que ser una lista.", 400)
-        dudosas = cuerpo.get("dudosas") or []
-        if not isinstance(dudosas, list):
-            return _error("Las frases dudosas tienen que ser una lista.", 400)
-        if dudosas:
-            frases = ", ".join(f"«{d}»" for d in dudosas)
-            return _error(f"No sé dónde poner {frases}: quítalo antes de confirmar. No se ha guardado nada.", 422)
-        try:  # unit 019: every chosen one is worked out before anything is written
-            crudos = [_con_lo_guardado(recetario, a) for a in crudos]
-        except NoSeGuarda as exc:
-            return _error(str(exc), exc.estado)
-        try:
-            alimentos = [Alimento.desde_dict(a) for a in crudos]
-        except ValueError as exc:
-            return _error(f"No se ha guardado nada: {exc}.", 400)
-        peso = None
-        if cuerpo.get("peso") is not None:
-            try:
-                peso = peso_valido(cuerpo["peso"], dia_hoy)
-            except ValueError as exc:
-                return _error(f"No se ha guardado nada: {exc}.", 422)
-        objetivo = None
-        if cuerpo.get("objetivo_dia") is not None:
-            try:
-                objetivo = objetivo_valido(cuerpo["objetivo_dia"])
-            except ValueError as exc:
-                return _error(f"No se ha guardado nada: {exc}.", 400)
-        if not alimentos and peso is None and objetivo is None:
-            return _error("No hay nada que guardar.", 400)
-        try:
-            registro.validar(alimentos)
-        except ValueError as exc:
-            return _error(f"No se ha guardado nada: {exc}.", 422)
-
-        texto = cuerpo.get("texto")
-        guardados = registro.guardar(alimentos, hoy=dia_hoy, texto=texto if isinstance(texto, str) else "",
-                                     sin_cambios=bool(cuerpo.get("sin_cambios")))
-        peso_guardado = pesos.apuntar(*peso, hoy=dia_hoy) if peso is not None else None
-        objetivo_guardado = objetivos.guardar(dia_lista, objetivo) if objetivo is not None else None
-        return JSONResponse({"guardados": guardados, "peso": peso_guardado, "objetivo_dia": objetivo_guardado,
-                             "dia": _dia(dia_hoy)})
 
     async def anadir(request: Request) -> Response:
         try:  # unit 019: chosen from the saved ones, the kcal are the server's
@@ -1082,7 +899,7 @@ def crear_app(
                 # unit 031 (R8): the TSB with the HR of each day in Ajustes, the same as Fitness
                 "como_llegas": (como_llegas(store, dia_hoy, limites=ajustes.historial_fc().limites)
                                 if store is not None else sin_garmin),
-                "garmin_sync": garmin_sync, "asistente": conversaciones.ultima_respuesta()}  # unit 032 (R-97)
+                "garmin_sync": garmin_sync}  # unit 080 (S-27): no card of the Asistente
 
     async def ver_hoy(request: Request) -> Response:
         await run_in_threadpool(_al_dia)
@@ -1110,17 +927,8 @@ def crear_app(
             return _error("Esa actividad no está.", 404)
         return JSONResponse(detalle)
 
-    def _cargar_transcriptor() -> None:
-        try:
-            transcriptor.cargar()
-        except ErrorTranscripcion:
-            log.warning("dictation disabled until the next request: Whisper could not be loaded")
-
     @asynccontextmanager
     async def ciclo(app: Starlette) -> AsyncIterator[None]:
-        if transcriptor is not None and callable(getattr(transcriptor, "cargar", None)):
-            # once, in the background: the server answers (and writing works) while the model loads
-            threading.Thread(target=_cargar_transcriptor, name="carga-whisper", daemon=True).start()
         parar_calendario = threading.Event()  # unit 043: Google never makes the app wait (R4)
         threading.Thread(target=sincronizacion.en_segundo_plano, args=(parar_calendario,), name="google-calendar",
                          daemon=True).start()
@@ -1140,6 +948,7 @@ def crear_app(
         Route("/api/dia/cerrar", cerrar_dia, methods=["POST"]),
         Route("/api/aviso-cierre/{id:int}/visto", aviso_visto, methods=["POST"]),
         Route("/api/peso", peso),
+        Route("/api/peso/{dia}", cambiar_peso, methods=["POST"]),
         Route("/api/balance", balance_serie),
         Route("/api/balance/semana", balance_semana),
         Route("/api/balance/semanas", balance_semanas),
@@ -1156,20 +965,14 @@ def crear_app(
         Route("/api/carrera", anadir_carrera, methods=["POST"]),
         Route("/api/carrera/{id:int}", cambiar_carrera, methods=["POST"]),
         Route("/api/carrera/{id:int}/quitar", quitar_carrera, methods=["POST"]),
-        Route("/api/interpretar", interpretar, methods=["POST"]),
-        Route("/api/dictado", dictado, methods=["POST"]),
-        Route("/api/confirmar", confirmar, methods=["POST"]),
         Route("/api/alimento", anadir, methods=["POST"]),
         Route("/api/alimento/{id:int}", cambiar, methods=["POST"]),
         Route("/api/alimento/{id:int}/borrar", borrar, methods=["POST"]),
         Route("/api/alimento/{id:int}/comido", comido, methods=["POST"]),
         Route("/api/alimento/{id:int}/seccion", seccion, methods=["POST"]),
         *rutas_recetas(recetario, hoy, registro),
-        *rutas_asistente(asistente, _dia),
-        *rutas_conversaciones(conversaciones, conversador if conversador is not None else ConversadorClaude(), medicos,
-                              _contexto_conversacion, asistente, hoy, ahora, transcriptor, planes),
-        *rutas_plan(planes, store, ajustes,
-                    ordenador_plan if ordenador_plan is not None else OrdenadorPlan(), conversaciones, hoy, ahora),
+        *rutas_coach(conversaciones),
+        *rutas_plan(planes, store, ajustes, asistente, hoy, ahora),
         *rutas_calendario(sincronizacion),
         Mount("/static", StaticFiles(directory=ESTATICOS), name="static"),
     ])

@@ -1,10 +1,10 @@
 // The Recetas tab (unit 011). Plain ES module, no build step. app.js only tells it when the tab is shown.
 // Three sections, as in the 010 mockup: Recetas, Taras (the pots and tupperware, with their tare) and
 // Ingredientes (unit 019: the screen name of what the code and the data call «fijo» / alimento_fijo). Tapping a row opens its card to change or delete it; «＋ Añadir …» opens an empty one.
-// A recipe's ingredients are written or dictated in its own box and interpreted like a meal
-// (/api/interpretar, /api/dictado: the same interpreter, nothing saved), then reviewed here. The server
-// does every sum that is saved (fixed foods with THEIR kcal, kcal/100 g); this only shows and sends.
-// Without the PC nothing is saved here: it says so (the offline queue is only for the Hoy screen).
+// A recipe's ingredients are put and changed by hand, one line each («Añadir ingrediente»; unit 080: «Interpretar
+// ingredientes» and dictating them are gone, the coach does that from the PC). The server does every sum that is
+// saved (fixed foods with THEIR kcal, kcal/100 g); this only shows and sends. Without the PC nothing is saved here:
+// it says so.
 // Unit 013: a saved recipe or fixed food opens with «¿Cuánto has cogido?», its kcal at once (worked out
 // here with what /api/recetas brought, only to show them) and «Apuntar en hoy», which sends just the
 // quantity: the server works the kcal out again with what is saved. A recipe not weighed yet shows its
@@ -16,8 +16,6 @@
 // buscador.js with only ingredients: choosing one leaves its grams or units and its kcal (the server recomputes
 // them with what is saved). `cuenta()` lives in buscador.js, the same for every screen.
 
-import { fechaLocal } from "./cola.js";
-import { grabar, puedeGrabar } from "./dictado.js";
 import { buscador, cuenta, fracciones, ponerGuardado, textoReceta, unidadPropia } from "./buscador.js";
 
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1, useGrouping: "always" });
@@ -293,26 +291,12 @@ function fichaOlla(o) {
 
 const MARCAS = { guardado: "ingrediente", estimado: "estimado", dudoso: "dudoso: corrígelo o quítalo" };
 
-// An interpreted food as an ingredient: doubtful, a fixed food (the server recomputes it) or estimated.
-function comoIngrediente(a) {
-  let estado = "estimado";
-  if (a.dudoso || a.kcal === null) estado = "dudoso";
-  else if (a.origen && (a.origen.startsWith("de tu ingrediente ") || a.origen.startsWith("de tu alimento fijo ")
-    || a.origen === "de la lista de comunes")) estado = "guardado"; // unit 026: a common one is as his
-  return { nombre: a.nombre, cantidad: a.cantidad, unidad: a.unidad, kcal: estado === "dudoso" ? null : a.kcal, estado };
-}
-
 function fichaReceta(r) {
   const v = r ? r.en_uso : null;
   const modelo = { ingredientes: v ? v.ingredientes.map((i) => ({ ...i })) : [], teniaIngredientes: Boolean(v && v.ingredientes.length) };
   const nombre = campo("Nombre", r ? r.nombre : "", "text", { placeholder: "p. ej. «garbanzos de la abuela»" });
   const alias_ = campo("Alias (separa con comas)", r ? r.alias.join(", ") : "");
   const nota = campo("Nota", r ? r.nota : "");
-  const caja = campo("Ingredientes (escríbelos o díctalos)", "", "textarea",
-    { placeholder: "garbanzo seco 600 g, aceite 50 g, cebolla 125 g" });
-  const interpretar = el("button", { type: "button", className: "principal", textContent: "Interpretar ingredientes" });
-  const dictar = el("button", { type: "button", className: "dictar", textContent: "🎤 Dictar" });
-  dictar.setAttribute("aria-label", "Dictar lo que lleva");
   const lista = el("div", { className: "ingredientes" });
   const anadirLinea = el("button", { type: "button", className: "anadir anadir-linea", textContent: "Añadir ingrediente" });
   anadirLinea.addEventListener("click", () => {
@@ -416,51 +400,6 @@ function fichaReceta(r) {
   }
   const avisar = (texto) => { aviso.textContent = texto; aviso.hidden = !texto; };
 
-  async function anadirInterpretados(respuesta) {
-    const nuevos = (respuesta.alimentos || []).map(comoIngrediente);
-    if (!nuevos.length) { avisar("No he encontrado ingredientes en ese texto."); return; }
-    modelo.ingredientes.push(...nuevos);
-    caja.entrada.value = "";
-    pintarIngredientes();
-  }
-  interpretar.addEventListener("click", async () => {
-    const texto = caja.entrada.value.trim();
-    if (!texto) { avisar("Escribe o dicta los ingredientes con sus gramos."); return; }
-    interpretar.disabled = true;
-    avisar("");
-    const { ok, datos: respuesta } = await api("/api/interpretar", { texto });
-    interpretar.disabled = false;
-    if (!ok) { avisar(respuesta.error ?? "No he podido interpretar los ingredientes."); return; }
-    anadirInterpretados(respuesta);
-  });
-  let grabacion = null;
-  dictar.addEventListener("click", async () => {
-    if (grabacion) { grabacion.parar(); return; }
-    if (!puedeGrabar()) { avisar("Este navegador no puede grabar audio: escríbelos."); return; }
-    try {
-      grabacion = await grabar({
-        alSegundo: (s) => { dictar.textContent = `■ Parar (${s} s)`; },
-        alTerminar: async ({ audio, tipo }) => {
-          grabacion = null;
-          dictar.textContent = "Enviando…";
-          const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
-          let r = null;
-          try {
-            r = await fetch(`/api/dictado?id=${id}&fecha=${fechaLocal()}`, { method: "POST", headers: { "Content-Type": tipo }, body: audio });
-          } catch { /* the PC is off */ }
-          dictar.textContent = "🎤 Dictar";
-          if (!r) { avisar(SIN_PC); return; }
-          const respuesta = await r.json().catch(() => ({}));
-          if (!r.ok) { if (respuesta.texto) caja.entrada.value = respuesta.texto; avisar(respuesta.error ?? "No se ha podido dictar."); return; }
-          caja.entrada.value = respuesta.texto;
-          anadirInterpretados(respuesta.interpretacion);
-        },
-      });
-    } catch {
-      grabacion = null;
-      avisar("No se ha podido usar el micrófono: escríbelos.");
-    }
-  });
   olla.entrada.addEventListener("change", pintarCalculo);
   peso.entrada.addEventListener("input", pintarCalculo);
 
@@ -503,7 +442,7 @@ function fichaReceta(r) {
     return respuesta.error ?? "No se ha podido guardar.";
   }
 
-  const nodos = [nombre, caja, el("div", { className: "acciones" }, interpretar, dictar), lista, anadirLinea, total,
+  const nodos = [nombre, el("p", { className: "titulo-ingredientes", textContent: "Ingredientes" }), lista, anadirLinea, total,
     el("div", { className: "fila dos" }, olla, peso), aprox, calculo, alias_, nota];
   const { tarjeta, acciones } = armazon({
     clase: "ficha-receta", aviso, textoGuardar: r ? "Guardar cambios" : "Guardar receta", nodos,

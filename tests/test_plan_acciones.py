@@ -4,7 +4,7 @@ note. Nothing changes until Andrés confirms; a card whose session was changed b
 
 Unit level over the catalogue with a seeded temporary SQLite (`test_plan.plan_de_prueba`, invented) and, at the end,
 the whole way through the web: the coach proposes it in a conversation (Claude doubled), the plan stays the same
-until the card is confirmed with /api/asistente/confirmar, and then Fitness › Plan shows it.
+until the card is confirmed (unit 080: by the coach, or the watch's in Fitness › Plan), and then Fitness › Plan shows it.
 """
 from __future__ import annotations
 
@@ -186,8 +186,7 @@ def test_el_entrenador_propone_y_el_plan_cambia_solo_al_confirmar(tmp_path):  # 
         return next(d for d in r.json()["dias"] if d["fecha"] == "2026-10-28")["sesiones"]
 
     assert [s["titulo"] for s in miercoles()] == ["Series de prueba 3×2000"]  # not confirmed: the same plan
-    r = web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta})
-    assert r.status_code == 200, r.text
+    confirmar(tarjeta, web.asistente)  # unit 080: confirmed as the coach does it (`desde_pc.hacer_desde_pc`)
     assert miercoles() == [{"titulo": "Series 3×1000", "bloques": ["20' a 5:30", "3×1000 a 4:05 (2' rec)", "15' suave"],
                             "clave": True}]
 
@@ -319,7 +318,7 @@ def test_desde_fitness_plan_la_tarjeta_y_en_tu_garmin(tmp_path, garmin):  # R1, 
     assert tarjeta["texto"] == "Voy a mandar a tu Garmin: Series de prueba 3×2000 (mié 28/10)"
     assert tarjeta["lineas"] == LINEAS_SERIES
     assert garmin.llamadas == []  # the card is not the sending (G-55)
-    r = web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta})
+    r = web.cliente.post(f"/api/plan/sesion/{reloj_dia['id']}/garmin/confirmar", json={"tarjeta": tarjeta})  # 080
     assert r.status_code == 200, r.text
     assert [e["workoutName"] for e in garmin.del_dia(MIERCOLES)] == ["Series de prueba 3×2000"]
     assert _miercoles(web)["reloj"][0]["estado"] == "al_dia"
@@ -331,7 +330,7 @@ def test_desde_la_web_si_garmin_falla_se_baja_el_fichero(tmp_path, garmin):  # R
     ident = _id_del(planes, plan_id, "2026-10-28")
     garmin.falla_en = "subir_entreno"
     tarjeta = web.cliente.post(f"/api/plan/sesion/{ident}/garmin").json()["tarjeta"]
-    r = web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta})
+    r = web.cliente.post(f"/api/plan/sesion/{ident}/garmin/confirmar", json={"tarjeta": tarjeta})  # unit 080
     assert r.status_code == 422 and "Bajar fichero" in r.json()["error"]
     assert _miercoles(web)["reloj"][0]["estado"] is None
     r = web.cliente.get(f"/api/plan/sesion/{ident}.fit")
@@ -342,6 +341,28 @@ def test_desde_la_web_si_garmin_falla_se_baja_el_fichero(tmp_path, garmin):  # R
     from tridata.plan.reloj import fit_local
     assert r.content == fit_local(planes.sesion(ident))  # the same session
     assert web.cliente.get("/api/plan/sesion/999999.fit").status_code == 404
+
+
+def test_la_tarjeta_del_reloj_solo_vale_para_su_sesion_y_descartarla_no_manda_nada(tmp_path, garmin):  # unit 080
+    import sqlite3
+
+    web, planes, plan_id = _web_con_series(tmp_path)
+    ident = _id_del(planes, plan_id, "2026-10-28")
+    tarjeta = web.cliente.post(f"/api/plan/sesion/{ident}/garmin").json()["tarjeta"]
+    otra = next(s["id"] for s in planes.sesiones_reloj(plan_id) if s["id"] != ident)
+    for ruta, cuerpo in ((f"/api/plan/sesion/{otra}/garmin/confirmar", {"tarjeta": tarjeta}),
+                         (f"/api/plan/sesion/{ident}/garmin/confirmar", {"tarjeta": {**tarjeta, "accion": "pasos"}}),
+                         (f"/api/plan/sesion/{ident}/garmin/confirmar", {}),
+                         (f"/api/plan/sesion/{ident}/garmin/descartar", {"tarjeta": "no es una tarjeta"})):
+        r = web.cliente.post(ruta, json=cuerpo)
+        assert r.status_code == 400, (ruta, r.text)
+    assert garmin.llamadas == []
+    r = web.cliente.post(f"/api/plan/sesion/{ident}/garmin/descartar", json={"tarjeta": tarjeta})
+    assert r.status_code == 200 and r.json() == {"descartada": True}
+    assert garmin.llamadas == [] and _miercoles(web)["reloj"][0]["estado"] is None  # nothing went to Garmin (R-70)
+    with sqlite3.connect(web.db) as conn:
+        assert conn.execute("SELECT accion, estado FROM tarjeta_asistente").fetchall() == [("mandar_a_garmin",
+                                                                                            "descartada")]
 
 
 def test_desde_fitness_plan_un_bloque_raro_no_da_tarjeta(tmp_path, garmin):  # R6
@@ -366,7 +387,7 @@ def test_el_entrenador_la_propone_y_solo_sale_al_confirmar(tmp_path, garmin):  #
     (tarjeta,) = fin["mensaje"]["tarjetas"]
     assert tarjeta["texto"] == "Voy a mandar a tu Garmin: Series de prueba 3×2000 (mié 28/10)"
     assert garmin.llamadas == []  # C-203
-    assert web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta}).status_code == 200
+    confirmar(tarjeta, web.asistente)  # unit 080: confirmed as the coach does it
     assert [e["workoutName"] for e in garmin.del_dia(MIERCOLES)] == ["Series de prueba 3×2000"]
 
 
@@ -524,8 +545,7 @@ def test_el_fisio_la_propone_y_solo_se_abre_al_confirmar(tmp_path):  # R1 · C-1
     (tarjeta,) = fin["mensaje"]["tarjetas"]
     assert tarjeta["texto"] == "Voy a abrir una incidencia: tobillo derecho, lateral, desde el 20/10"
     assert web.cliente.get("/api/plan/incidencias").json()["incidencias"] == []  # C-204
-    r = web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta})
-    assert r.status_code == 200, r.text
+    confirmar(tarjeta, web.asistente)  # unit 080: confirmed as the coach does it
     (i,) = web.cliente.get("/api/plan/incidencias").json()["incidencias"]
     assert (i["titulo"], i["estado"]) == ("tobillo derecho, lateral", "abierta")
 
@@ -604,7 +624,7 @@ def test_la_sesion_se_describe_como_la_lee_el_reloj():  # bug 055 · R3
 def _mandada(web, planes: Planes, plan_id: int) -> int:
     ident = _id_del(planes, plan_id, "2026-10-28")
     tarjeta = web.cliente.post(f"/api/plan/sesion/{ident}/garmin").json()["tarjeta"]
-    assert web.cliente.post("/api/asistente/confirmar", json={"tarjeta": tarjeta}).status_code == 200
+    assert web.cliente.post(f"/api/plan/sesion/{ident}/garmin/confirmar", json={"tarjeta": tarjeta}).status_code == 200
     return ident
 
 

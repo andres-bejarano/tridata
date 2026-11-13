@@ -26,14 +26,13 @@
 </head>
 <body>
   <main>
-    <!-- ================= HOY (unit 030: the day at a glance, hoy.js paints the cards; the app opens here) ================= -->
+    <!-- ================= HOY (unit 030: the day at a glance, hoy.js paints the cards; the app opens here; unit 080:
+         three cards, no box to dictate and no card of the Asistente) ================= -->
     <section id="hoy" class="pantalla" data-pestana="hoy" aria-label="Hoy" hidden>
       <div class="hoy-cab">
         <h1 class="titulo-pantalla">Hoy</h1>
         <p id="hoy-fecha" class="suave"></p>
       </div>
-      <!-- the message, the recordings queue and the review of what is dictated move here from Día while Hoy shows (app.js) -->
-      <div id="hoy-dictado"></div>
       <article id="hoy-comida" class="tarjeta tarjeta-hoy" data-ir="dia">
         <div class="cab-hoy"><h2>🍽️ Comida</h2><a class="ver-mas" href="#dia">Ver Nutrición ›</a></div>
         <div class="grande-hoy num"><span class="cifra">—</span><small id="hoy-queda-texto">kcal te quedan</small></div>
@@ -54,10 +53,6 @@
         <p id="hoy-garmin-hora" class="suave"></p>
         <p id="hoy-garmin-error" class="aviso" role="status" aria-live="polite" hidden></p>
         <button id="hoy-actualizar" type="button" class="principal">↻ Actualizar Garmin</button>
-      </article>
-      <article id="hoy-asistente" class="tarjeta tarjeta-hoy" data-ir="asistente">
-        <div class="cab-hoy"><h2>💬 Asistente</h2><a class="ver-mas" href="#asistente">Abrir ›</a></div>
-        <p id="hoy-asistente-texto" class="suave">Aún no has hablado con el asistente.</p>
       </article>
     </section>
 
@@ -89,62 +84,10 @@
       </div>
       <div id="fitness-plan" class="plan" hidden>
         <p id="plan-aviso" role="status" aria-live="polite" hidden></p>
-        <input id="plan-fichero" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
         <div id="plan-vista"></div>
         <div id="plan-semana" hidden></div>
-        <div id="plan-importar" hidden></div>
       </div>
     </section>
-    <!-- ================= ASISTENTE (unit 032: conversaciones.js; #asistente the list, #asistente/N one conversation) ================= -->
-    <section id="asistente" class="pantalla" data-pestana="asistente" aria-label="Asistente" hidden>
-      <h1 class="titulo-pantalla">Asistente</h1>
-      <p id="conv-aviso" role="status" aria-live="polite" hidden></p>
-      <div id="conv-lista-vista">
-        <p class="suave intro-asistente">Aquí están tus conversaciones con el asistente. Ve siempre todo tu contexto: comidas, peso, entrenos, sueño, pulso, HRV, tu analítica y tu prueba de esfuerzo.</p>
-        <p id="conv-gasto" class="suave conv-gasto"></p>
-        <!-- unit 039: what the month has cost of the cap; from 80 % (high) the meter takes the warning colour -->
-        <meter id="conv-gasto-barra" class="conv-gasto-barra" min="0" max="5" low="4" high="4" optimum="0" value="0"
-               aria-labelledby="conv-gasto" style="display:block;width:100%;height:0.75rem;margin:0.25rem 0 0.75rem"></meter>
-        <p id="conv-tope" class="aviso" hidden></p>
-        <ul id="conv-lista" class="tarjeta lista-conversaciones" hidden></ul>
-        <p id="conv-vacia" class="tarjeta conv-vacia">Aún no tienes ninguna. Pregúntale lo que quieras: «¿cómo voy para el 10K del 3 de diciembre?», «¿qué ceno hoy con lo que me queda?» o «¿cómo va mi peso este mes?».</p>
-        <button id="conv-ver-medicos" type="button" class="enlace-boton">Qué sabe de tu analítica y tu prueba de esfuerzo</button>
-        <div id="conv-medicos" class="tarjeta conv-medicos" hidden></div>
-        <button id="conv-nueva" type="button" class="principal conv-nueva">＋ Nueva conversación</button>
-      </div>
-      <div id="conv-chat" hidden>
-        <div class="conv-cabecera">
-          <button id="conv-volver" type="button" class="flecha" aria-label="Volver a tus conversaciones">◀</button>
-          <span id="conv-icono" class="conv-icono" aria-hidden="true"></span>
-          <h2 id="conv-titulo"></h2>
-          <button id="conv-renombrar" type="button" class="icono-boton" aria-label="Cambiar el título">✎</button>
-          <button id="conv-borrar" type="button" class="icono-boton" aria-label="Borrar la conversación">🗑</button>
-        </div>
-        <div id="conv-renombrar-caja" class="tarjeta desplegable" hidden>
-          <label class="campo"><span>Título</span><input id="conv-titulo-nuevo" type="text" autocomplete="off" maxlength="120"></label>
-          <div class="acciones">
-            <button id="conv-renombrar-si" type="button" class="principal">Guardar</button>
-            <button id="conv-renombrar-no" type="button">Cancelar</button>
-          </div>
-        </div>
-        <div id="conv-borrar-caja" class="tarjeta confirmar-borrado" hidden>
-          <p>¿Borrar esta conversación? Se borra entera; tus comidas, tus pesos y las demás conversaciones no se tocan.</p>
-          <div class="acciones">
-            <button id="conv-borrar-si" type="button" class="peligro principal">Sí, borrar</button>
-            <button id="conv-borrar-no" type="button">No</button>
-          </div>
-        </div>
-        <p id="conv-linea" class="tarjeta conv-linea"></p>
-        <!-- unit 041: who Andrés talks to, in a conversation that starts; «Pedir opinión a…» under what was said -->
-        <div id="conv-papeles-caja" hidden>
-          <h2 class="titulo-equipo" id="conv-papeles-titulo">¿Con quién quieres hablar?</h2>
-          <div id="conv-papeles" class="conv-papeles" role="group" aria-labelledby="conv-papeles-titulo"></div>
-        </div>
-        <div id="conv-mensajes" class="conv-mensajes" aria-live="polite"></div>
-        <div id="conv-opinion" class="conv-opinion" hidden></div>
-      </div>
-    </section>
-
     <!-- ================= NUTRICIÓN: its selector Día · Balance · Recetas (unit 029) ================= -->
     <header id="nutricion" class="nutricion" hidden>
       <h1 class="titulo-pantalla">Nutrición</h1>
@@ -197,41 +140,7 @@
       </article>
 
       <p id="mensaje" role="status" aria-live="polite"></p>
-
-      <section id="cola" class="cola" aria-label="Grabaciones" aria-live="polite">
-        <p id="sin-conexion" class="aviso" hidden>Sin conexión con el PC. Lo que grabes se guarda en el móvil y se envía cuando vuelva.</p>
-        <p id="sin-enviar" class="aviso-cola" hidden></p>
-        <div id="no-transcritas"></div>
-        <div id="pendientes" class="tarjeta pendientes" hidden>
-          <p id="pendientes-texto" class="fuerte"></p>
-          <button id="revisar" type="button" class="principal">Revisar</button>
-        </div>
-      </section>
-
-      <section id="revision" aria-labelledby="t-revision" hidden>
-        <h2 id="t-revision">Esto he entendido</h2>
-        <p id="dicho" class="dicho" hidden></p>
-        <p id="dia-grabacion" class="marca alerta" hidden></p>
-        <p class="suave">Revísalo: corrige lo que haga falta y confirma. Hasta entonces no se guarda nada.</p>
-        <!-- unit 021: the assistant's cards (asistente.js), each confirmed or discarded on its own -->
-        <div id="cambios" class="cambios" hidden></div>
-        <div id="piezas"></div>
-        <div id="simulacion" class="tarjeta simulacion" hidden></div>
-        <div id="lista"></div>
-        <button id="anadir-revision" type="button" class="anadir">Añadir alimento</button>
-        <p id="bloqueo" class="aviso" hidden></p>
-        <div id="revision-piezas" class="acciones">
-          <button id="confirmar" type="button" class="principal">Confirmar y guardar</button>
-          <button id="descartar" type="button">Descartar</button>
-        </div>
-        <div id="confirmar-descarte" class="confirmar-borrado" hidden>
-          <p>¿Descartar esta lista? No se guardará nada.</p>
-          <div class="acciones">
-            <button id="descarte-si" type="button" class="peligro principal">Sí, descartar</button>
-            <button id="descarte-no" type="button">No</button>
-          </div>
-        </div>
-      </section>
+      <p id="sin-conexion" class="aviso" hidden>Sin conexión con el PC.</p>
 
       <h2 id="t-comido"><span id="t-comido-dia">Tu día</span> <small id="total" class="num"></small></h2>
       <div id="avisos"></div>
@@ -258,7 +167,7 @@
     <!-- ================= RECETAS (recetas.js, unit 011) ================= -->
     <section id="recetas" class="pantalla" data-pestana="recetas" aria-label="Recetas" hidden>
       <h2 class="oculto">Recetas</h2>
-      <p class="suave intro-recetas">Lo que guardes aquí lo usará al dictar: «garbanzos de la abuela 250 g».</p>
+      <p class="suave intro-recetas">Lo que guardes aquí lo eliges al añadir un alimento: «garbanzos de la abuela», 250 g.</p>
       <p id="recetas-mensaje" role="status" aria-live="polite"></p>
       <article id="apartado-recetas" class="tarjeta apartado" aria-labelledby="t-recetas">
         <div class="tipo"><div class="ico ico-receta" aria-hidden="true">🍲</div><div><strong id="t-recetas">Recetas</strong><span>Platos con sus ingredientes, pesados en su olla</span></div></div>
@@ -342,21 +251,8 @@
     </div>
   </dialog>
 
-  <!-- ================= ABAJO: CAJA + PESTAÑAS ================= -->
+  <!-- ================= ABAJO: LAS CUATRO PESTAÑAS (unit 080: no box to write or dictate) ================= -->
   <div id="abajo" class="abajo">
-    <form id="entrada" class="caja">
-      <label for="texto" class="oculto">¿Qué has comido o vas a comer? También tu peso, «nuevo día…» o un cambio («hoy son 15 mil pasos»)</label>
-      <div class="texto-caja">
-        <textarea id="texto" rows="1" placeholder="Comida, «peso 72,4», «nuevo día…» o un cambio" required></textarea>
-        <button id="enviar" type="submit" class="enviar" aria-label="Interpretar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
-      </div>
-      <!-- unit 032: in a conversation, «Pensar más» sends the next message with Sonnet -->
-      <button id="pensar" type="button" class="pensar" aria-pressed="false" hidden>Pensar más</button>
-      <button id="grabar" type="button" class="micro" aria-label="Grabar lo que has comido">
-        <svg class="micro-icono" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg>
-        <span id="grabar-tiempo" class="micro-tiempo" hidden></span>
-      </button>
-    </form>
     <nav class="pestanas" aria-label="Pantallas">
       <a class="pestana" href="#hoy" data-ir="hoy">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><path d="M12 8v4l2.5 2"/></svg>Hoy</a>
@@ -364,8 +260,6 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v8a2 2 0 0 0 2 2v8"/><path d="M5 3v5a2 2 0 0 0 4 0V3"/><path d="M17 21V3c-2 1-3 4-3 7s1 4 3 4"/></svg>Nutrición</a>
       <a class="pestana" href="#fitness" data-ir="fitness">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg>Fitness</a>
-      <a class="pestana" href="#asistente" data-ir="asistente">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>Asistente</a>
       <a class="pestana" href="/ajustes" data-ir="ajustes">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>Ajustes</a>
     </nav>

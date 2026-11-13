@@ -1,27 +1,23 @@
 """Unit 048 in a real Chromium at 390 × 844, light and dark: a day of the plan with two sessions shows one row per
 session, each with its title, ONLY its blocks and its «Mandar a mi Garmin», whose card is the one of THAT session;
-confirmed, «⌚ en tu Garmin» is in the row of that session (R1, R2). In a conversation, the card «Mandar a tu
-Garmin» whose confirmation fails shows the error and «Bajar fichero» of that session (R7).
+confirmed, «⌚ en tu Garmin» is in the row of that session (R1, R2). Unit 080 (S-5): R7 («Bajar fichero» in the card
+of a conversation of the Asistente) went with the Asistente.
 
-Garmin is doubled where the app connects to it (`plan.reloj.cliente_garmin`, the double of `tests/test_plan_reloj.py`)
-and Claude is doubled as in `test_molestias_e2e.py`: nothing leaves this PC. The plan is invented.
+Garmin is doubled where the app connects to it (`plan.reloj.cliente_garmin`, the double of `tests/test_plan_reloj.py`):
+nothing leaves this PC. The plan is invented.
 """
 from __future__ import annotations
 
 import importlib.util
-import re
 from datetime import date, datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 pytest.importorskip("playwright", reason="E2E needs the `e2e` extra: python -m pip install -e '.[dev,e2e]'")
 
 from playwright.sync_api import expect  # noqa: E402
-from test_conversaciones_e2e import ServidorAsistente, _Flujo  # noqa: E402
 
-from tridata.garmin_client import GarminWorkoutError  # noqa: E402
 from tridata.plan import Planes, reloj  # noqa: E402
 
 _ruta = Path(__file__).parents[1] / "test_plan_reloj.py"
@@ -120,57 +116,3 @@ def _dia_repintado(p):
     dia = p.locator("#plan-semana .dia-plan").nth(2)
     expect(dia.locator(".en-garmin")).to_have_count(1)
     return dia
-
-
-# -- R7: «Bajar fichero» in the card of a conversation --------------------------------------------------------------
-
-def _uso():
-    return SimpleNamespace(input_tokens=30, output_tokens=60, cache_creation_input_tokens=0, cache_read_input_tokens=0)
-
-
-def _entrenador(**peticion):
-    """Asks for the card «Mandar a tu Garmin» of the series; with its result, answers in words."""
-    ultimo = peticion["messages"][-1]["content"]
-    if isinstance(ultimo, list):
-        texto = "Te la dejo lista: confírmala."
-        return _Flujo([texto], SimpleNamespace(content=[SimpleNamespace(type="text", text=texto)],
-                                               stop_reason="end_turn", usage=_uso()))
-    return _Flujo([], SimpleNamespace(
-        content=[SimpleNamespace(type="tool_use", id="t1", name="proponer_cambio",
-                                 input={"accion": "mandar_a_garmin", "dia": "2026-10-28", "objeto": "series"})],
-        stop_reason="tool_use", usage=_uso()))
-
-
-@pytest.fixture
-def asistente(tmp_path, monkeypatch):
-    carpeta = tmp_path / "sesiones"
-    s = ServidorAsistente(carpeta)
-    s.claude.stream = _entrenador
-    Planes(carpeta / "data.sqlite3").crear(PLAN, datetime(2026, 10, 20, 9, 0))
-    g = doble.GarminDoble()
-    g.falla_en, g.error = "subir_entreno", GarminWorkoutError("no answer")
-    monkeypatch.setattr(reloj, "cliente_garmin", lambda entorno=None: g)
-    s.garmin, s.base = g, carpeta / "data.sqlite3"
-    yield s
-    s.parar()
-
-
-def test_en_una_conversacion_si_garmin_falla_se_baja_el_fichero(asistente, abrir, capturar):  # R7 · R-159
-    p = abrir(asistente, "/#asistente", esperar=False)
-    p.locator("#conv-nueva").click()
-    p.locator('#conv-papeles button[data-papel="entrenador"]').click()
-    p.locator("#texto").fill("mándame las series del miércoles al reloj")
-    p.locator("#enviar").click()
-    tarjeta = p.locator("#conv-mensajes .tarjeta-cambio").last
-    expect(tarjeta).to_contain_text("Voy a mandar a tu Garmin: Series 4×12' (mié 28/10)")
-    tarjeta.get_by_role("button", name="Confirmar", exact=True).click()
-    expect(tarjeta).to_contain_text("No ha llegado a tu Garmin")
-    bajar = tarjeta.get_by_role("link", name="Bajar fichero")
-    expect(bajar).to_have_attribute("href", re.compile(r"^/api/plan/sesion/\d+\.fit$"))
-    ident = int(re.search(r"(\d+)\.fit$", bajar.get_attribute("href")).group(1))
-    assert Planes(asistente.base).sesion(ident)["titulo"] == "Series 4×12'"  # the session of the card
-    with p.expect_download() as descarga:
-        bajar.click()
-    assert descarga.value.suggested_filename.endswith(".fit")
-    _sin_scroll(p, "fallo en la conversación")
-    capturar(p, "048-conversacion-bajar-fichero-claro", completa=True)

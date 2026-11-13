@@ -40,22 +40,13 @@ RUTAS_DE_IA = [
 ]
 
 
-def _prohibido(*args, **kwargs):
-    raise AssertionError("an AI client was created")
-
-
 @pytest.fixture
 def sin_ia(monkeypatch):
-    """Creating any AI client (or the API's own) fails the test; no key of the API in the environment."""
-    from tridata.ia import claude, conversacion, plan, whisper
-
+    """No key of the API in the environment, and (unit 083: there is no AI client left to forbid one by one) the
+    libraries of the paid API and of the dictation cannot even be imported."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    for clase in (claude.InterpreteClaude, conversacion.ConversadorClaude, plan.OrdenadorPlan,
-                  whisper.TranscriptorWhisper):
-        monkeypatch.setattr(clase, "__init__", _prohibido)
-    import anthropic
-
-    monkeypatch.setattr(anthropic.Anthropic, "__init__", _prohibido)
+    monkeypatch.setitem(sys.modules, "anthropic", None)
+    monkeypatch.setitem(sys.modules, "faster_whisper", None)
 
 
 class Web:
@@ -93,15 +84,15 @@ def test_la_app_arranca_sin_clientes_de_ia(tmp_path, sin_ia):  # R6
         assert cliente.get("/api/plan").status_code == 200
 
 
-def test_crear_app_no_pide_interprete_ni_transcriptor(tmp_path, sin_ia):  # R6: they are ignored if given
+def test_crear_app_no_pide_interprete(tmp_path, sin_ia):  # R6: ignored if given (unit 083: no `transcriptor` left)
     db = tmp_path / "data.sqlite3"
     ajustes = Ajustes(db)
     ajustes.cambiar({"basal_kcal": 1600, "kcal_por_paso": 0.04}, desde=DESDE_SIEMPRE)
-    transcriptor = MagicMock()
-    app = crear_app(RegistroComidas(db), MagicMock(), ajustes, hoy=lambda: HOY, transcriptor=transcriptor)
+    interprete = MagicMock()
+    app = crear_app(RegistroComidas(db), interprete, ajustes, hoy=lambda: HOY)
     with TestClient(app) as cliente:
         assert cliente.get("/api/dia").status_code == 200
-    assert transcriptor.mock_calls == []  # Whisper is never loaded
+    assert interprete.mock_calls == []  # nothing is interpreted
 
 
 def test_tridata_web_arranca_sin_clave_ni_avisos_de_ia(tmp_path, sin_ia, monkeypatch, capsys):  # R6
@@ -292,15 +283,18 @@ def test_una_base_de_hoy_abre_sin_perder_nada(tmp_path, sin_ia):  # R10
     conversaciones.anadir_mensaje(conv["id"], "andres", "pregunta inventada", AHORA)
     conversaciones.anadir_mensaje(conv["id"], "asistente", "respuesta inventada", AHORA, papel="fisio",
                                   tarjetas=[{"tipo": "propuesta", "texto": "tarjeta inventada"}])
-    conversaciones.apuntar_gasto(AHORA, "claude-haiku-4-5", {"entrada": 10, "salida": 5}, "conversacion")
     from tridata.conversaciones.medicos import Medicos
     from tridata.nutricion.asistente import Tarjetas
 
-    Medicos(db, None, None)
+    Medicos(db, None)
     Tarjetas(db)
     with sqlite3.connect(db) as conn:
         conn.execute("INSERT INTO transcripcion_medica VALUES ('analitica-inventada.pdf', 'h', 'analitica', "
                      "'Analítica inventada', '2026-01-01', '[]', 'notas inventadas', '2026-01-02T00:00:00')")
+        # unit 083: nothing writes the spending any more; a row of before, as the API left it
+        conn.execute("INSERT INTO gasto_asistente (hora, mes, que, modelo, tokens_entrada, tokens_salida, "
+                     "tokens_cache_escritura, tokens_cache_lectura, dolares) VALUES ('2026-10-01T10:00:00', "
+                     "'2026-10', 'conversacion', 'claude-haiku-4-5', 10, 5, 0, 0, 0.0001)")
         conn.execute("INSERT INTO tarjeta_asistente (hora, texto_peticion, fecha_peticion, accion, toca, estado) "
                      "VALUES ('2026-10-01T10:00:00', 'texto inventado', '2026-10-01', 'pasos', 'hoy', 'aplicada')")
     RegistroComidas(db).guardar([Alimento(nombre="Avena inventada", dia=HOY, cantidad=60, unidad="g", kcal=228)],

@@ -12,7 +12,6 @@ import pytest
 from starlette.testclient import TestClient
 
 from tridata import cli
-from tridata.ia import AlimentoInterpretado
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, RegistroComidas
 from tridata.web import crear_app
 
@@ -20,18 +19,18 @@ HOY = date(2026, 3, 4)
 MANANA = HOY + timedelta(days=1)
 
 
-def _item(nombre, **campos):
+def _json(nombre, **campos):
+    """A food as the old interpreter gave it, in JSON (unit 083: the interpreter is gone, its shape stays here)."""
     datos = {
         "nombre": nombre, "cantidad": 100.0, "unidad": "g", "dia": HOY, "kcal": 100.0,
         "proteina_g": None, "hidratos_g": None, "grasa_g": None, "estimado": True,
-        "dudoso": False, "supuestos": [],
+        "dudoso": False, "supuestos": [], "guardado": None, "coincidencia": None,
     }
     datos.update(campos)
-    return AlimentoInterpretado(**datos)
-
-
-def _json(nombre, **campos):
-    return _item(nombre, **campos).model_dump(mode="json")
+    datos["dia"] = datos["dia"].isoformat()
+    for clave in ("cantidad", "kcal"):
+        datos[clave] = float(datos[clave]) if datos[clave] is not None else None
+    return datos
 
 
 @pytest.fixture

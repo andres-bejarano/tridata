@@ -1,23 +1,22 @@
-"""Unit 032 · R3, R5 (R-114, R-115, G-46, C-155, C-156) — the criterio portante: every conversation sees ALL the
-context, the same, and none sees what was said in another one (S-41).
+"""Unit 032 · R3 (R-114, G-46, C-155) — the team sees ALL the context, always the same.
 
 The context is built on this PC (`conversaciones/contexto.py`): the fixed instructions with the catalogue of
 actions, the medical transcription and the data in JSON (the last 8 weeks day by day, the earlier ones by week, the
-load with the HR of Ajustes), without the hour. The line «Ve tus …, hasta hoy 9:42» goes apart. Every datum is
-invented: foods, weights, activities, sleep, HR, HRV and a medical transcription made from a PDF written by the test
-and «read» by a double.
+load with the HR of Ajustes), without the hour. Since unit 083 who reads it is the coach of the PC (`get_contexto`,
+`desde_pc.texto_contexto`); the line «Ve tus …» and the requests to the API are gone with the Asistente. Every datum
+is invented: foods, weights, activities, sleep, HR, HRV and a medical transcription of a PDF written by the test.
 """
 from __future__ import annotations
 
 import json
 from datetime import date, datetime, timedelta
 
-import pytest
 
-from test_conversaciones import VALOR_INVENTADO, PdfFalso, pdf_sintetico
+from test_conversaciones import VALOR_INVENTADO, guardar_todas, pdf_sintetico
 from test_plan import plan_de_prueba
-from tridata.conversaciones.contexto import Contexto, linea, montar
-from tridata.conversaciones.medicos import Medicos, TranscriptorPDF
+from tridata.conversaciones.contexto import Contexto, montar
+from tridata.conversaciones.desde_pc import montar_equipo, texto_contexto
+from tridata.conversaciones.medicos import Medicos
 from tridata.models import Activity, DailyStats, HRVRecord, SleepRecord
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, RegistroComidas, RegistroPeso
 from tridata.nutricion.asistente import texto_acciones
@@ -63,16 +62,24 @@ class Mundo:
         if con_medicos:
             (carpeta / "analitica-de-prueba.pdf").write_bytes(pdf_sintetico("analitica inventada"))
             (carpeta / "ergometria-de-prueba.pdf").write_bytes(pdf_sintetico("ergometria inventada"))
-        self.medicos = Medicos(self.db, carpeta if con_medicos else None, TranscriptorPDF(cliente=PdfFalso()))
+        self.carpeta = carpeta if con_medicos else None
+        self.medicos = Medicos(self.db, self.carpeta)
+        guardar_todas(self.medicos)  # as the coach saved them (unit 081)
 
     def comer(self, nombre: str, dia: date, kcal: float) -> None:
         self.registro.guardar([Alimento(nombre=nombre, dia=dia, cantidad=100, unidad="g", kcal=kcal)],
                               hoy=dia, texto=nombre, sin_cambios=True)
 
     def contexto(self, hoy: date = HOY, **extra) -> Contexto:
-        estado = self.medicos.al_dia()
         return montar(registro=self.registro, pesos=self.pesos, ajustes=self.ajustes, store=self.store,
-                      transcripciones=self.medicos.transcripciones(), aviso_medico=estado["aviso"], hoy=hoy, **extra)
+                      transcripciones=self.medicos.transcripciones(), aviso_medico=self.medicos.estado()["aviso"],
+                      hoy=hoy, **extra)
+
+    def del_coach(self) -> str:
+        """Unit 083: what the coach reads (`get_contexto`) over this same base, as of `HOY`."""
+        equipo = montar_equipo(self.db, store=self.store, medicos_dir=self.carpeta,
+                               token=self.db.parent / "google-token.json", hoy=lambda: HOY, ahora=lambda: AHORA)
+        return texto_contexto(equipo)
 
     def plan(self) -> Planes:
         """Unit 041: an invented plan (`test_plan.plan_de_prueba`: S8 to S10 around `HOY`) with one incident and the
@@ -139,47 +146,22 @@ def test_un_dato_nuevo_cambia_el_contexto(tmp_path):  # R2 · C-157: the race of
     assert "Carrera de ayer de prueba" in despues.bloques[-1]
 
 
-def test_la_linea_dice_que_ve_y_hasta_cuando(tmp_path):  # R5 · R-115, C-156
-    ctx = Mundo(tmp_path).contexto()
-    assert linea(ctx, AHORA) == ("Ve tus comidas, peso, entrenos, sueño, pulso, HRV, analítica y prueba de esfuerzo, "
-                                 "hasta hoy 9:42")
-    assert "9:42" not in "".join(ctx.bloques)  # apart, never inside the fixed part
-
-
-def test_sin_datos_medicos_lo_dice_en_la_linea(tmp_path):  # R4, R5
+def test_sin_datos_medicos_lo_dice(tmp_path):  # R4 (unit 083: the line of R5 is gone; what it said, not)
     ctx = Mundo(tmp_path, con_medicos=False).contexto()
-    texto = linea(ctx, AHORA)
-    assert texto.startswith("Ve tus comidas, peso, entrenos, sueño, pulso y HRV, hasta hoy 9:42")
-    assert "analítica" in texto and "TRIDATA_MEDICOS_DIR" in texto
+    assert ctx.ve == ("comidas", "peso", "entrenos", "sueño", "pulso", "HRV")
+    assert ctx.aviso and "TRIDATA_MEDICOS_DIR" in ctx.aviso
     assert VALOR_INVENTADO not in "".join(ctx.bloques)
 
 
-# -- the criterio portante, through the routes: two conversations, the same fixed part --------------------------
+# -- the criterio portante, as the coach reads it: everything, and the same every time ---------------------------
 
-@pytest.fixture
-def web(tmp_path):
-    from test_conversaciones_web import Web
-
-    return Web(tmp_path)
-
-
-def test_todas_las_conversaciones_ven_todo_y_lo_mismo(web):  # R3 · R-114, G-46, C-155, S-41
-    web.sembrar()
-    web.claude.responder("Tu peso va bien.")
-    peso = web.nueva("¿cómo va mi peso de noviembre?")
-    web.claude.responder("Para el 10K vas bien.")
-    carrera = web.nueva("quiero hacer 10 km el 3 de diciembre en 45 minutos")
-    assert peso["conversacion"]["id"] != carrera["conversacion"]["id"]
-    p_peso, p_carrera = web.claude.peticiones
-    assert p_peso["system"] == p_carrera["system"]  # byte to byte: none sees less
-    fija = "\n".join(b["text"] for b in p_carrera["system"])
+def test_el_coach_ve_todo_y_lo_mismo(tmp_path):  # R3 · R-114, G-46, C-155 (unit 083: was through the Asistente)
+    mundo = Mundo(tmp_path)
+    fija = mundo.del_coach()
+    assert fija == mundo.del_coach()  # byte to byte
     for dato in ("tostada de prueba", "71.9", "Carrera de prueba al río", '"pulso_reposo":47', '"hrv":63',
                  '"sueno_h":7.25', '"ctl"', VALOR_INVENTADO, "58,31", "10K de prueba"):
         assert dato in fija, dato
-    # what was said in one conversation never reaches the other (S-41)
-    dicho = json.dumps(p_carrera["messages"], ensure_ascii=False)
-    assert "peso de noviembre" not in dicho and "Tu peso va bien" not in dicho
-    assert p_carrera["messages"] == [{"role": "user", "content": "quiero hacer 10 km el 3 de diciembre en 45 minutos"}]
 
 
 # -- unit 041 · R2 (C-179, G-46): the plan in course and its incidents, the same for the four roles ---------------
@@ -213,35 +195,13 @@ def test_sin_plan_el_contexto_lo_dice_y_no_inventa(tmp_path):  # R2
     assert d.get("plan") is None and d.get("incidencias") in (None, [])
 
 
-def test_la_linea_dice_tu_plan_las_incidencias_y_el_modelo(tmp_path):  # R2, R7 · C-179, C-184
+def test_el_coach_ve_el_plan_en_curso(tmp_path):  # R2 · C-179, G-46 (unit 083: was the four roles of the app)
     mundo = Mundo(tmp_path)
-    ctx = mundo.contexto(planes=mundo.plan())
-    texto = linea(ctx, AHORA, "claude-sonnet-5-5")
-    assert texto.startswith("Ve tus comidas, peso, entrenos, sueño, pulso, HRV, tu plan Road to Ejemplo 26, "
-                            "incidencias (1)")
-    assert "analítica y prueba de esfuerzo, hasta hoy 9:42" in texto
-    assert texto.endswith(" · Sonnet")
-    assert linea(ctx, AHORA, "claude-haiku-5-5").endswith(" · Haiku")
-    assert linea(ctx, AHORA).endswith("hasta hoy 9:42")  # without a model, as before
-
-
-def test_los_cuatro_papeles_ven_lo_mismo_con_el_plan(web):  # R2 · C-179, G-46 · the criterio portante
-    web.plan()
-    peticiones = []
-    for papel in ("entrenador", "fisio", "nutricionista", "asistente"):
-        web.claude.responder(f"Respuesta de prueba del {papel}.")
-        fin = web.nueva("¿cómo voy?", papel=papel)
-        assert fin["tipo"] == "fin", fin
-        peticiones.append(web.claude.peticiones[-1])
-    comunes = {json.dumps(p["system"][:-1], ensure_ascii=False, sort_keys=True) for p in peticiones}
-    assert len(comunes) == 1  # byte to byte
-    fija = "\n".join(b["text"] for b in peticiones[0]["system"][:-1])
+    mundo.plan()
+    fija = mundo.del_coach()
     for dato in ("Road to Ejemplo 26", "Series de prueba 3×2000", "Gel de prueba", "Presión de prueba en el gemelo",
                  "tostada de prueba", VALOR_INVENTADO):
         assert dato in fija, dato
-    assert peticiones[0]["system"][-2]["cache_control"] == {"type": "ephemeral"}
-    assert len({p["system"][-1]["text"] for p in peticiones}) == 4  # each one its role, after the mark
-    assert all("cache_control" not in p["system"][-1] for p in peticiones)
 
 
 # -- unit 044 · R5 (R-149, C-191): the open incidents always, and the closed ones of the plan in course -------------
@@ -358,13 +318,8 @@ def test_las_instrucciones_dicen_que_el_equipo_no_toca_el_calendario(tmp_path): 
     assert "Sincronizar ahora" in instrucciones and "Ajustes" in instrucciones
 
 
-def test_la_app_le_pasa_al_equipo_el_estado_del_calendario(web):  # R7: through the routes
-    web.sembrar()
-    web.claude.responder("Mira Ajustes.")
-    web.nueva("¿está mi rodaje de ayer en el calendario?")
-    (peticion,) = web.claude.peticiones
-    fija = "\n".join(b["text"] for b in peticion["system"])
-    assert '"google_calendar":{"conectado":false' in fija
+def test_el_coach_ve_el_estado_del_calendario(tmp_path):  # R7 (unit 083: was through the Asistente's routes)
+    assert '"google_calendar":{"conectado":false' in Mundo(tmp_path).del_coach()
 
 
 # -- unit 059 · R4: the strategy of a race and its result reach the team, with no need to paste them ----------------
@@ -384,12 +339,10 @@ def test_el_equipo_ve_la_estrategia_y_el_resultado_de_sus_carreras(tmp_path):  #
     assert "estrategia" in ctx.bloques[0]  # the instructions say it is there
 
 
-def test_el_entrenador_tiene_la_estrategia_sin_pegarla(web):  # R4, through the routes
-    web.plan().guardar_estrategia(1, "Maratón de ejemplo", ESTRATEGIA)
-    web.claude.responder("Respuesta de prueba del entrenador.")
-    fin = web.nueva("¿qué estrategia tengo para la maratón?", papel="entrenador")
-    assert fin["tipo"] == "fin", fin
-    fija = "\n".join(b["text"] for b in web.claude.peticiones[-1]["system"][:-1])
+def test_el_coach_tiene_la_estrategia_sin_pegarla(tmp_path):  # R4 (unit 083: was through the Asistente's routes)
+    mundo = Mundo(tmp_path)
+    mundo.plan().guardar_estrategia(1, "Maratón de ejemplo", ESTRATEGIA)
+    fija = mundo.del_coach()
     for tramo in ESTRATEGIA:
         assert tramo in fija, tramo
 

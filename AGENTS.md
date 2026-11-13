@@ -17,8 +17,6 @@ se comprueba a sí mismo.
 | Correr la suite completa | `scripts/ci/full-suite` |
 | Correr los linters | `scripts/ci/lint` |
 | Lanzar una instancia para que la use el usuario (solo lectura: la carga de entreno CTL/ATL/TSB) | `tridata export-pmc --out /tmp/tridata-pmc.md` → se abre con `less /tmp/tridata-pmc.md` |
-| Instalar el dictado por voz (extra `voz`, en el entorno que corre `tridata web`) | `python -m pip install -e ".[voz]"` |
-| Prueba de humo del dictado con el modelo real en la GPU (fuera de la suite) | `PYTHONPATH=src python scripts/probar_dictado.py .runtime/<unidad>/audio.m4a --veces 10` |
 | Instalar y correr el E2E de la pantalla del móvil (extra `e2e`, fuera de `dev` y del CI; sin él `tests/e2e/` se salta) | `python -m pip install -e ".[dev,e2e]" && python -m playwright install chromium`, y luego `TRIDATA_CAPTURAS=../../.runtime/<unidad>/capturas PYTHONPATH=src python -m pytest -q tests/e2e` (las capturas solo si se pone `TRIDATA_CAPTURAS`) |
 | Comprobación de seguridad | `scripts/ci/security` |
 | Todo seguido (lint, suite, seguridad) | `scripts/check.sh` |
@@ -45,20 +43,9 @@ PR, al entrar en `master` y cada lunes). Dependabot propone las actualizaciones.
 - Python 3.11 del entorno conda `~/anaconda3/envs/tridata` **solo como base del venv**. Ese
   entorno corre la rutina diaria de las 08:00 (`daily_update.sh`, timer `tridata-sync`) y el
   MCP: no se instala nada en él. `python3` del sistema es 3.8 y no sirve.
-- El venv `~/.venvs/tridata-dev` con el extra `dev` (pytest, ruff, mypy, pip-audit, mcp).
+- El venv `~/.venvs/tridata-dev` con el extra `dev` (pytest, ruff, mypy, pip-audit, mcp, starlette).
   Instalado en editable, apunta al checkout desde el que se instaló: si ese worktree se
   borra, se reinstala con `~/.venvs/tridata-dev/bin/python -m pip install -e ".[dev]"`.
-- **Dictado por voz (opcional, extra `voz`)**: faster-whisper con `large-v3-turbo` en la GPU
-  (RTX 2060, 6 GB; driver con CUDA 12 o superior). Descarga ≈ 3 GB: ≈ 1,45 GB de librerías
-  (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, ctranslate2, PyAV) y ≈ 1,6 GB de modelo, que baja
-  solo a `~/.cache/huggingface` la primera vez. No hace falta CUDA del sistema, ni ffmpeg, ni
-  `LD_LIBRARY_PATH`: `ia/whisper.py` precarga cuBLAS y cuDNN desde el `site-packages` del entorno
-  (probado con faster-whisper 1.2.1, ctranslate2 4.8.3, av 18.1.0). El modelo se cambia con
-  `TRIDATA_MODELO_VOZ` en `.env`. Sin el extra, `tridata web` arranca igual, avisa de que el
-  dictado está desactivado y escribir sigue funcionando. No va en `dev`: la suite dobla el
-  transcriptor y ningún test carga el modelo. `scripts/probar_dictado.py` imprime dispositivo,
-  segundos de carga y de cada transcripción y el texto; el audio de prueba (frases inventadas)
-  va a `.runtime/` del meta-repo, nunca a este repo.
 - `gitleaks` 8.30.1 en `~/.local/bin` (que está en el `PATH`). Sin él, `scripts/ci/security`
   sale en rojo y dice qué instalar.
 - **Google Calendar (opcional)**: las sesiones del plan y los entrenos hechos van al calendario
@@ -90,23 +77,21 @@ PR, al entrar en `master` y cada lunes). Dependabot propone las actualizaciones.
   abajo), `calendario/` (Google Calendar: `__init__.py` el permiso y la
   API, `sincronizar.py` qué se crea, cambia o borra) y `web/` (`tridata web`; `web/calendario.py`
   Ajustes › Google Calendar y el hilo que lo actualiza).
-- **El MCP y el equipo del PC (unidades 065 y 066)**: además de `list_activities`, `get_activity`,
+- **El MCP y el equipo del PC (unidades 065, 066, 081, 082)**: además de `list_activities`, `get_activity`,
   `get_daily_metrics`, `get_training_load`, `get_weekly_summary` y `get_records`, `tridata-mcp`
-  da `get_contexto` (el mismo contexto que ve el equipo de la pestaña Asistente, de
-  `conversaciones.contexto.montar`; solo lectura y sin transcribir ningún PDF médico: usa las
-  transcripciones ya hechas) y, desde la 066, los cambios con el «sí» de Andrés y sin tarjetas:
-  `preparar_cambio` (solo lectura: el `cambio` con la forma de `CambioInterpretado` → lo que se
-  haría, como la tarjeta de la app, y su `Huella`), `hacer_cambio` (`papel` entrenador,
-  nutricionista o fisio, el mismo `cambio` y esa `huella`: lo aplica con `proponer` + `confirmar`
-  como la tarjeta confirmada en la app, Google Calendar y el reloj incluidos; si la base cambió
-  desde que se preparó, no hace nada), `apuntar_comida` (`papel`, `dia`, `alimentos` con cantidad
-  y kcal: como el dictado, sin sección, todos o ninguno) y `apuntar_peso` (`papel`, `kg`, `dia`:
-  como la pieza peso). Esas tres son lo ÚNICO que escribe el MCP, y cada cosa hecha deja un
-  mensaje de su papel en la conversación «Desde el PC» del Asistente. `proponer_cambio` (065) ya
-  no existe. La pieza vive en `conversaciones/desde_pc.py` y lee la carpeta médica de
-  `TRIDATA_MEDICOS_DIR`. Las del equipo necesitan el extra `app` (anthropic) en el entorno del
-  MCP (`pip install -e ".[mcp,app]"`); sin él, el MCP arranca con las de Garmin y lo avisa por
-  stderr.
+  da al equipo del PC (el coach) `get_contexto` (todo su contexto, de `conversaciones.contexto.montar`;
+  solo lectura, con las transcripciones médicas ya hechas) y los cambios con el «sí» de Andrés:
+  `preparar_cambio` (solo lectura: el `cambio` con la forma de `conversaciones/cambios.py::CambioInterpretado`
+  → lo que se haría y su `Huella`), `hacer_cambio` (`papel` entrenador, nutricionista o fisio, el
+  mismo `cambio` y esa `huella`: lo aplica con `proponer` + `confirmar`, Google Calendar y el reloj
+  incluidos; si la base cambió desde que se preparó, no hace nada), `apuntar_comida`, `apuntar_toma`,
+  `apuntar_leche_cafes` y `apuntar_peso`; y, desde la 081, `preparar_plan`/`importar_plan` (el plan
+  y sus fases en una sola escritura), `get_analiticas_pendientes`/`preparar_transcripcion`/
+  `guardar_transcripcion`, `get_recetas`, `get_rutas` y `get_perfil_ruta`. Lo que escribe deja un
+  mensaje de su papel en la conversación «Desde el PC», que la app enseña en Ajustes › «Lo que ha
+  hecho el coach». La pieza vive en `conversaciones/desde_pc.py` y lee la carpeta médica de
+  `TRIDATA_MEDICOS_DIR`. El equipo solo necesita el extra `mcp` en el entorno del MCP
+  (`pip install -e ".[mcp]"`): desde la 083 no hay IA de pago en el código (ni su librería ni dictado).
 - `tests/` con `tests/fixtures/` (datos inventados); `scripts/ci/` las comprobaciones;
   `daily_update.sh` y `.config/systemd/user/` la rutina diaria.
 

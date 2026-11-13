@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from tridata.plan.rutas import RutaMal, SinAltitud, perfil, perfil_para_modelo, puntos_garmin, puntos_gpx
+from tridata.conversaciones.desde_pc import texto_perfil
+from tridata.plan.rutas import RutaMal, SinAltitud, perfil, puntos_garmin, puntos_gpx
 
 GPX = Path(__file__).parent / "fixtures" / "ruta-inventada.gpx"
 # what of the invented coordinates would betray them in a text: the latitude and the beginning of the longitude
@@ -84,8 +85,8 @@ def test_una_ruta_de_garmin_da_el_mismo_perfil():  # R1, R2
 def test_al_modelo_va_el_perfil_y_ninguna_coordenada():  # R4 · C-196, G-57
     p = _perfil()
     guardado = json.dumps(p, ensure_ascii=False)
-    texto = perfil_para_modelo(p)
-    for dicho in (guardado, texto):  # neither what is kept with the conversation nor what goes to the model
+    texto = texto_perfil(p)  # unit 083: what the coach is told (`get_perfil_ruta`), no longer the Asistente's message
+    for dicho in (guardado, texto):  # neither what is kept nor what goes to the coach
         for c in COORDENADAS:
             assert c not in dicho, c
         assert not re.search(r"\b(lat|lon|latitud|longitud)\b", dicho.lower().replace("latitudes ni longitudes", ""))

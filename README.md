@@ -42,29 +42,27 @@ coach will look like: one that knows your body as a whole, remembers all of it, 
 
 | Tab | What you get |
 |---|---|
-| **Hoy** (Today) | One screen: kcal left for the day, today's training, how you arrive (sleep, HRV, resting HR, freshness) and the last assistant answer. |
+| **Hoy** (Today) | One screen: kcal left for the day, today's training and how you arrive (sleep, HRV, resting HR, freshness). |
 | **Nutrición** | The day's kcal budget from your basal expenditure, your Garmin steps and a chosen deficit level; meals in sections with drag and drop; a balance and weight chart between any two dates; recipes with versions and pot tares; 80+ common foods preloaded. |
 | **Fitness** | Training load of the last 14 days, the last activity with laps and weather, sleep, HRV and resting HR against their 7-day averages. |
-| **Asistente** | Conversations with Claude over your whole context. It can propose changes (a food, a recipe, a day's plan) as cards you confirm or discard: nothing is written without you. Shows what the month has cost. |
-| **Ajustes** | Basal kcal, kcal per step, deficit level, HR max / rest and zones (with their origin: a stress test or a setting). |
+| **Ajustes** | Basal kcal, kcal per step, deficit level, HR max / rest and zones (with their origin: a stress test or a setting), Google Calendar, and «Lo que ha hecho el coach»: the changes the coach made from the PC. |
 
 And everywhere:
 
-- **Write or dictate** «arroz con pollo 350 g, yogur, peso 72,4» and it is understood and turned into entries to
-  review. Dictation runs **locally on your GPU** (Whisper large-v3-turbo): the audio never leaves the PC.
+- **The coach on the PC**: Claude Code (your own subscription) talks to TriData through its MCP server. It sees the
+  whole context and logs a meal, a weight, a coffee or a change of the plan **only after you say «sí»**; the app
+  itself calls no paid AI.
 - **Daily Garmin sync** at 08:00, retrying every hour until 14:00, backing off when Garmin rate-limits; the app warns
   when Garmin is behind and can catch up on demand.
 - **Installable on the phone** (it is a web app served by your PC; reach it from outside through Tailscale).
-- **MCP server** so Claude Code or Claude Desktop can query the same data (read-only) and, with the `app` extra, the coach, nutritionist and physio on the PC can make changes once Andrés says «sí».
+- **MCP server** so Claude Code or Claude Desktop can query the same data (read-only) and the coach, nutritionist and physio on the PC can make changes once Andrés says «sí».
 
 ## Privacy and cost
 
 - **Everything lives in one SQLite file on your PC** (`~/.tridata/data.sqlite3`), with verified backups before
   every sync. No cloud of ours, no account, no telemetry.
-- **The only thing that leaves the PC** is what you ask the assistant, sent to the Anthropic API with the context
-  it needs. Garmin credentials stay in a local `.env` and only talk to Garmin.
-- **A monthly spending cap** (5 $ by default): every API call is priced and recorded — including the ones that fail
-  half-way — and at the cap the assistant stops until the 1st. The daily use costs cents.
+- **The app calls no paid AI and needs no API key.** What you ask the coach goes through your own Claude Code
+  session on the PC. Garmin credentials stay in a local `.env` and only talk to Garmin.
 - **Health data never reaches this repository.** Tests and fixtures are invented, and
   `tridata comprobar-privados` checks the code, the git history and the logs for the values of your own medical
   documents, printing only counts.
@@ -77,23 +75,21 @@ Python 3.10 or 3.11.
 git clone https://github.com/andres-bejarano/tridata.git
 cd tridata
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[app]"          # the app; add ,voz for local dictation and ,mcp for the MCP server
-cp .env.example .env             # Garmin email/password, Anthropic API key, optional settings
+pip install -e ".[app]"          # the app
+pip install -e ".[mcp]"          # the MCP server, with the team's tools
+cp .env.example .env             # Garmin email/password, optional settings
 tridata sync --since 2026-01-01  # first backfill from Garmin
 tridata web                      # http://127.0.0.1:8765 — this PC only by default
 ```
 
 | Extra | For |
 |---|---|
-| `app` | `tridata web`: the Claude API client and the web server. |
-| `voz` | Local dictation: faster-whisper on an NVIDIA GPU (~3 GB to download the first time, no system CUDA needed). |
-| `mcp` | `tridata-mcp`, the MCP server (with `app` too, the team's tools). |
+| `app` | `tridata web`: the web server. |
+| `mcp` | `tridata-mcp`, the MCP server: the Garmin tools and the team's. |
 | `dev` | Tests, linters and the security checks. |
 | `e2e` | End-to-end tests of the phone screen in a real Chromium (Playwright). |
 
-Optional settings in `.env`: `TRIDATA_MODELO_ASISTENTE` (only the fallback model of the Asistente: the model of each
-role of the team is chosen in the app, Ajustes › El equipo; «Pensar más» uses Sonnet), `TRIDATA_MODELO_VOZ`,
-`TRIDATA_MEDICOS_DIR` (the folder with your medical PDFs; they are read there, never copied) and
+Optional settings in `.env`: `TRIDATA_MEDICOS_DIR` (the folder with your medical PDFs; they are read there, never copied) and
 `TRIDATA_GOOGLE_CLIENTE` (the path of the JSON of your Google OAuth client for Google Calendar, outside any
 repository; the token is saved in `~/.tridata/google-token.json`).
 
@@ -108,7 +104,7 @@ repository; the token is saved in `~/.tridata/google-token.json`).
 | `tridata show-laps` | Per-lap splits of one activity. |
 | `tridata importar-deficit` · `importar-recetas` · `importar-detalle` | One-off imports from a previous Markdown food diary, reviewing the dubious lines first. |
 | `tridata comprobar-privados` | Counts appearances of your private health values in the repo, its history and the logs (never prints them). |
-| `tridata-mcp` | The MCP server: `list_activities`, `get_activity`, `get_daily_metrics`, `get_training_load`, `get_weekly_summary`, `get_records` (read-only); with the `app` extra, `get_contexto` and `preparar_cambio` (read-only), and `hacer_cambio`, `apuntar_comida`, `apuntar_peso`, which write only after Andrés's «sí» and leave a message in «Desde el PC». |
+| `tridata-mcp` | The MCP server: `list_activities`, `get_activity`, `get_daily_metrics`, `get_training_load`, `get_weekly_summary`, `get_records` (read-only); and the team's: `get_contexto`, `preparar_cambio`, `preparar_plan`, `preparar_transcripcion`, `get_analiticas_pendientes`, `get_recetas`, `get_rutas`, `get_perfil_ruta` (read-only), and `hacer_cambio`, `apuntar_comida`, `apuntar_peso`, `apuntar_toma`, `apuntar_leche_cafes`, `importar_plan`, `guardar_transcripcion`, which write only after Andrés's «sí» and leave a message in «Desde el PC». |
 
 ## Daily sync
 
@@ -136,8 +132,7 @@ src/tridata/
 ├── exporters.py          # Markdown / JSON
 ├── fitness.py · hoy.py   # what the Fitness and Today screens show
 ├── nutricion/            # food log, kcal budget, balance, weight, recipes, common foods, imports
-├── ia/                   # Claude (understanding food entries, conversations) and local Whisper
-├── conversaciones/       # assistant conversations, their context, medical documents, spending
+├── conversaciones/       # the team's context, medical documents and what the coach does from the PC
 ├── privados.py           # `comprobar-privados`
 ├── mcp_server.py         # `tridata-mcp`
 └── web/                  # Starlette app and the phone UI (plain HTML, CSS and JS)
@@ -152,7 +147,7 @@ pip install -e ".[dev]"
 scripts/check.sh        # ruff + mypy, the full test suite, gitleaks and pip-audit
 ```
 
-Tests are written before the code, run against a temporary `HOME`, never call paid APIs (Claude is a test double)
+Tests are written before the code, run against a temporary `HOME`, never call paid APIs
 and never use real health data. The same checks run on GitHub Actions for every pull request. The phone screens have
 their own end-to-end suite (`pip install -e ".[dev,e2e]" && python -m playwright install chromium`, then
 `pytest tests/e2e`).

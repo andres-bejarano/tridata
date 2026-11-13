@@ -1,24 +1,29 @@
-"""Import the plan's .md (unit 040, R5, R6, G-54): cut it, order it with the AI, cross it with Garmin, propose.
+"""Import the plan's .md (unit 040, R5, R6, G-54): cut it, order it, cross it with Garmin, propose.
 
 1. `trocear`: the code cuts the .md by its sections (its «## » headings; without any, its «# » ones; without any «#»,
    the numbered lines «1. Objetivos», «2. …» of a plan pasted from a document, bug 046). The pieces put together are
    the whole .md, character by character: nothing is lost on the way.
-2. `proponer`: each section with text goes to the AI (`ia.plan.OrdenadorPlan`, one call each, several at a time),
-   which says its part and its rows of text; the code reads the rows. A section that is no part, or whose rows the
+2. `proponer`: each section with text goes to an orderer (one call each, several at a time), which says its part and
+   its rows of text; the code reads the rows. A section that is no part, or whose rows the
    code cannot read, is kept as a note of the plan with its text as it was (R6); a single row it cannot read, as a
    note with that row. Then each week already done is crossed with Garmin (its running, in time in movement) and
    every difference beyond the tolerance (`TOLERANCIA_S`, `TOLERANCIA_KM`) is proposed with what the plan says,
-   because it comes from Strava. The spending of every call answered goes to `al_gastar(modelo, uso)`, also when
-   another one fails. If any call fails, `ErrorPlan` and nothing is proposed: it can be tried again.
+   because it comes from Strava. If any call fails, `ErrorPlan` and nothing is proposed: it can be tried again.
 3. `confirmar`: only then is the plan saved (`Planes.crear`), with what Andrés chose for each difference: «plan»
    (by default) keeps the plan's done as «hecho según el plan», which wins over Garmin; «garmin» leaves Garmin's.
 
-Unit 081 (R-131, R-132): step 2 is two halves. `ordenar` is the AI's (each section to its part and its rows, as
+Unit 081 (R-131, R-132): step 2 is two halves. `ordenar` is an orderer's (each section to its part and its rows, as
 `Apartado`); `proponer_ordenado` is the code's (read the rows, keep what cannot be read as notes, cross with Garmin).
 The coach of the PC orders the .md itself and gives its sections (`apartados_del_coach`), so the app never calls the
-paid AI for it; `proponer` (the app's path) is `ordenar` + `proponer_ordenado`, as before. Two rows the app's AI never
-wrote are read too: «fase|nombre|semana desde|semana hasta» (a phase over weeks the plan has, saved after
-`Planes.crear` with `Planes.anadir_fase`) and a fifth field of «sesion», its hour («20:00»).
+paid AI for it.
+
+Two rows the app's AI never wrote are read too: «fase|nombre|semana desde|semana hasta» (a phase over weeks the plan
+has) and a fifth field of «sesion», its hour («20:00»).
+
+Unit 083: the orderer of the paid API (`ia.plan.OrdenadorPlan`) is gone; the coach's path is the only one in use.
+`ordenar` / `proponer` stay, generic over any `ordenador` with `ordenar(titulo, texto, hoy) -> (apartado, uso,
+modelo)`, because tests outside that unit build their plans through them with a double
+(`test_plan_importar.OrdenadorFalso`). The phases are saved with the plan in ONE write (`Planes.crear(fases=…)`, R4).
 
 Nothing here logs a text of the plan (R9).
 """
@@ -31,7 +36,6 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from ..ia.plan import ErrorPlan
 from ..storage import DataStore
 from . import Planes, hora_de, semanas as semanas_del_plan
 
@@ -41,9 +45,13 @@ LLAMADAS_A_LA_VEZ = 4
 NOMBRE_POR_DEFECTO = "Plan importado"
 
 
+class ErrorPlan(Exception):
+    """An orderer could not order a section (it says why, never a text of the plan)."""
+
+
 @dataclass(frozen=True)
 class Apartado:
-    """One section ordered: its heading, its part (`ia.plan.PARTES`), its rows of text and its text as it was."""
+    """One section ordered: its heading, its part (`_PARTES`), its rows of text and its text as it was."""
 
     titulo: str
     parte: str
@@ -322,9 +330,8 @@ def _resumen(p: dict[str, Any]) -> dict[str, int]:
     return resumen
 
 
-def ordenar(texto: str, ordenador: Any, hoy: date,
-            al_gastar: Callable[[str, dict[str, int]], Any] | None = None) -> list[Apartado]:
-    """The AI's half (unit 081): each section of the .md with text, ordered by `ordenador` (one call each, several at
+def ordenar(texto: str, ordenador: Any, hoy: date) -> list[Apartado]:
+    """The orderer's half (unit 081): each section of the .md with text, ordered by `ordenador` (one call each, several at
     a time); one with only its heading is a «nota» without rows. Raises `ErrorPlan` if any call failed."""
     con_texto = [t for t in trocear(texto) if t.cuerpo or t.titulo]
 
@@ -339,9 +346,6 @@ def ordenar(texto: str, ordenador: Any, hoy: date,
     with ThreadPoolExecutor(max_workers=LLAMADAS_A_LA_VEZ) as hilos:
         respuestas = list(hilos.map(ordenar, con_texto))
     fallo = next((r for r in respuestas if isinstance(r, ErrorPlan)), None)
-    for r in respuestas:
-        if r is not None and not isinstance(r, ErrorPlan) and al_gastar is not None:
-            al_gastar(r[2], r[1])
     if fallo is not None:
         raise ErrorPlan(str(fallo))
     return [Apartado(t.titulo, r[0].parte if r is not None else "nota", tuple(r[0].filas) if r is not None else (),
@@ -365,13 +369,13 @@ def proponer_ordenado(apartados: list[Apartado], store: DataStore | None, hoy: d
 
 
 def proponer(texto: str, ordenador: Any, store: DataStore | None, hoy: date,
-             al_gastar: Callable[[str, dict[str, int]], Any] | None = None, nombre: str | None = None) -> dict[str, Any]:
-    """The proposal of the .md (nothing saved). Raises `ErrorPlan` if the AI could not order every section."""
-    return proponer_ordenado(ordenar(texto, ordenador, hoy, al_gastar), store, hoy, nombre_del_plan(texto) or nombre)
+             nombre: str | None = None) -> dict[str, Any]:
+    """The proposal of the .md (nothing saved). Raises `ErrorPlan` if the orderer could not order every section."""
+    return proponer_ordenado(ordenar(texto, ordenador, hoy), store, hoy, nombre_del_plan(texto) or nombre)
 
 
 _PARTES = ("objetivos", "semanas_hechas", "previsto", "sesiones_clave", "nutricion", "incidencias", "comparativa",
-           "nota")  # the same as `ia.plan.PARTES`, so the coach's path does not need the AI's module
+           "nota")
 
 
 def apartados_del_coach(entrada: Any) -> tuple[str | None, list[Apartado]]:
@@ -404,18 +408,16 @@ def apartados_del_coach(entrada: Any) -> tuple[str | None, list[Apartado]]:
 
 def confirmar(propuesta: dict[str, Any], elecciones: dict[str, str], planes: Planes, ahora: datetime) -> int:
     """Saves the proposal: for each difference, «garmin» leaves Garmin's done; anything else keeps the plan's.
-    Unit 081: and its phases, if it has any (checked when proposed, `_leer_fases`)."""
+    Unit 081: and its phases, if it has any (checked when proposed, `_leer_fases`); unit 083 (R4): in the same write
+    as the plan, so a failure saves nothing."""
     del_plan = {d["semana"] for d in propuesta["diferencias"] if elecciones.get(str(d["semana"])) != "garmin"}
     semanas = [{k: s[k] for k in ("apartado", "n", "desde", "hasta", "previsto_s", "clave")}
                | {"hecho_plan_s": s["hecho_s"] if s["n"] in del_plan else None,
                   "hecho_plan_km": s["hecho_km"] if s["n"] in del_plan else None}
                for s in propuesta["semanas"]]
     datos = {k: propuesta[k] for k in ("nombre", "apartados", *PARTES_DEL_PLAN)} | {"semanas": semanas}
-    ident = planes.crear(datos, ahora)
-    for fase in propuesta.get("fases") or []:
-        planes.anadir_fase(ident, fase["nombre"], fase["desde_n"], fase["hasta_n"])
-    return ident
+    return planes.crear(datos, ahora, fases=propuesta.get("fases") or [])
 
 
-__all__ = ["TOLERANCIA_KM", "TOLERANCIA_S", "Apartado", "Trozo", "apartados_del_coach", "confirmar", "duracion",
+__all__ = ["TOLERANCIA_KM", "TOLERANCIA_S", "Apartado", "ErrorPlan", "Trozo", "apartados_del_coach", "confirmar", "duracion",
            "kilometros", "nombre_del_plan", "ordenar", "proponer", "proponer_ordenado", "trocear"]

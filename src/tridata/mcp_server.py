@@ -12,7 +12,7 @@ the output looks exactly like the Markdown files people are used to.
 Unit 065 (REC-28, R-186): with the team (`equipo`, `conversaciones/desde_pc.py`), `get_contexto` for the coach, the
 nutritionist and the physio of `~/tridata-equipo`: the same context the team of the app sees (read-only, never
 transcribing a medical PDF). Unit 066 (REC-29, R-190 to R-197): `preparar_cambio` says what a change would do
-(read-only) and, with Andrés's «sí», `hacer_cambio` makes it as if he had confirmed its card in the app (Google
+(read-only) and, with Andrés's «sí», `hacer_cambio` makes it as the app makes a change (Google
 Calendar and the watch included); `apuntar_comida` and `apuntar_peso` log a meal or a weight as the dictation does.
 Those three are the ONLY ones that write, and each one leaves a message in the conversation «Desde el PC».
 Unit 081 (P-20261105-cf32bea5): what the app did with the paid AI, done by the coach: `preparar_plan` / `importar_plan`
@@ -52,7 +52,7 @@ from .nutricion.registro import SECCIONES
 from .storage import DEFAULT_DB_PATH, DataStore
 from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES
 
-if TYPE_CHECKING:  # the team needs the `app` extra (anthropic): the Garmin tools work without it
+if TYPE_CHECKING:  # imported when the team is built (`main`), so the Garmin tools load only what they use
     from .conversaciones.desde_pc import Equipo
 
 log = logging.getLogger(__name__)
@@ -411,8 +411,8 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         return preparar_desde_pc(equipo, cambio, texto)
 
     hacer_desc = (
-        "Make ONE change that preparar_cambio already showed and Andrés answered «sí» to: it is applied as if he "
-        "confirmed its card in the app (Google Calendar updated; `mandar_a_garmin` sends the session to his watch). "
+        "Make ONE change that preparar_cambio already showed and Andrés answered «sí» to: it is applied as the app "
+        "applies a change (Google Calendar updated; `mandar_a_garmin` sends the session to his watch). "
         "NEVER call it without showing him the result of preparar_cambio and getting his «sí» first. "
         "If the data changed since it was prepared, nothing is done and the new version comes back: show it to "
         f"him again.\n{papeles} cambio: the same object given to preparar_cambio. huella: the `Huella` it returned. "
@@ -618,15 +618,12 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
     load_dotenv()  # TRIDATA_HR_MAX / TRIDATA_HR_REST for TRIMP
     store = DataStore()
-    equipo = None
-    try:  # unit 065: the team's tools need the `app` extra; without it, the Garmin tools as before
-        from .conversaciones.desde_pc import montar_equipo
-    except ImportError as exc:
-        log.warning("the team's tools are off: install the `app` extra (%s)", exc)
-    else:
-        medicos_dir = os.environ.get("TRIDATA_MEDICOS_DIR", "").strip()
-        equipo = montar_equipo(DEFAULT_DB_PATH, store=store,
-                               medicos_dir=Path(medicos_dir).expanduser() if medicos_dir else None)
+    # unit 083: the team's tools need nothing beyond the `mcp` extra (no paid AI), so they are always there
+    from .conversaciones.desde_pc import montar_equipo
+
+    medicos_dir = os.environ.get("TRIDATA_MEDICOS_DIR", "").strip()
+    equipo = montar_equipo(DEFAULT_DB_PATH, store=store,
+                           medicos_dir=Path(medicos_dir).expanduser() if medicos_dir else None)
     build_server(store, limites_fc=lambda: historial_fc_de(DEFAULT_DB_PATH).limites, equipo=equipo).run("stdio")
 
 

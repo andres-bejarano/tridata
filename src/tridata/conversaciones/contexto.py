@@ -1,9 +1,9 @@
-"""The context every conversation of the Asistente sees (unit 032, R3, R5 · R-114, G-46, S-36, S-39): ALL of it,
-always, the same in every conversation, built on this PC.
+"""The context the team sees (unit 032, R3, R5 · R-114, G-46, S-36, S-39): ALL of it, always, built on this PC.
 
-The fixed part of each request (`Contexto.bloques`, the `system` of `ia/conversacion.py`), in this order (P3):
+Unit 083: without the paid AI, who reads it is the coach of the PC (`get_contexto` of `tridata-mcp`,
+`conversaciones/desde_pc.py`). Its blocks (`Contexto.bloques`), in this order (P3):
 
-1. the fixed instructions and the catalogue of the actions with a card (`nutricion.asistente.texto_acciones`, G-37);
+1. the fixed instructions and the catalogue of the actions (`nutricion.asistente.texto_acciones`, G-37);
 2. the medical transcription (`conversaciones/medicos.py`): the blood test and the stress test, or why they are not;
 3. the data, in JSON with sorted keys: the last 8 weeks day by day (foods, weight, steps, resting HR, sleep, HRV,
    trainings and the load), the earlier weeks summed up by week (never the names of the foods), the settings in
@@ -11,16 +11,15 @@ The fixed part of each request (`Contexto.bloques`, the `system` of `ia/conversa
 
 Unit 041 (REC-23, R2 · G-46): the data also carry the plan of the current objective (`plan.Planes.en_curso`: its
 races, its weeks with what was planned and what was done — `plan/semanas.py` —, its sessions with their blocks and
-the race nutrition) and its incidents. The fixed part is the same for the four roles of the team; what each role is
-goes after the cache mark (`conversaciones/papeles.py`). The trainings carry their id, so a role can open their laps
-(`abrir_actividad`): the laps never go here (S-54).
+the race nutrition) and its incidents. The trainings carry their id, so the coach can open their laps
+(`get_activity` of the MCP): the laps never go here (S-54).
 
 Unit 044 (REC-24, R-149 · G-46): "incidencias" carries the open incidents of every plan, always, and the closed ones of
 the plan in course, each one with its state, its visits to the physio or the doctor and its lesson (the ones of the
 .md, as before: date and text); and the plan carries the notes of each day (`notas_del_dia`).
 
 Unit 048: each session of the plan carries its id (`Planes.sesiones_reloj`), so a role can name one of two with the
-same title the same day in the cards that change or remove it.
+same title the same day in the changes that move or remove it.
 
 Unit 059 (R4): each race of the plan carries its result (by hand or from Garmin, `plan/semanas.py`) and the strategy
 by stretches it has saved, so the team knows it without Andrés pasting it.
@@ -34,13 +33,8 @@ the milk, the caffeine of the day, the last dose with caffeine and the milk of t
 hour of each section with food that day, «~08:00» when it is the typical one), next to its sleep. Read without
 creating anything (`nutricion.suplementacion.leer_todo`).
 
-Unit 045 (REC-25, R-154): a route attached to a conversation is NOT here: its profile goes in the message
-(`web/conversaciones.py`, `plan.rutas.perfil_para_modelo`), so the fixed part, and its cache, stay the same; only the
-line says «ruta adjunta: …».
-
-None of it carries the hour: with the same data it is the same text byte to byte, so every conversation shares the
-cache (R10). It changes only when a datum changes (a food, a weight, a sync) or the day does. The line «Ve tus …,
-hasta hoy 9:42» (R-115) goes apart (`linea`). Read only: nothing here writes.
+None of it carries the hour: with the same data it is the same text byte to byte. It changes only when a datum
+changes (a food, a weight, a sync) or the day does. Read only: nothing here writes.
 """
 from __future__ import annotations
 
@@ -48,7 +42,7 @@ import json
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from statistics import mean
 from typing import Any
 
@@ -62,7 +56,6 @@ from ..nutricion.objetivo_dia import ObjetivosDia
 from ..nutricion.peso import RegistroPeso
 from ..nutricion.registro import SECCIONES, RegistroComidas
 from ..nutricion.suplementacion import horas_de_secciones, leer_todo, resumen_dia
-from ..ia.modelos import nombre_de
 from ..plan import ABIERTA, Planes
 from ..plan import semanas as semanas_del_plan
 from ..storage import DataStore
@@ -85,8 +78,8 @@ def _dia(fecha: str) -> str:
 
 INSTRUCCIONES = """\
 Formas parte del equipo de Andrés, un triatleta aficionado que apunta lo que come y su peso en la app TriData y entrena \
-con un reloj Garmin: el entrenador, el fisio, el nutricionista y el asistente de siempre. Quién eres en esta \
-conversación y cómo miras lo dice tu papel, al final. Andrés habla con uno y, si quiere, pide opinión a otro.
+con un reloj Garmin: el entrenador, el fisio y el nutricionista. Le hablas desde su PC, con las herramientas de \
+TriData.
 
 Ves siempre todo su contexto, que va aquí debajo: sus datos médicos (analítica y prueba de esfuerzo, transcritos de \
 sus PDF) y sus datos en JSON: "hoy" es la fecha de hoy y "dia_semana", qué día de la semana es; "calendario", las \
@@ -118,10 +111,10 @@ almohadillas ni tablas); listas cortas con guiones si hacen falta.
 con su médico.
 - Cambios: si Andrés pide cambiar algo de sus datos, o le propones un cambio concreto (apuntar o quitar algo, el \
 objetivo o los pasos de un día, un ajuste, una carrera, el peso de un día, una receta o un ingrediente, una incidencia \
-o una nota de cómo fue un entreno), usa la \
-herramienta proponer_cambio con una acción de la lista de abajo; un cambio por llamada. La app le enseña una tarjeta \
-«Voy a …» que él confirma o descarta: nunca digas que ya está hecho. Lo que no esté en la lista, dile dónde se hace.
-- Título: en el primer mensaje de una conversación, llama también a poner_titulo con un título corto del tema.
+o una nota de cómo fue un entreno), prepáralo con la herramienta preparar_cambio y una acción de la lista de abajo, \
+un cambio por llamada: dice qué se haría, sin hacerlo. Enséñaselo tal cual y pregúntale; solo con su «sí», hazlo \
+con hacer_cambio (o, para una comida, un café o su peso, con apuntar_comida, apuntar_toma o apuntar_peso). Di que \
+está hecho solo cuando la herramienta conteste «Hecho». Lo que no esté en la lista, dile dónde se hace.
 """
 
 
@@ -134,26 +127,6 @@ class Contexto:
     aviso: str | None = None
     plan: str | None = None  # unit 041: the name of the plan in course, for the line
     incidencias: int = 0
-
-
-def _y(partes: list[str] | tuple[str, ...], ultima: str = "y") -> str:
-    partes = list(partes)
-    return partes[0] if len(partes) == 1 else f"{', '.join(partes[:-1])} {ultima} {partes[-1]}"
-
-
-def linea(ctx: Contexto, ahora: datetime, modelo: str | None = None, ruta: str | None = None) -> str:
-    """«Ve tus comidas, peso, entrenos, sueño, pulso, HRV, analítica y prueba de esfuerzo, hasta hoy 9:42» (R-115);
-    unit 041: with «tu plan …, incidencias (1)» after the HRV when there is a plan, and « · Sonnet», the model of the
-    role, at the end; unit 045: « · ruta adjunta: Behobia» before the model when the conversation has a route."""
-    ve = list(ctx.ve)
-    if ctx.plan:
-        extra = [f"tu plan {ctx.plan}"] + ([f"incidencias ({ctx.incidencias})"] if ctx.incidencias else [])
-        ve[len(VE_SIEMPRE):len(VE_SIEMPRE)] = extra
-    texto = f"Ve tus {_y(ve)}, hasta hoy {ahora.hour}:{ahora.minute:02d}"
-    faltan = [m for m in ("analítica", "prueba de esfuerzo") if m not in ctx.ve]
-    if faltan:
-        texto += f" (sin {_y(faltan, 'ni')}" + (f": {ctx.aviso[0].lower()}{ctx.aviso[1:]}" if ctx.aviso else "") + ")"
-    return texto + (f" · ruta adjunta: {ruta}" if ruta else "") + (f" · {nombre_de(modelo)}" if modelo else "")
 
 
 def _limpio(d: dict[str, Any]) -> dict[str, Any]:
@@ -437,4 +410,4 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
         plan=plan["nombre"] if plan else None, incidencias=len(incidencias))
 
 
-__all__ = ["DIAS_DIA_A_DIA", "INSTRUCCIONES", "Contexto", "linea", "montar", "plan_en_curso"]
+__all__ = ["DIAS_DIA_A_DIA", "INSTRUCCIONES", "Contexto", "montar", "plan_en_curso"]

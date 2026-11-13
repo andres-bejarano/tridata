@@ -14,7 +14,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from tridata.ia import CambioInterpretado, LineaInterpretada
+from tridata.conversaciones.cambios import CambioInterpretado, LineaInterpretada
 from tridata.nutricion import DESDE_SIEMPRE, Ajustes, Alimento, ObjetivosDia, RegistroComidas, RegistroPeso
 from tridata.nutricion.asistente import Contexto, Peticion, catalogo, confirmar, proponer, rehacer, texto_acciones
 from tridata.nutricion.recetas import Recetario

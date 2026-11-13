@@ -686,3 +686,35 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .estrategia-carrera { flex-basis: 100%; margin-top: 6px; font-size: .92rem; }
 .estrategia-carrera summary { color: var(--acento); min-height: 44px; display: flex; align-items: center; cursor: pointer; }
 .estrategia-carrera ul { margin: 0; padding-left: 1.2rem; }
+
+/* -- unit 082: the block «Suplementación» (apart from the meals, no kcal) and the hour of each section ------------ */
+.suplementacion { display: grid; gap: 8px; padding: 12px 14px; margin-bottom: 12px; }
+.sup-cab { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; }
+.sup-titulo { font-weight: 700; font-size: 1.05rem; font-variant-caps: all-small-caps; letter-spacing: .06em; color: var(--suave); }
+.sup-resumen { font-weight: 650; font-size: .95rem; white-space: nowrap; }
+.sup-tomas { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.sup-tomas button.toma {
+  width: 100%; min-height: 44px; display: grid; grid-template-columns: 3.2rem minmax(0, 1fr) auto auto; gap: 8px;
+  align-items: center; text-align: left; background: transparent; border: 0; border-top: 1px solid var(--borde);
+  border-radius: 0; padding: 6px 0; color: var(--texto); font: inherit;
+}
+.sup-tomas li:first-child button.toma { border-top: 0; }
+.toma-hora { font-weight: 700; }
+.toma-que { min-width: 0; overflow-wrap: anywhere; }
+.toma-mg, .toma-leche { color: var(--suave); font-size: .88rem; white-space: nowrap; }
+.sup-leche { margin: 0; }
+.suplementacion button.anadir-toma { border-style: dashed; color: var(--acento); }
+.suplementacion.plegado { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.suplementacion.plegado button.anadir-toma { min-height: 44px; padding: 0 16px; }
+.suplementacion button.anadir-toma { min-height: 44px; }
+.ficha-toma { display: grid; gap: 10px; margin: 6px 0; }
+.ficha-toma .fila { grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr)); }
+.campo-solo { display: flex; align-items: center; gap: 8px; font-size: .9rem; }
+.seccion-hora {
+  margin-left: auto; min-height: 44px; min-width: 44px; padding: 0 12px; font: inherit; font-weight: 600; font-size: .9rem;
+  color: var(--acento); background: transparent; border: 1px solid var(--borde); border-radius: 999px;
+}
+.seccion-hora.aproximada { color: var(--suave); border-style: dashed; }
+.editor-hora { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-weight: 500; }
+.editor-hora input, .editor-hora button { min-height: 44px; }
+.editor-hora input { color-scheme: light dark; }

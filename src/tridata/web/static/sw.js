@@ -6,8 +6,8 @@
 
 // change it when the list below changes (v11: unit 032, the chat; v12: unit 035, the sections of the day; v13:
 // unit 040, plan.js; v14: unit 080, the app without the paid AI: the queue, the dictation, the cards and the chat
-// are gone, and the new version makes the phone let go of the old cache and its pages)
-const VERSION = "tridata-cascaron-v14";
+// are gone, and the new version makes the phone let go of the old cache and its pages; v15: unit 082, suplementacion.js)
+const VERSION = "tridata-cascaron-v15";
 const CASCARON = [
   "/", "/static/app.js", "/static/estilos.css",
   // unit 010: the Peso tab, the settings page and the home-screen icon
@@ -27,6 +27,8 @@ const CASCARON = [
   "/static/fitness.js",
   // unit 040: Fitness › Plan
   "/static/plan.js",
+  // unit 082: the block «Suplementación» of Nutrición › Día
+  "/static/suplementacion.js",
 ];
 const ESPERA_RED_MS = 4000; // a PC that is off over Tailscale may hang instead of failing
 

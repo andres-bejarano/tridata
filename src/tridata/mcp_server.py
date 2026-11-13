@@ -20,6 +20,9 @@ Unit 081 (P-20261105-cf32bea5): what the app did with the paid AI, done by the c
 `guardar_transcripcion` (a medical PDF the coach read, R-221, R-222), `get_recetas` (S-72; `apuntar_comida` takes the
 saved kcal of a recipe or a fixed food, R-42) and `get_rutas` / `get_perfil_ruta` (S-73, R-151..R-154). The two that
 save write their message in «Desde el PC» too. None of them calls a paid AI; only the routes read Garmin.
+Unit 082 (REC-34): `apuntar_toma` (coffees and B12 with their hour and mg, apart from the foods, without kcal) and
+`apuntar_leche_cafes` (the milk of the coffees of a day, once, spread among them), with the same «sí» and «Hecho» as
+`apuntar_comida`, which takes the `hora` of its section too.
 
 Run it with `tridata-mcp` (stdio transport) and register that command in
 your MCP client, e.g. for Claude Code:
@@ -371,7 +374,9 @@ def build_server(store: DataStore, limites_fc: Callable[[], LimitesDelDia | None
 def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
     """Unit 065 (R-186) and 066 (R-190 to R-197): the tools of the team on the PC."""
     from .conversaciones.desde_pc import (PAPELES_PC, TITULO, apuntar_comida_desde_pc, apuntar_peso_desde_pc,
-                                          hacer_desde_pc, preparar_desde_pc, texto_contexto)
+                                          apuntar_toma_desde_pc, hacer_desde_pc, leche_cafes_desde_pc,
+                                          preparar_desde_pc, texto_contexto)
+    from .nutricion.suplementacion import FORMAS, HORAS_TIPICAS
     from .nutricion.asistente import texto_acciones
 
     @server.tool(name="get_contexto", annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
@@ -380,7 +385,10 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         """Everything the team of the app sees today, in one text: its instructions and the catalogue of changes,
         the medical transcriptions already made, and the data in JSON (the last 8 weeks day by day with foods and
         their kcal, weight, steps, resting HR, sleep, HRV and trainings; earlier weeks summed up; the settings and
-        objective of today; races; HR zones; the plan in course with its sessions and incidents). Read-only."""
+        objective of today; races; HR zones; the plan in course with its sessions and incidents). Unit 082: each day
+        also carries `suplementacion` (coffees and B12 with their hour and mg, the caffeine of the day, the last dose
+        and the milk of the coffees) and `horas_comidas` (the hour of each section with food, «~» if typical), next to
+        its sleep, to relate them. Read-only."""
         return texto_contexto(equipo)
 
     papeles = f"papel: who you are, one of {', '.join(PAPELES_PC)}."
@@ -431,15 +439,56 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         f"seccion (optional): use it when Andrés says which meal it goes in («en el desayuno», «un gel en la "
         f"carrera»), and all the foods go into that section of the day: one of {', '.join(SECCIONES)} "
         "(media_manana is «media mañana», carrera is «Nutrición en carrera», for gels and drinks of a race or a long "
-        "training). If he does not say it, omit it: they go «Sin sección». Another value logs nothing.\n" + registro)
+        "training). If he does not say it, omit it: they go «Sin sección». Another value logs nothing.\n"
+        "hora (optional, HH:MM, only with seccion): when Andrés says when he ate it («cené a las diez y cuarto»), that "
+        "section of that day keeps that hour; without it the app shows the typical one ("
+        + ", ".join(f"{k} {v}" for k, v in HORAS_TIPICAS.items()) + ").\n" + registro)
 
     @server.tool(name="apuntar_comida", description=comida_desc,
                  annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
                                              open_world_hint=False),
                  structured_output=False)
     def apuntar_comida_tool(papel: str, dia: str, alimentos: list[dict[str, Any]], texto: str = "",
-                            seccion: str | None = None) -> str:
-        return apuntar_comida_desde_pc(equipo, papel, dia, alimentos, texto, seccion)
+                            seccion: str | None = None, hora: str | None = None) -> str:
+        return apuntar_comida_desde_pc(equipo, papel, dia, alimentos, texto, seccion, hora)
+
+    toma_desc = (
+        "Log Andrés's coffees and B12 of one day in Nutrición › Día › «Suplementación», apart from the meals and "
+        "WITHOUT kcal (the total and the margin do not change; the milk goes with apuntar_leche_cafes). FIRST show him "
+        "each dose with its form, its hour and the mg of caffeine you estimate, and ask; only with his «sí» call this. "
+        "All of them or none; the answer says why if not.\n"
+        f"{papeles} dia: YYYY-MM-DD. tomas: a list of objects with que (cafe or b12), hora (HH:MM; for «a media "
+        "tarde» propose one and let him see it) and, for a coffee: forma, one of "
+        f"{', '.join(FORMAS)} (expreso, doble and ingles at a café; italiana with gramos of coffee and fraccion of "
+        "the pot he drinks, 0.5 for half, 1 for all of it; soluble with cucharadas and gramos of each), mg (the "
+        "caffeine you estimate, always) and solo (true if he says it had no milk). For the B12, dosis (optional "
+        "text) and nothing else. Without hora: a dose of today takes the hour it is now; of another day nothing is "
+        "logged and the answer says «falta la hora»: ask him. texto (optional): what he said, in Spanish.\n"
+        + registro)
+
+    @server.tool(name="apuntar_toma", description=toma_desc,
+                 annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                             open_world_hint=False),
+                 structured_output=False)
+    def apuntar_toma_tool(papel: str, dia: str, tomas: list[dict[str, Any]], texto: str = "") -> str:
+        return apuntar_toma_desde_pc(equipo, papel, dia, tomas, texto)
+
+    leche_desc = (
+        "Log the milk Andrés put in his coffees of one day, as he says it at the end of the day («hoy 250 ml de leche "
+        "en los cafés»): it is logged ONCE as a food of that day with its kcal (it adds to the total like any food) "
+        "and spread in equal parts among the coffees of that day not marked solo (only to see when it was taken). "
+        "Said again for the same day, it replaces the one logged. FIRST tell him the ml and the kcal and ask; only "
+        f"with his «sí» call this.\n{papeles} dia: YYYY-MM-DD. ml: the millilitres (> 0). kcal: the kcal of those "
+        "ml (from his saved milk in get_recetas if he has one, or estimated). nombre (optional): which milk. texto "
+        "(optional): what he said.\n" + registro)
+
+    @server.tool(name="apuntar_leche_cafes", description=leche_desc,
+                 annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                             open_world_hint=False),
+                 structured_output=False)
+    def apuntar_leche_cafes_tool(papel: str, dia: str, ml: float, kcal: float | None = None,
+                                 nombre: str | None = None, texto: str = "") -> str:
+        return leche_cafes_desde_pc(equipo, papel, dia, ml, kcal, nombre, texto)
 
     peso_desc = (
         "Log Andrés's weight of one day (today or a past day), as the weight piece of the dictation: it replaces the "

@@ -325,18 +325,24 @@ def test_sw_sube_la_version():  # R8
     assert version != "tridata-cascaron-v3"
 
 
-# sha256 of `.runtime/icono-pro/icono-E*` (variant E · «Neón en la Concha», chosen by Andrés on 2026-10-21)
-ICONO_E = {"icono.svg": "3e282f2a6e1c297309baa5fa581033cab7ef03436dc69fb9731c92a770ed4dab",
-           "icono-32.png": "a010abc8399975c3a271aa4691f6e4427cf49289e4632efccda70d133b9f8ddb",
-           "icono-180.png": "2b8fb47474118dd7811c9cb6359f3e1b897c51dc2d42db42df79137e4481f271",
-           "icono-512.png": "534cfce2b92fac56a099e87e1064e0e581d681639172f6d93392679a26bd33e8"}
+def test_sw_no_sigue_en_la_version_del_icono_de_neon():  # R2 (084): the phone must fetch the new icon
+    version = re.search(r'const VERSION = "([^"]+)"', (ESTATICOS / "sw.js").read_text(encoding="utf-8")).group(1)
+    assert version != "tridata-cascaron-v15"
 
 
-@pytest.mark.parametrize("fichero", sorted(ICONO_E))
-def test_el_icono_es_la_variante_elegida(fichero):  # R8
-    assert hashlib.sha256((ESTATICOS / fichero).read_bytes()).hexdigest() == ICONO_E[fichero]
+# sha256 of `.runtime/084-icono-foto/iconos/*` (Andrés's photo running in front of the town hall, bib 437;
+# unit 084, chosen by Andrés on 2026-11-14 — replaces variant E «Neón en la Concha» of 2026-10-21)
+ICONO_FOTO = {"icono.svg": "6d2c4120b2c533f19ab62aaef8f3c63d7cde92dbdffaaa88f31938f9f82a11e7",
+              "icono-32.png": "7d3817532279a3fb08bdd4018ec5d345c4cf3bff3feb50c135bcf74c70e24846",
+              "icono-180.png": "036e0048f2c83932d898c3ec1f0815fd643b673e91cde815368d9cb23b25afde",
+              "icono-512.png": "3c2eeafe51e11c7b4145e33383fb9795e585e3c307abbda25220810f0da7a0ef"}
 
 
-def test_el_icono_no_lleva_la_foto():  # R8: only the finished vectors, never a pixel of the photo
+@pytest.mark.parametrize("fichero", sorted(ICONO_FOTO))
+def test_el_icono_es_la_foto_elegida(fichero):  # R1 (084)
+    assert hashlib.sha256((ESTATICOS / fichero).read_bytes()).hexdigest() == ICONO_FOTO[fichero]
+
+
+def test_el_icono_svg_lleva_la_foto():  # R1 (084): the main icon embeds the photo, not the neon vectors
     svg = (ESTATICOS / "icono.svg").read_text(encoding="utf-8")
-    assert "<image" not in svg and "base64" not in svg
+    assert "<image" in svg and "data:image/jpeg;base64" in svg

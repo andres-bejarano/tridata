@@ -11,7 +11,7 @@
 <main>
   <header>
     <h1>Privacy policy</h1>
-    <p class="lema">TriData · last updated 30 October 2026</p>
+    <p class="lema">TriData · last updated 14 November 2026</p>
   </header>
 
   <p>TriData is open-source software that each person installs and runs on their own computer. Its author runs no
@@ -37,7 +37,7 @@
       (<code>~/.tridata/google-token.json</code>, readable only by your user). The identifiers of the events it
       created are saved in the local database so it can update them.</li>
     <li><strong>Who it is shared with.</strong> Nobody. Data read from Google is not sent to any other service,
-      including the AI provider, is not sold, is not used for advertising and is not used to train AI models.</li>
+      including any AI assistant you connect, is not sold, is not used for advertising and is not used to train AI models.</li>
     <li><strong>How to stop it.</strong> Remove TriData's access at
       <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a> and delete
       <code>~/.tridata/google-token.json</code>. You can also delete the «TriData» calendar in Google Calendar.</li>
@@ -50,9 +50,10 @@
   <ul>
     <li><strong>Garmin Connect:</strong> the app downloads your own activities and daily metrics with the
       credentials you keep in a local <code>.env</code> file. They only go to Garmin.</li>
-    <li><strong>Anthropic API:</strong> when you talk to the assistant, your question and the training, recovery
-      and nutrition context it needs are sent to Anthropic to get the answer. Nothing read from Google is part of
-      that context.</li>
+    <li><strong>AI assistants:</strong> TriData itself does not call any AI service. If you connect an AI assistant
+      you run yourself (for example Claude Code) to TriData's local MCP server, what that assistant reads is sent to
+      its provider under your own account and terms. Nothing read from Google is part of what TriData exposes
+      there.</li>
   </ul>
 
   <h2>Contact</h2>

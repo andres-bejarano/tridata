@@ -25,6 +25,10 @@ of `SECCIONES`, or «Sin sección») in its same row with `RegistroComidas.mover
 
 Unit 047: a day may have several planned trainings. `entreno_previsto` ADDS one; it only replaces the one of the same
 activity (Garmin's `tipo`; without it, the same `actividad_id`), and the card says which. At most `PREVISTOS_MAX`.
+
+Bug 085: when a name is logged more than once that day, each candidate carries its number (its id) and its section,
+and the change says which one with `eleccion` (as R-210 with the activities); a number that is not one of them is a
+`no`, never another food.
 """
 from __future__ import annotations
 
@@ -197,12 +201,19 @@ def _buscar(cambio: Any, ctx: Contexto, peticion: Peticion, accion: str, que: st
     if not encontrados:
         cuando = "Hoy" if dia == ctx.hoy() else f"El {corta(dia)}"
         return no(f"{cuando} no tienes ningún {cambio.objeto} apuntado")
+    eleccion = getattr(cambio, "eleccion", None)
+    if eleccion is not None:  # bug 085: the one said by its number, only among those of that name and day
+        elegido = [a for a in encontrados if a["id"] == eleccion]
+        return elegido or no(f"el número {eleccion} no es ningún {cambio.objeto} del {corta(dia)}: elige uno de "
+                             f"los que te he enseñado")
     if len(encontrados) == 1:
         return encontrados
     return elegir(accion=accion, parametros={**parametros, "dia": dia.isoformat(),
                                              "candidatos": [a["id"] for a in encontrados]},
                   peticion=peticion, texto=f"¿Cuál quieres {que} del {corta(dia)}?",
-                  candidatos=[{"eleccion": a["id"], "texto": descripcion_alimento(a)} for a in encontrados])
+                  candidatos=[{"eleccion": a["id"], "texto": descripcion_alimento(a),
+                               "seccion": NOMBRE_SECCION.get(a.get("seccion"), NOMBRE_SECCION[None])}
+                              for a in encontrados])
 
 
 def _fila_elegida(parametros: dict, valores: dict, ctx: Contexto) -> dict:

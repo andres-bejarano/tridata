@@ -397,12 +397,16 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
                 "was done.")
     forma = ("cambio: an object with `accion` (an id of the list below) and the fields that action uses: objeto, "
              "campo, valor, valores, texto, cantidad, unidad, kcal_estimadas, lineas, dia, desde, fecha (dates "
-             "YYYY-MM-DD), antes_dicho, falta, hora (HH:MM, only when Andrés says it); the rest omitted or null.")
+             "YYYY-MM-DD), antes_dicho, falta, hora (HH:MM, only when Andrés says it), eleccion; the rest omitted or null.")
     preparar_desc = (
         "Say what ONE change to Andrés's data or plan would do, exactly as the app would do it (its text, before and "
         "after, where, the lines for the watch and its warnings), and its fingerprint (`Huella`). It changes "
         "NOTHING. Show Andrés that result as it is and ask him; only after his «sí» call hacer_cambio with the same "
         "`cambio` and that `huella`. If he says no, do nothing. If he corrects it, prepare it again.\n"
+        "If it answers «Hay más de uno» (a food logged more than once that day with that name), it lists each one "
+        "with its número, quantity, kcal and section: ask Andrés which one and prepare it again with the same "
+        "`cambio` plus eleccion: that número (and give hacer_cambio that same `cambio`). A número that is not one "
+        "of those does nothing.\n"
         f"{forma} texto (optional): what Andrés asked, in his words.\n\n" + texto_acciones())
 
     @server.tool(name="preparar_cambio", description=preparar_desc,

@@ -32,6 +32,9 @@ their hour and mg, apart from the foods and without kcal: `nutricion.suplementac
 milk of the coffees of a day, logged ONCE as a food with its kcal and spread among them) and the `hora` of the section
 in `apuntar_comida_desde_pc`. The same rule as `apuntar_comida`: Andrés's «sí» first, and «Hecho» only when done.
 
+Bug 085: when a food is logged more than once with that name, the answer shows each one with its number, and the
+change says which one with `eleccion`.
+
 Each save leaves its message in «Desde el PC» (R-196). Nothing here calls a paid AI.
 
 What a tool answers never carries a value of Andrés beyond what the card says; the logs carry ids and counts only.
@@ -172,7 +175,12 @@ def _vista(tarjeta: dict) -> str:
 def _sin_propuesta(tarjeta: dict) -> str:
     """A «no» or an «elegir» of the catalogue: why, or the question; nothing is done (R-197)."""
     if tarjeta["tipo"] == "elegir":
-        opciones = "; ".join(c.get("texto", "") for c in tarjeta.get("candidatos") or [])
+        candidatos = tarjeta.get("candidatos") or []
+        if candidatos and all("seccion" in c for c in candidatos):  # bug 085: foods, chosen by their number
+            opciones = "; ".join(f"número {c['eleccion']}: {c.get('texto', '')}, en {c['seccion']}" for c in candidatos)
+            return (f"Hay más de uno: {tarjeta['texto']} ({opciones}). Pregunta a Andrés cuál es y prepáralo otra "
+                    f"vez con el mismo cambio y eleccion: su número. {NADA}")
+        opciones = "; ".join(c.get("texto", "") for c in candidatos)
         return (f"Hay más de uno: {tarjeta['texto']} ({opciones}). Pregunta a Andrés cuál es y prepáralo otra vez "
                 f"diciéndolo. {NADA}")
     return f"No se puede: {tarjeta['texto']}. {NADA}"

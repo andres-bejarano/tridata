@@ -6,6 +6,8 @@ Unit 083: moved here from `ia/claude.py` (the interpreter of the paid API, gone)
 the lines of a change (`LineaInterpretada`), the reading of what comes as text (bug 036: «» and [] are none, a line
 «cantidad|unidad|nombre|kcal»; bug 055: a number given as text, or not a number at all) and `cambio_no_entendido`,
 the answer when a change does not validate (it was in `web/conversaciones.py`).
+
+Bug 085: `eleccion`, the number (id) of the one meant when what is named is there more than once (R-210 for foods).
 """
 from __future__ import annotations
 
@@ -88,6 +90,8 @@ class CambioInterpretado(BaseModel):
     fecha: date | None = Field(default=None, description="Otra fecha que dice (AAAA-MM-DD), o null")
     antes_dicho: str | None = Field(default=None, description="El valor de antes, solo si la persona lo dice; o null")
     hora: str | None = Field(default=None, description="Una hora que dice (HH:MM), si la acción la pide; o null")
+    eleccion: int | None = Field(
+        default=None, description="Bug 085: el número de cuál es, si hay más de uno con ese nombre; o null")
     falta: str | None = Field(
         default=None, description="Si no entiendes una parte o falta un dato, una frase corta que lo diga; o null")
 

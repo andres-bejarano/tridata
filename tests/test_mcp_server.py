@@ -145,3 +145,5 @@ def test_server_with_the_team_adds_its_tools(tmp_path, store):  # unit 065 R-186
         assert "«sí»" in descripcion and "Andrés" in descripcion, nombre
     assert "preparar_cambio" in tools["hacer_cambio"].description
     assert "«sí»" in preparar.description and "hacer_cambio" in preparar.description
+    # bug 085: with two foods of the same name, it says how to choose one by its número
+    assert "Hay más de uno" in preparar.description and "eleccion" in preparar.description

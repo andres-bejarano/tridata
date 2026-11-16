@@ -16,7 +16,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # Google Calendar (unit 043): the sessions of the plan in the calendar «TriData», permission
     # `calendar.app.created` only. Pinned; Dependabot proposes the updates.
-    "google-api-python-client==2.201.0",
+    "google-api-python-client==2.202.0",
     "google-auth-oauthlib==1.5.0",
 ]
 

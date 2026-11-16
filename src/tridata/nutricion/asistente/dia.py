@@ -29,6 +29,9 @@ activity (Garmin's `tipo`; without it, the same `actividad_id`), and the card sa
 Bug 085: when a name is logged more than once that day, each candidate carries its number (its id) and its section,
 and the change says which one with `eleccion` (as R-210 with the activities); a number that is not one of them is a
 `no`, never another food.
+
+Bug 086 (R-229): `hora_seccion` puts the hour of a section of a day that has food (the same `poner_hora_seccion` as
+the app); kcal, foods and margin do not change. «Sin sección» has no hour; a section with nothing that day is a `no`.
 """
 from __future__ import annotations
 
@@ -45,6 +48,7 @@ from ..margen import NIVELES_POR_DEFECTO, PASOS_POR_DEFECTO, objetivo_del_dia
 from ..objetivo_dia import PREVISTOS_MAX, _porcentaje, niveles_validos, pasos_validos
 from ..recetas import normalizar
 from ..registro import SECCIONES, Alimento, RegistroComidas
+from ..suplementacion import Suplementacion, validar_hora
 from . import (
     Accion, Contexto, Peticion, TarjetaMal, buscar_apuntado, campo, corta, descripcion_alimento, elegir, fecha_de, no,
     numero, tarjeta,
@@ -512,6 +516,46 @@ def _aplicar_seccion(parametros: dict, ctx: Contexto) -> str:
     return f"{movido['nombre']} está en {NOMBRE_SECCION[seccion]} el {corta(date.fromisoformat(movido['dia']))}"
 
 
+# -- hora_seccion (bug 086, R-229) -------------------------------------------------------------------------------------
+
+def _proponer_hora_seccion(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
+    clave = _clave_seccion(cambio.texto)
+    if clave is None or clave == _SIN:
+        dicho = f"«{cambio.texto}» no es una sección con hora" if cambio.texto else "No sé de qué sección es la hora"
+        return no(f"{dicho}: tiene que ser una de {', '.join(NOMBRE_SECCION[s] for s in SECCIONES)}")
+    dia = cambio.dia or peticion.fecha
+    return _rehacer_hora_seccion({"dia": dia.isoformat(), "seccion": clave, "hora": cambio.hora}, {}, ctx, peticion)
+
+
+def _rehacer_hora_seccion(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
+    dia = fecha_de(parametros["dia"])
+    seccion = parametros.get("seccion")
+    if seccion not in SECCIONES:
+        raise TarjetaMal("la tarjeta no dice una sección con hora")
+    nombre = NOMBRE_SECCION[seccion]
+    try:
+        hora = validar_hora(valores.get("hora", parametros.get("hora")))
+    except ValueError:
+        return no(f"No sé a qué hora fue la {nombre} del {corta(dia)}: dímela como HH:MM (p. ej. 16:00)")
+    if not any(a.get("seccion") == seccion for a in ctx.registro.apuntes_del_dia(dia)):
+        return no(f"No hay nada en la {nombre} del {corta(dia)}: la hora va con una sección que tiene comida")
+    antes = Suplementacion(ctx.registro.db_path).horas_del_dia(dia)[seccion]
+    if not antes["aproximada"] and antes["hora"] == hora:
+        return no(f"La {nombre} del {corta(dia)} ya está a las {hora}")
+    de_antes = f"~{antes['hora']}" if antes["aproximada"] else antes["hora"]
+    return tarjeta(accion="hora_seccion", parametros={"dia": dia.isoformat(), "seccion": seccion, "hora": hora},
+                   peticion=peticion, texto=f"Voy a poner la {nombre} del {corta(dia)} a las {hora}",
+                   antes=de_antes, despues=hora, dia=dia,
+                   donde=f"en Nutrición › Día, el {corta(dia)}: solo la hora de la {nombre}; los alimentos y las "
+                         "kcal no cambian")
+
+
+def _aplicar_hora_seccion(parametros: dict, ctx: Contexto) -> str:
+    dia = fecha_de(parametros["dia"])
+    Suplementacion(ctx.registro.db_path).poner_hora_seccion(dia, parametros["seccion"], parametros["hora"])
+    return f"la {NOMBRE_SECCION[parametros['seccion']]} del {corta(dia)} está a las {parametros['hora']}"
+
+
 # -- niveles_dia, objetivo_dia ------------------------------------------------------------------------------------------
 
 def _pct(n: float) -> str:
@@ -761,6 +805,11 @@ ACCIONES = [
            "comida, merienda, cena, carrera («Nutrición en carrera») o «sin sección». objeto: su nombre; dia: el día "
            "en que está apuntado si lo dice, o null; texto: la sección, como la dice.",
            _proponer_seccion, _rehacer_seccion, _aplicar_seccion),
+    Accion("hora_seccion", "cambiar la hora de una sección de Nutrición › día que ya tiene comida («la merienda "
+           "fue a las cuatro, la cena a las siete y media»); no toca alimentos ni kcal. Una sección por cambio. "
+           "texto: la sección (desayuno, media_manana, comida, merienda, cena o carrera); hora: la hora como HH:MM; "
+           "dia: el día si lo dice, o null.",
+           _proponer_hora_seccion, _rehacer_hora_seccion, _aplicar_hora_seccion),
     Accion("niveles_dia", "cambiar los niveles del margen de hoy o de un día que aún no ha llegado (como mucho "
            "cinco). valores: los % de cada nivel con su signo, negativo si es déficit y positivo si es superávit; "
            "dia: el día del que habla, o null.",

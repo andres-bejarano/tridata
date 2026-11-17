@@ -46,6 +46,7 @@ from .exporters import (
     CyclingMarkdownExporter, GymMarkdownExporter, MarkdownExporter,
     MetricsMarkdownExporter, SwimmingMarkdownExporter,
 )
+from .fitness import por_semana
 from .metrics import LimitesDelDia, compute_pmc, daily_tss, pmc_hasta, trimp_for_activity
 from .nutricion.ajustes import historial_fc_de
 from .nutricion.registro import SECCIONES
@@ -261,20 +262,19 @@ def get_weekly_summary(store: DataStore, weeks: int = 8) -> str:
     this_monday = date.today() - timedelta(days=date.today().weekday())
     first_monday = this_monday - timedelta(weeks=weeks - 1)
 
-    # week -> sport -> totals
-    totals: dict[date, dict[str, dict[str, float]]] = {
-        first_monday + timedelta(weeks=i): {} for i in range(weeks)
-    }
-    for a in store.get_activities_with_laps(ALL_SPORT_TYPES):
-        day = date.fromisoformat(a["activity_date"])
-        monday = day - timedelta(days=day.weekday())
-        if monday not in totals:
-            continue
-        t = totals[monday].setdefault(_sport_of(a) or "other", {"n": 0, "hours": 0.0, "km": 0.0, "trimp": 0.0})
-        t["n"] += 1
-        t["hours"] += (a.get("duration_seconds") or 0) / 3600
-        t["km"] += (a.get("distance_meters") or 0) / 1000
-        t["trimp"] += trimp_for_activity(a, a["laps"])
+    # week -> sport -> totals; the grouping is shared with Fitness › weeks (unit 090), the sums are this tool's own
+    grupos = por_semana(store.get_activities_with_laps(ALL_SPORT_TYPES), first_monday, weeks,
+                        lambda a: _sport_of(a) or "other")
+    totals: dict[date, dict[str, dict[str, float]]] = {}
+    for monday, by_sport_acts in grupos.items():
+        totals[monday] = {}
+        for sport, acts in by_sport_acts.items():
+            t = totals[monday][sport] = {"n": 0, "hours": 0.0, "km": 0.0, "trimp": 0.0}
+            for a in acts:
+                t["n"] += 1
+                t["hours"] += (a.get("duration_seconds") or 0) / 3600
+                t["km"] += (a.get("distance_meters") or 0) / 1000
+                t["trimp"] += trimp_for_activity(a, a["laps"])
 
     lines = [
         f"# Weekly summary, last {weeks} weeks (week starts Monday; current week is partial)",

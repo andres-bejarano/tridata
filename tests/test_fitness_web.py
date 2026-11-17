@@ -46,7 +46,8 @@ def test_api_fitness_los_tres_bloques(web):  # R1, R2, R4, R5 · C-146, C-147, C
     assert r.status_code == 200
     f = r.json()
     assert f["fecha"] == HOY.isoformat()
-    assert len(f["carga"]["serie"]) == 14 and f["carga"]["hoy"]["fecha"] == HOY.isoformat()
+    # unit 090 (R1): it opens in 6 weeks (42 days) — before, 14 fixed; 14 is now `?dias=14` (test below)
+    assert len(f["carga"]["serie"]) == 42 and f["carga"]["hoy"]["fecha"] == HOY.isoformat()
     assert f["carga"]["pulso"] == {"confirmada": False, "texto": "de la configuración: confírmala en Ajustes"}
     u = f["ultima_actividad"]
     assert (u["actividad_id"], u["deporte"], u["fecha"], u["vueltas"], u["clima"]) == (
@@ -102,3 +103,48 @@ def test_la_pagina_trae_fitness(web):  # R1-R4 · the client
     assert "graficaCarga" in web.cliente.get("/static/grafica.js").text
     ajustes = web.cliente.get("/ajustes").text
     assert "Pulso y zonas" in ajustes and 'id="pulso"' in ajustes
+
+
+# -- unit 090 (REC-35): the range of the load and the weeks ----------------------------------------------------
+
+@pytest.mark.parametrize(("dias", "puntos", "semanas"), [(14, 14, 2), (42, 42, 6), (91, 59, 13), (365, 59, 52)])
+def test_api_fitness_por_rango(web, dias, puntos, semanas):  # R1, R3 · R-232, R-234
+    f = web.cliente.get(f"/api/fitness?dias={dias}").json()
+    assert len(f["carga"]["serie"]) == puntos  # 59: the seeded history starts 58 days ago
+    assert f["carga"]["serie"][-1]["fecha"] == HOY.isoformat()
+    assert len(f["semanas"]) == semanas and f["semanas"][-1]["en_curso"] is True
+    assert f["ultima_actividad"]["actividad_id"] == "c-ayer"  # the rest, as before
+
+
+def test_api_fitness_por_defecto_trae_seis_semanas(web):  # R1, R3
+    f = web.cliente.get("/api/fitness").json()
+    assert f == web.cliente.get("/api/fitness?dias=42").json()
+    assert len(f["semanas"]) == 6
+    s = f["semanas"][-2]
+    assert set(s["deportes"]) == {"correr", "bici", "nadar", "fuerza", "otros"}
+    assert set(s["total"]) == {"horas", "km", "carga", "zonas"}
+
+
+@pytest.mark.parametrize("dias", ["30", "0", "abc", "-14", "365.0"])
+def test_api_fitness_rango_que_no_vale(web, dias):  # R1
+    r = web.cliente.get(f"/api/fitness?dias={dias}")
+    assert r.status_code == 400
+    assert "14, 42, 91 o 365" in r.json()["error"]
+
+
+def test_api_fitness_sin_garmin_abre_igual(tmp_path):  # R6
+    db = tmp_path / "data.sqlite3"
+    ajustes = Ajustes(db)
+    cliente = TestClient(crear_app(RegistroComidas(db), MagicMock(), ajustes, hoy=lambda: HOY, store=None))
+    f = cliente.get("/api/fitness?dias=91").json()
+    assert f["carga"]["serie"] == [] and len(f["semanas"]) == 13
+    assert all(s["total"]["horas"] == 0 for s in f["semanas"])
+
+
+def test_la_pagina_trae_el_rango_la_formula_y_las_semanas(web):  # R1-R5 · the client
+    html = web.cliente.get("/").text
+    for id_ in ("fitness-rango", "fitness-como", "fitness-semanas", "fitness-medida", "fitness-grafica-semanas"):
+        assert f'id="{id_}"' in html
+    for texto in ("14 días", "6 semanas", "3 meses", "1 año", "¿Cómo se calcula?", "TRIMP", "42 días", "7 días"):
+        assert texto in html
+    assert "graficaSemanas" in web.cliente.get("/static/grafica.js").text

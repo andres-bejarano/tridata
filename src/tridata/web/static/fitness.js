@@ -4,8 +4,11 @@
 // HRV, each next to its 7-day mean). Tapping the activity opens its detail (GET /api/actividad/ID): every lap with
 // its distance, time, pace or speed, mean HR and the zone of that HR, and the weather. A Garmin datum that has not
 // arrived says «aún no ha llegado» and one given half-done «⚠ incompleto»: never a 0 (G-47). The server computes.
+// Unit 090 (REC-35): the range of the load (14 días · 6 semanas · 3 meses · 1 año; it opens in 6 semanas) asks
+// /api/fitness?dias= again, and «Tus semanas» draws its weeks stacked by sport, in hours, km, load or zones
+// (approximated by laps). «¿Cómo se calcula?» is a <details> of index.html.
 
-import { graficaCarga, leyendaCarga } from "./grafica.js";
+import { graficaCarga, graficaSemanas, leyendaCarga, leyendaSemanas } from "./grafica.js";
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -19,6 +22,11 @@ let api = null; // app.js's `api` (it keeps the «sin conexión» notice)
 let peticion = 0; // drops a late answer
 let abierta = null; // id of the activity whose detail is open
 let hoyISO = null;
+let dias = 42; // unit 090: the range on screen
+let medida = "horas"; // unit 090: what «Tus semanas» shows
+let semanasVistas = []; // the weeks of the last answer, to repaint without asking again
+const PERIODOS = { 14: "últimos 14 días", 42: "últimas 6 semanas", 91: "últimos 3 meses", 365: "último año" };
+const ETIQUETAS = { 14: "de los últimos 14 días", 42: "de las últimas 6 semanas", 91: "de los últimos 3 meses", 365: "del último año" };
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -41,14 +49,27 @@ function cuando(iso) {
   return diaSemana.format(new Date(`${iso}T12:00:00`)).replace(".", "").replace(",", "");
 }
 
+// Unit 090: a group of buttons with aria-pressed; `alElegir(valor)` with the data-* of the one pressed.
+function selector(id, clave, alElegir) {
+  const grupo = $(id);
+  grupo.addEventListener("click", (evento) => {
+    const boton = evento.target.closest("button");
+    if (!boton || boton.getAttribute("aria-pressed") === "true") return;
+    for (const b of grupo.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b === boton));
+    alElegir(boton.dataset[clave]);
+  });
+}
+
 export function iniciarFitness(opciones) {
   ({ api } = opciones);
   $("fitness-ultima").addEventListener("click", alternarDetalle);
+  selector("fitness-rango", "dias", (valor) => { dias = Number(valor); cargarFitness(); });
+  selector("fitness-medida", "medida", (valor) => { medida = valor; pintarSemanas(semanasVistas); });
 }
 
 export async function cargarFitness() {
   const mia = ++peticion;
-  const { ok, datos } = await api("/api/fitness");
+  const { ok, datos } = await api(`/api/fitness?dias=${dias}`);
   if (mia !== peticion) return;
   if (!ok) {
     $("fitness-pulso").textContent = datos.error ?? "No he podido cargar Fitness.";
@@ -56,8 +77,15 @@ export async function cargarFitness() {
   }
   hoyISO = datos.fecha;
   pintarCarga(datos.carga);
+  pintarSemanas(datos.semanas ?? []);
   pintarUltima(datos.ultima_actividad);
   pintarRecuperacion(datos.recuperacion);
+}
+
+function pintarSemanas(semanas) {
+  semanasVistas = semanas;
+  const caja = $("fitness-grafica-semanas");
+  caja.replaceChildren(graficaSemanas(semanas, medida, caja.clientWidth - 8), leyendaSemanas(medida));
 }
 
 function pintarCarga(c) {
@@ -67,7 +95,8 @@ function pintarCarga(c) {
   $("fitness-tsb").textContent = h ? conSigno(h.tsb) : "—";
   $("fitness-tsb").classList.toggle("bien", Boolean(h) && Math.round(h.tsb) > 0);
   const caja = $("fitness-grafica");
-  caja.replaceChildren(graficaCarga(c.serie, caja.clientWidth - 8), leyendaCarga());
+  $("fitness-rango-texto").textContent = PERIODOS[dias];
+  caja.replaceChildren(graficaCarga(c.serie, caja.clientWidth - 8, ETIQUETAS[dias]), leyendaCarga());
   $("fitness-pulso").textContent = `Tu FC y tus zonas: ${c.pulso.texto}.`;
   $("fitness-pulso").classList.toggle("aviso", !c.pulso.confirmada);
 }

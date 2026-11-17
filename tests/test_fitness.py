@@ -113,9 +113,9 @@ def test_sin_fc_confirmada_usa_la_configuracion_y_lo_dice(base):  # R6 · R-108
 
 # -- R1 · R-105, C-146: form, fatigue and freshness of today and 14 days -----------------------------------------
 
-def test_carga_de_hoy_y_14_dias_como_export_pmc(base):  # R1 · C-146
+def test_carga_de_hoy_y_14_dias_como_export_pmc(base):  # R1 · C-146 (unit 090: 14 days is now one of the ranges)
     store, ajustes = base
-    carga = fitness.carga(store, ajustes.historial_fc(), HOY)
+    carga = fitness.carga(store, ajustes.historial_fc(), HOY, dias=14)
     assert len(carga["serie"]) == 14
     assert carga["serie"][-1]["fecha"] == HOY.isoformat()
     assert carga["serie"][0]["fecha"] == (HOY - timedelta(days=13)).isoformat()
@@ -270,3 +270,141 @@ def test_la_misma_frescura_en_todas_partes(tmp_path, monkeypatch):  # R8
     assert tsb_fitness == tsb_hoy == tsb_mcp == tsb_export
     sin_fecha = fitness.carga(store, None, hoy)["hoy"]["tsb"]
     assert sin_fecha != tsb_fitness  # the confirmed HR really changes it
+
+
+# -- unit 090 (REC-35): 14 days · 6 weeks · 3 months · 1 year, the weeks by sport and the zones by laps ------------
+# Plans v34: R-232..R-236 · C-289..C-294 · G-49. R1-R6 of the unit. HOY is a Wednesday: its Monday is 19/10.
+
+LUNES = HOY - timedelta(days=HOY.weekday())
+ZONAS_TUPLAS = tuple(tuple(z) for z in ZONAS_A)
+
+
+def _sesion(store: DataStore, id_: str, dia: date, tipo: str, segundos: float, *, metros: float | None = None,
+            pulso: float | None = None, vueltas: tuple[tuple[float, float | None], ...] = ()) -> None:
+    """One invented session; `vueltas` as (seconds, mean HR or None)."""
+    store.save_activities([Activity(activity_id=id_, activity_date=dia, activity_type=tipo, name=id_,
+                                    duration_seconds=segundos, distance_meters=metros, avg_hr=pulso)])
+    store.save_activity_laps([ActivityLap(activity_id=id_, lap_index=i, duration_seconds=s, avg_hr=h)
+                              for i, (s, h) in enumerate(vueltas)])
+
+
+def _semana(semanas: list[dict], lunes: date) -> dict:
+    (s,) = [s for s in semanas if s["lunes"] == lunes.isoformat()]
+    return s
+
+
+def test_zonas_por_vueltas_con_las_zonas_de_ese_dia(tmp_path):  # R4 · R-235, C-292, C-293 (criterio portante)
+    db = tmp_path / "data.sqlite3"
+    store, ajustes = DataStore(db), Ajustes(db)
+    ajustes.cambiar(PULSO_A, desde=LUNES)  # nothing confirmed before this Monday
+    # C-292: 20 min in Z2, 30 in Z4 and 10 in Z1 (and a lap below Z1: it has HR, so it is Z1, the lowest)
+    _sesion(store, "c3", LUNES, "running", 3900, metros=12000, pulso=140,
+            vueltas=((1200, 130), (1800, 160), (600, 100), (300, 50)))
+    # C-293: a swim whose laps carry no HR → «sin pulso»
+    _sesion(store, "n1", LUNES + timedelta(days=1), "lap_swimming", 1500, metros=2000,
+            vueltas=((900, None), (600, None)))
+    # a session without laps: one lap with its duration and its mean HR (Z3)
+    _sesion(store, "b1", LUNES + timedelta(days=2), "cycling", 3600, metros=30000, pulso=150)
+    # last week, before the zones were confirmed: its laps with HR still go to «sin pulso»
+    _sesion(store, "c0", LUNES - timedelta(days=1), "running", 1800, metros=6000, pulso=150, vueltas=((1800, 150),))
+
+    semanas = fitness.semanas(store, ajustes.historial_fc(), HOY, 2)
+    esta = _semana(semanas, LUNES)
+    assert esta["deportes"]["correr"]["zonas"] == {"z1": 900, "z2": 1200, "z3": 0, "z4": 1800, "z5": 0,
+                                                   "sin_pulso": 0}
+    assert esta["deportes"]["nadar"]["zonas"] == {"z1": 0, "z2": 0, "z3": 0, "z4": 0, "z5": 0, "sin_pulso": 1500}
+    assert esta["deportes"]["bici"]["zonas"]["z3"] == 3600
+    assert esta["total"]["zonas"] == {"z1": 900, "z2": 1200, "z3": 3600, "z4": 1800, "z5": 0, "sin_pulso": 1500}
+    pasada = _semana(semanas, LUNES - timedelta(days=7))
+    assert pasada["total"]["zonas"] == {"z1": 0, "z2": 0, "z3": 0, "z4": 0, "z5": 0, "sin_pulso": 1800}
+    # the zone of each lap is the one `zona()` gives with the zones of THAT day
+    assert fitness.zona(160, ZONAS_TUPLAS) == 4 and fitness.zona(50, ZONAS_TUPLAS) is None
+
+
+def test_semanas_de_lunes_a_domingo_apiladas_por_deporte(tmp_path):  # R3, R5, R6 · R-234, R-236, C-291, C-294
+    store = DataStore(tmp_path / "data.sqlite3")
+    previa = LUNES - timedelta(days=7)
+    # a week like the Behobia one: run, ride and swim; the Sunday run belongs to that week, not to this one
+    _sesion(store, "behobia", previa + timedelta(days=6), "running", 4800, metros=20000, pulso=160)
+    _sesion(store, "tirada", previa + timedelta(days=4), "trail_running", 12600, metros=34000, pulso=140)
+    _sesion(store, "bici", previa, "road_biking", 5400, metros=45000, pulso=130)
+    _sesion(store, "nado", previa + timedelta(days=2), "open_water_swimming", 2700, metros=2500)
+    # this week: strength on Monday (with a distance Garmin may give: never km) and a walk («otros»)
+    _sesion(store, "fuerza", LUNES, "strength_training", 2700, metros=500, pulso=110)
+    _sesion(store, "paseo", LUNES + timedelta(days=1), "walking", 3600, metros=5000, pulso=95)
+    _sesion(store, "manana", HOY + timedelta(days=1), "running", 3600, metros=10000, pulso=150)  # not done yet
+
+    semanas = fitness.semanas(store, None, HOY, 6)
+    assert [s["lunes"] for s in semanas] == [(LUNES - timedelta(weeks=5 - i)).isoformat() for i in range(6)]
+    assert [s["domingo"] for s in semanas] == [(LUNES - timedelta(weeks=5 - i) + timedelta(days=6)).isoformat()
+                                               for i in range(6)]
+    assert [s["en_curso"] for s in semanas] == [False] * 5 + [True]
+    for s in semanas[:4]:  # R6: an empty week is there, at zero
+        assert s["total"]["horas"] == 0 and s["total"]["km"] == 0 and s["total"]["carga"] == 0
+        assert set(s["deportes"]) == {"correr", "bici", "nadar", "fuerza", "otros"}
+
+    b = _semana(semanas, previa)
+    assert b["deportes"]["correr"]["km"] == 54.0 and b["deportes"]["correr"]["horas"] == 4.83
+    assert (b["deportes"]["bici"]["km"], b["deportes"]["nadar"]["km"]) == (45.0, 2.5)
+    assert b["total"]["km"] == 101.5 and b["total"]["horas"] == round((4800 + 12600 + 5400 + 2700) / 3600, 2)
+
+    e = semanas[-1]
+    assert e["deportes"]["fuerza"]["km"] is None and e["deportes"]["fuerza"]["horas"] == 0.75
+    assert e["deportes"]["fuerza"]["carga"] > 0
+    assert e["deportes"]["otros"]["horas"] == 1.0 and e["deportes"]["otros"]["km"] == 5.0
+    assert e["deportes"]["otros"]["carga"] == 0  # the load counts what form and fatigue count (ALL_SPORT_TYPES)
+    assert e["deportes"]["correr"]["horas"] == 0  # tomorrow's session is not in
+    assert e["total"]["km"] == 5.0 and e["total"]["horas"] == 1.75
+
+
+@pytest.mark.parametrize("dias", [14, 42, 91, 365])
+def test_cada_rango_da_los_mismos_numeros_dia_a_dia(tmp_path, dias):  # R1 · R-232, C-289, G-49
+    db = tmp_path / "data.sqlite3"
+    store, ajustes = DataStore(db), Ajustes(db)
+    sembrar(store, historia=400)
+    ajustes.cambiar(PULSO_A, desde=DESDE_SIEMPRE)
+    ajustes.cambiar(PULSO_B, desde=HOY - timedelta(days=20))
+    historial = ajustes.historial_fc()
+    entera = fitness.carga(store, historial, HOY, dias=365)["serie"]
+    carga = fitness.carga(store, historial, HOY, dias=dias)
+    assert len(carga["serie"]) == dias
+    assert carga["serie"] == entera[-dias:]
+    assert carga["serie"][-1]["fecha"] == HOY.isoformat() and carga["hoy"] == carga["serie"][-1]
+    assert carga["serie"][-14:] == fitness.carga(store, historial, HOY, dias=14)["serie"]
+    assert fitness.carga(store, historial, HOY)["serie"] == entera[-42:]  # 6 weeks by default
+
+
+def test_un_rango_que_no_es_de_los_cuatro_no_vale(base):  # R1
+    store, ajustes = base
+    with pytest.raises(ValueError):
+        fitness.carga(store, ajustes.historial_fc(), HOY, dias=30)
+    assert fitness.RANGOS_DIAS == (14, 42, 91, 365) and fitness.DIAS_POR_DEFECTO == 42
+
+
+def test_la_carga_semanal_cuadra_con_la_diaria(tmp_path):  # R3 · R-234, G-49
+    db = tmp_path / "data.sqlite3"
+    store, ajustes = DataStore(db), Ajustes(db)
+    sembrar(store)
+    _sesion(store, "paseo", AYER, "walking", 3600, metros=5000, pulso=100)
+    ajustes.cambiar(PULSO_A, desde=DESDE_SIEMPRE)
+    ajustes.cambiar(PULSO_B, desde=HOY - timedelta(days=10))  # two HRs inside the 6 weeks
+    historial = ajustes.historial_fc()
+    por_dia = daily_tss(store.get_activities_with_laps(ALL_SPORT_TYPES), historial.limites)
+    for s in fitness.semanas(store, historial, HOY, 6):
+        lunes = date.fromisoformat(s["lunes"])
+        esperada = sum(por_dia.get(lunes + timedelta(days=i), 0.0) for i in range(7))
+        assert s["total"]["carga"] == pytest.approx(round(esperada, 1), abs=0.051), s["lunes"]
+        assert s["total"]["carga"] == pytest.approx(sum(d["carga"] for d in s["deportes"].values()), abs=0.11)
+
+
+def test_semanas_por_rango_y_sin_actividades(tmp_path):  # R3, R6
+    db = tmp_path / "data.sqlite3"
+    store, ajustes = DataStore(db), Ajustes(db)
+    assert [fitness.SEMANAS_DE[d] for d in fitness.RANGOS_DIAS] == [2, 6, 13, 52]
+    f = fitness.fitness(store, ajustes.historial_fc(), HOY, dias=365)
+    assert len(f["semanas"]) == 52 and f["carga"]["serie"] == []
+    assert all(s["total"] == {"horas": 0, "km": 0, "carga": 0,
+                              "zonas": {"z1": 0, "z2": 0, "z3": 0, "z4": 0, "z5": 0, "sin_pulso": 0}}
+               for s in f["semanas"])
+    assert f["semanas"][-1]["en_curso"] is True and f["semanas"][-1]["lunes"] == LUNES.isoformat()
+    assert len(fitness.fitness(store, ajustes.historial_fc(), HOY)["semanas"]) == 6

@@ -147,3 +147,46 @@ def test_server_with_the_team_adds_its_tools(tmp_path, store):  # unit 065 R-186
     assert "«sí»" in preparar.description and "hacer_cambio" in preparar.description
     # bug 085: with two foods of the same name, it says how to choose one by its número
     assert "Hay más de uno" in preparar.description and "eleccion" in preparar.description
+
+
+def test_get_weekly_summary_same_output_as_before(tmp_path, monkeypatch):
+    """Unit 090: the grouping by week and sport now lives in `fitness.py` (shared with Fitness › weeks); the coach's
+    text must not change by a character. Pinned with the output of the code before that unit (invented data)."""
+    monkeypatch.setenv("TRIDATA_HR_MAX", "190")
+    monkeypatch.setenv("TRIDATA_HR_REST", "60")
+    store = DataStore(tmp_path / "semanas.sqlite3")
+    lunes = TODAY - timedelta(days=TODAY.weekday())
+    previa = lunes - timedelta(days=7)
+    store.save_activities([
+        Activity(activity_id="r1", activity_date=lunes, activity_type="running", name="r", duration_seconds=3600,
+                 distance_meters=10000, avg_hr=140),
+        Activity(activity_id="g1", activity_date=lunes, activity_type="strength_training", name="g",
+                 duration_seconds=2700, distance_meters=300, avg_hr=110),
+        Activity(activity_id="b1", activity_date=previa + timedelta(days=2), activity_type="cycling", name="b",
+                 duration_seconds=7200, distance_meters=60000, avg_hr=130),
+        Activity(activity_id="n1", activity_date=previa + timedelta(days=3), activity_type="lap_swimming", name="n",
+                 duration_seconds=2400, distance_meters=2000),
+        Activity(activity_id="r2", activity_date=previa + timedelta(days=4), activity_type="trail_running", name="r2",
+                 duration_seconds=1800, distance_meters=5000, avg_hr=150),
+        Activity(activity_id="r3", activity_date=previa + timedelta(days=6), activity_type="running", name="r3",
+                 duration_seconds=1800, distance_meters=6000, avg_hr=155),
+        Activity(activity_id="w1", activity_date=previa + timedelta(days=1), activity_type="walking", name="w",
+                 duration_seconds=3600, distance_meters=5000, avg_hr=100),
+    ])
+    store.save_activity_laps([ActivityLap(activity_id="b1", lap_index=0, duration_seconds=3600, avg_hr=125),
+                              ActivityLap(activity_id="b1", lap_index=1, duration_seconds=3600, avg_hr=135)])
+    antes = lunes - timedelta(days=14)
+    assert get_weekly_summary(store, 3) == "\n".join([
+        "# Weekly summary, last 3 weeks (week starts Monday; current week is partial)",
+        "",
+        "| Week | Sport | Sessions | Hours | km | TRIMP |",
+        "|---|---|---:|---:|---:|---:|",
+        f"| {antes} | — | 0 | 0.0 | 0.0 | 0 |",
+        f"| {previa} | cycling | 1 | 2.0 | 60.0 | 117 |",
+        f"| {previa} | running | 2 | 1.0 | 11.0 | 107 |",
+        f"| {previa} | swimming | 1 | 0.7 | 2.0 | 0 |",
+        f"| {previa} | **total** | | **3.7** | | **225** |",
+        f"| {lunes} | gym | 1 | 0.8 | — | 23 |",
+        f"| {lunes} | running | 1 | 1.0 | 10.0 | 77 |",
+        f"| {lunes} | **total** | | **1.8** | | **100** |",
+    ])

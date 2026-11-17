@@ -52,9 +52,11 @@
                                   next to the database): with `tridata sync` running it is the same 409 «en_marcha»,
                                   and it brings at least yesterday and today
     GET  /api/fitness             unit 031 (REC-19): the Fitness tab in one answer (`fitness.py`): `carga` (CTL, ATL, TSB
-                                  of today and the 14 days that end today, and `pulso`: where today's HR comes from),
+                                  of today and the days that end today, and `pulso`: where today's HR comes from),
                                   `ultima_actividad` and `recuperacion` (sleep, resting HR, HRV with their 7-day means,
-                                  each with its `estado`). Every day with the HR in force that day in Ajustes (G-49)
+                                  each with its `estado`). Every day with the HR in force that day in Ajustes (G-49).
+                                  Unit 090: `?dias=14|42|91|365` (42 by default; another value, 400) and `semanas`: the
+                                  2, 6, 13 or 52 Monday-to-Sunday weeks by sport (hours, km, load, time by zone)
     GET  /api/actividad/ID        unit 031: one activity with its laps (pace or speed, mean HR and its zone) and its
                                   weather; 404 if it does not exist
     POST /api/toma                unit 082 (R-227): a dose by hand {"dia", "que" (cafe|b12), "forma"?, "hora"?, "mg"?,
@@ -190,7 +192,8 @@ from ..nutricion.objetivo_dia import PREVISTOS_MAX
 from ..nutricion.asistente import Contexto as ContextoAsistente
 from ..nutricion.recetas import ErrorDatos, _numero
 from ..nutricion.suplementacion import Suplementacion
-from ..fitness import detalle_actividad, fitness, texto_pulso
+from ..fitness import DIAS_POR_DEFECTO, RANGOS_DIAS, SEMANAS_DE, detalle_actividad, fitness, texto_pulso
+from ..fitness import semanas as semanas_fitness
 from ..hoy import como_llegas, entreno, texto_sync
 from ..storage import DataStore
 from ..sync import MOTIVOS, SyncEnMarcha, aviso_sync, cerrojo_sync
@@ -968,19 +971,25 @@ def crear_app(
         await run_in_threadpool(_al_dia)
         return JSONResponse(await run_in_threadpool(_hoy))
 
-    def _fitness() -> dict:
-        """Unit 031: the three blocks of Fitness; without Garmin data, an empty store's answer (nothing invented)."""
+    def _fitness(dias: int) -> dict:
+        """Unit 031: the three blocks of Fitness; without Garmin data, an empty store's answer (nothing invented).
+        Unit 090: the load of `dias` days and the weeks of that range (at zero without Garmin)."""
         historial = ajustes.historial_fc()
         if store is None:
             falta = {"estado": "no_ha_llegado", "valor": None, "media_7d": None}
             return {"fecha": hoy().isoformat(), "ultima_actividad": None,
                     "carga": {"hoy": None, "serie": [], "pulso": texto_pulso(historial.vigente(hoy()))},
                     "recuperacion": {"sueno": {"estado": "no_ha_llegado", "segundos": None, "puntuacion": None,
-                                               "media_7d": None}, "pulso_reposo": falta, "hrv": dict(falta)}}
-        return fitness(store, historial, hoy())
+                                               "media_7d": None}, "pulso_reposo": falta, "hrv": dict(falta)},
+                    "semanas": semanas_fitness(None, historial, hoy(), SEMANAS_DE[dias])}
+        return fitness(store, historial, hoy(), dias)
 
     async def ver_fitness(request: Request) -> Response:
-        return JSONResponse(await run_in_threadpool(_fitness))
+        texto = request.query_params.get("dias", str(DIAS_POR_DEFECTO))
+        dias = int(texto) if texto.isdigit() else -1
+        if dias not in RANGOS_DIAS:
+            return _error("El rango de Fitness es de 14, 42, 91 o 365 días.", 400)
+        return JSONResponse(await run_in_threadpool(_fitness, dias))
 
     async def ver_actividad(request: Request) -> Response:
         if store is None:

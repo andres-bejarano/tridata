@@ -63,6 +63,9 @@ def test_recorrido_de_fitness(servidor, abrir, ir_a, capturar, oscuro):  # E2E-4
         expect(carga).to_contain_text(texto)
     expect(p.locator("#fitness-grafica svg")).to_be_visible()
     expect(p.locator("#fitness-grafica svg .linea-ctl")).to_have_count(1)
+    # unit 090: it opens in 6 weeks (the 39 days this history has); «14 días» gives the 14 bars of before
+    expect(p.locator("#fitness-grafica svg .barra-tsb")).to_have_count(39)
+    p.locator("#fitness-rango").get_by_role("button", name="14 días").click()
     expect(p.locator("#fitness-grafica svg .barra-tsb")).to_have_count(14)
     expect(p.locator("#fitness-pulso")).to_contain_text("de tu prueba de esfuerzo de 2025-11")
 
@@ -134,3 +137,90 @@ def test_pulso_y_zonas_en_ajustes(servidor, abrir, capturar, oscuro):  # R6, R7
     expect(ficha.locator(".aviso")).to_be_visible()
     expect(ficha.locator(".aviso")).to_contain_text("No se ha guardado nada")
     assert servidor.ajustes.historial_fc().limites(HOY) == (180, 55)
+
+
+# -- unit 090 (E2E-11 of `ver-fitness`): the range, the weeks by sport (km, zones) and «¿Cómo se calcula?» ----------
+
+LUNES = HOY - timedelta(days=HOY.weekday())  # 19/10; the week before, 12-18/10, is the «Behobia» one
+PREVIA = LUNES - timedelta(days=7)
+
+
+def _sembrar_un_ano(servidor) -> None:
+    store = servidor.store
+    store.save_activities([
+        Activity(activity_id=f"r{i:03d}", activity_date=HOY - timedelta(days=i), activity_type="cycling",
+                 name="Rodaje de prueba", duration_seconds=3600, distance_meters=30000, avg_hr=130 + i % 9)
+        for i in range(4, 400, 3)
+    ] + [
+        Activity(activity_id="tirada", activity_date=PREVIA + timedelta(days=5), activity_type="trail_running",
+                 name="Tirada de prueba", duration_seconds=3600, distance_meters=34000, avg_hr=140),
+        Activity(activity_id="behobia", activity_date=PREVIA + timedelta(days=6), activity_type="running",
+                 name="Carrera de prueba", duration_seconds=4800, distance_meters=20000, avg_hr=160),
+        Activity(activity_id="nado", activity_date=PREVIA + timedelta(days=2), activity_type="lap_swimming",
+                 name="Natación de prueba", duration_seconds=2700, distance_meters=2500),
+        Activity(activity_id="fuerza", activity_date=LUNES, activity_type="strength_training", name="Fuerza de prueba",
+                 duration_seconds=2700, distance_meters=400, avg_hr=110),
+    ])
+    # C-292: 20 min in Z2, 30 in Z4 and 10 in Z1; C-293: the swim's laps without HR
+    store.save_activity_laps([ActivityLap(activity_id="tirada", lap_index=i, duration_seconds=s, avg_hr=h)
+                              for i, (s, h) in enumerate(((1200, 130), (1800, 160), (600, 100)))]
+                             + [ActivityLap(activity_id="nado", lap_index=i, duration_seconds=900, distance_meters=800)
+                                for i in range(3)])
+
+
+@TEMAS
+def test_rango_semanas_y_como_se_calcula(servidor, abrir, ir_a, capturar, oscuro):  # E2E-11 · C-289..C-294
+    _sembrar_un_ano(servidor)
+    servidor.ajustes.cambiar(PULSO, desde=DESDE_SIEMPRE)
+    sufijo = "-oscuro" if oscuro else "-claro"
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
+    ir_a(p, "fitness")
+
+    # C-289: it opens in 6 weeks
+    rango = p.locator("#fitness-rango")
+    expect(rango.locator('button[aria-pressed="true"]')).to_have_text("6 semanas")
+    expect(p.locator("#fitness-grafica svg .barra-tsb")).to_have_count(42)
+    semanas = p.locator("#fitness-grafica-semanas svg .semana")
+    expect(semanas).to_have_count(6)
+    expect(p.locator("#fitness-grafica-semanas svg .semana.en-curso")).to_have_count(1)
+    expect(p.locator("#fitness-grafica-semanas")).to_contain_text("en curso")
+    expect(p.locator("#fitness-medida button[aria-pressed=\"true\"]")).to_have_text("Horas")
+
+    # C-291, C-294: km stacked by sport, the week total, strength without km
+    p.locator("#fitness-medida").get_by_role("button", name="Km").click()
+    previa = p.locator(f'#fitness-grafica-semanas svg .semana[data-lunes="{PREVIA.isoformat()}"]')
+    for deporte in ("correr", "bici", "nadar"):
+        expect(previa.locator(f'.barra-semana[data-deporte="{deporte}"]')).to_have_count(1)
+    expect(previa.locator(".total-semana")).to_have_text("116,5")  # 54 running + 60 cycling + 2,5 swimming
+    en_curso = p.locator("#fitness-grafica-semanas svg .semana.en-curso")
+    expect(en_curso.locator('.barra-semana[data-deporte="fuerza"]')).to_have_count(0)
+    expect(p.locator("#fitness-semanas .leyenda-grafica")).to_contain_text("correr")
+    _sin_scroll(p, "semanas-km")
+    p.locator("#fitness-semanas").scroll_into_view_if_needed()
+    capturar(p, f"fitness-semanas-km{sufijo}")
+
+    # C-292, C-293: zones by laps, «aproximado por vueltas»
+    p.locator("#fitness-medida").get_by_role("button", name="Zonas").click()
+    expect(p.locator("#fitness-semanas")).to_contain_text("aproximado por vueltas")
+    expect(previa.locator('.barra-semana[data-zona="sin_pulso"]')).to_have_count(1)
+    expect(previa.locator('.barra-semana[data-zona="z4"]')).to_have_count(1)
+    expect(p.locator("#fitness-semanas .leyenda-grafica")).to_contain_text("sin pulso")
+    capturar(p, f"fitness-semanas-zonas{sufijo}")
+
+    # C-290: «¿Cómo se calcula?», folded when it opens
+    como = p.locator("#fitness-como")
+    expect(como.locator("p").first).to_be_hidden()
+    como.locator("summary").click()
+    for texto in ("TRIMP", "42 días", "7 días", "no es el TSS de potencia", "tendencia"):
+        expect(como).to_contain_text(texto)
+    como.scroll_into_view_if_needed()
+    capturar(p, f"fitness-como-se-calcula{sufijo}")
+
+    # C-289: «1 año» shows the 365 days and the 52 weeks
+    rango.get_by_role("button", name="1 año").click()
+    expect(p.locator("#fitness-grafica svg .barra-tsb")).to_have_count(365)
+    expect(semanas).to_have_count(52)
+    expect(rango.locator('button[aria-pressed="true"]')).to_have_text("1 año")
+    expect(p.locator("#fitness-carga")).to_contain_text("último año")
+    _sin_scroll(p, "fitness-1-ano")
+    capturar(p, f"fitness-1-ano{sufijo}", completa=True)

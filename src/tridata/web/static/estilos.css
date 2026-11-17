@@ -632,8 +632,8 @@ button.semana.hoy { background: var(--acento-suave); }
 .marca-semana { color: var(--alerta); }
 .hecho-semana { flex: none; display: grid; justify-items: end; gap: 2px; font-variant-numeric: tabular-nums; }
 .hecho-semana small { font-size: .8rem; }
-.barra-semana { display: block; height: 5px; border-radius: 999px; background: var(--pista); margin-top: 4px; overflow: hidden; }
-.barra-semana > span { display: block; height: 100%; background: var(--acento); }
+span.barra-semana { display: block; height: 5px; border-radius: 999px; background: var(--pista); margin-top: 4px; overflow: hidden; }
+span.barra-semana > span { display: block; height: 100%; background: var(--acento); }
 .nota-plan { margin: 6px 4px 12px; }
 .acciones-plan { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .acciones-plan > * { flex: 1 1 9rem; }
@@ -718,3 +718,39 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .editor-hora { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-weight: 500; }
 .editor-hora input, .editor-hora button { min-height: 44px; }
 .editor-hora input { color-scheme: light dark; }
+
+/* -- unit 090: Fitness — the range of the load, «¿Cómo se calcula?» and «Tus semanas» (fitness.js, grafica.js) ---- */
+:root {
+  --dep-correr: #d4621a; --dep-bici: #1a6fe8; --dep-nadar: #0f9bb0; --dep-fuerza: #7a4fc9; --dep-otros: #8a94a0;
+  --zona-1: #9cc0f7; --zona-2: #3fae62; --zona-3: #d9a400; --zona-4: #e0701c; --zona-5: #c8372d;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --dep-correr: #ff9a4d; --dep-bici: #5b9bff; --dep-nadar: #3cc8dc; --dep-fuerza: #b79cff; --dep-otros: #8d98a5;
+    --zona-1: #4f7fc4; --zona-2: #4cc26b; --zona-3: #f0c330; --zona-4: #ff9a4d; --zona-5: #ff6b5e;
+  }
+}
+.selector-fitness { display: flex; background: var(--pista); border-radius: 12px; padding: 3px; gap: 3px; margin: 10px 0 4px; }
+.selector-fitness button { flex: 1; min-width: 0; min-height: 44px; padding: 0 2px; border: 0; border-radius: 10px; background: transparent; font-size: .9rem; white-space: nowrap; }
+.selector-fitness button[aria-pressed="true"] { background: var(--tarjeta); color: var(--acento); box-shadow: 0 1px 3px rgba(0, 0, 0, .15); }
+.como-se-calcula { margin-top: 8px; border-top: 1px solid var(--borde); }
+.como-se-calcula > summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--acento); font-weight: 650; list-style: none; }
+.como-se-calcula > summary::-webkit-details-marker { display: none; }
+.como-se-calcula > summary::after { content: "›"; margin-left: auto; font-size: 1.3rem; transition: transform .15s; }
+.como-se-calcula[open] > summary::after { transform: rotate(90deg); }
+.como-se-calcula p { margin: 0 0 8px; font-size: .92rem; }
+.grafica-semanas { padding: 6px 0 0; }
+.grafica .total-semana { font-size: 10px; font-weight: 650; fill: var(--texto); font-variant-numeric: tabular-nums; }
+.grafica .etiqueta-en-curso { fill: var(--acento); font-weight: 700; }
+.grafica .semana.en-curso .barra-semana { opacity: .6; }
+.capa-correr { fill: var(--dep-correr); color: var(--dep-correr); }
+.capa-bici { fill: var(--dep-bici); color: var(--dep-bici); }
+.capa-nadar { fill: var(--dep-nadar); color: var(--dep-nadar); }
+.capa-fuerza { fill: var(--dep-fuerza); color: var(--dep-fuerza); }
+.capa-otros { fill: var(--dep-otros); color: var(--dep-otros); }
+.capa-z1 { fill: var(--zona-1); color: var(--zona-1); }
+.capa-z2 { fill: var(--zona-2); color: var(--zona-2); }
+.capa-z3 { fill: var(--zona-3); color: var(--zona-3); }
+.capa-z4 { fill: var(--zona-4); color: var(--zona-4); }
+.capa-z5 { fill: var(--zona-5); color: var(--zona-5); }
+.capa-sin_pulso { fill: var(--pista); color: var(--suave); stroke: var(--suave); stroke-width: .5; }

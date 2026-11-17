@@ -1,11 +1,17 @@
 """Fitness (unit 031, REC-19 of `ver-fitness`): what the Fitness tab reads. Read only: nothing here writes.
 
-- `carga`: form (CTL), fatigue (ATL) and freshness (TSB) of today and the 14 days that end today, with
+- `carga`: form (CTL), fatigue (ATL) and freshness (TSB) of today and the days that end today (unit 090: 14, 42, 91 or
+  365; 42 by default — before, 14 fixed), with
   `metrics.compute_pmc` over the whole history (the EMAs need it) and each day computed with the HR in force THAT
   day in Ajustes (G-49); without any confirmed, the environment's, and it says so (R-108).
 - `ultima_actividad` and `detalle_actividad`: the last activity up to today, and its laps (distance, time, pace or
   speed, mean HR and the zone of that HR, with the zones in force on the activity's day) and its weather.
 - `recuperacion`: last night's sleep, today's resting HR and last night's HRV, each next to its 7-day mean.
+- `semanas` (unit 090, REC-35): Monday-to-Sunday weeks by sport (correr, bici, nadar, fuerza, otros) with hours, km
+  (strength never), load (the same TRIMP with the HR of THAT day as `carga`; only what form and fatigue count, so
+  «otros» outside `ALL_SPORT_TYPES` adds 0) and seconds in each zone, approximated by laps (S-82): each lap adds its
+  time to the zone of its mean HR with the zones in force that day; a lap without HR, or a day without confirmed
+  zones, goes to «sin pulso». `por_semana` is the grouping shared with the coach's `get_weekly_summary`.
 
 Every Garmin datum carries its state, as in `hoy.py` (G-47, never an invented 0): `ok`, `no_ha_llegado` (not given
 yet) or `incompleto` (given half-done: a resting HR of a day whose totals Garmin cached before finishing it, or a
@@ -13,6 +19,7 @@ night of sleep without its score yet).
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date, timedelta
 from typing import Any
 
@@ -20,9 +27,15 @@ from .hoy import INCOMPLETO, NO_HA_LLEGADO, OK, _deporte, _hrv, _por_dia, dia_a_
 from .metrics import compute_pmc, daily_tss, pmc_hasta, trimp_for_activity
 from .nutricion.ajustes import DESDE_SIEMPRE, HistorialFC, PulsoVigente
 from .storage import DataStore
-from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, SWIMMING_TYPES
+from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES
 
-DIAS_CARGA = 14
+RANGOS_DIAS = (14, 42, 91, 365)  # unit 090 (R-232): 14 days · 6 weeks · 3 months · 1 year
+DIAS_POR_DEFECTO = 42
+SEMANAS_DE = {dias: dias // 7 for dias in RANGOS_DIAS}  # 2, 6, 13 and 52 weeks
+DEPORTES_SEMANA = (("correr", RUNNING_TYPES), ("bici", CYCLING_TYPES), ("nadar", SWIMMING_TYPES),
+                   ("fuerza", GYM_TYPES))
+OTROS = "otros"
+ZONAS_SEMANA = ("z1", "z2", "z3", "z4", "z5", "sin_pulso")
 DIAS_MEDIA = 7
 SIN_CONFIRMAR = "de la configuración: confírmala en Ajustes"
 
@@ -53,13 +66,23 @@ def zona(pulso: float | None, zonas: tuple[tuple[int, int], ...] | None) -> int 
     return max(n for n, (desde, _) in enumerate(zonas, start=1) if pulso >= desde)
 
 
-def carga(store: DataStore, historial: HistorialFC | None, hoy: date) -> dict[str, Any]:
-    """`{hoy, serie, pulso}`: today's CTL/ATL/TSB, the 14 days up to today and where today's HR comes from (R1, R6).
-    Rounded to one decimal, as `tridata export-pmc` writes them. No activities at all: `hoy` None, `serie` []."""
+def comprobar_dias(dias: int) -> int:
+    """`dias` if it is one of the four ranges (unit 090); otherwise ValueError."""
+    if dias not in RANGOS_DIAS:
+        raise ValueError(f"El rango es de 14, 42, 91 o 365 días, no {dias}.")
+    return dias
+
+
+def carga(store: DataStore, historial: HistorialFC | None, hoy: date,
+          dias: int = DIAS_POR_DEFECTO) -> dict[str, Any]:
+    """`{hoy, serie, pulso}`: today's CTL/ATL/TSB, the `dias` days up to today and where today's HR comes from (R1,
+    R6). The series is computed whole (the EMAs need it) and only cut. Rounded to one decimal, as `tridata export-pmc`
+    writes them. No activities at all: `hoy` None, `serie` []."""
+    comprobar_dias(dias)
     limites = historial.limites if historial is not None else None
     serie = pmc_hasta(compute_pmc(daily_tss(store.get_activities_with_laps(ALL_SPORT_TYPES), limites)), hoy)
     puntos = [{"fecha": p["date"].isoformat(), "tss": _r1(p["tss"]), "ctl": _r1(p["ctl"]), "atl": _r1(p["atl"]),
-               "tsb": _r1(p["tsb"])} for p in serie[-DIAS_CARGA:]]
+               "tsb": _r1(p["tsb"])} for p in serie[-dias:]]
     return {"hoy": puntos[-1] if puntos and puntos[-1]["fecha"] == hoy.isoformat() else None, "serie": puntos,
             "pulso": texto_pulso(historial.vigente(hoy) if historial is not None else None)}
 
@@ -141,7 +164,98 @@ def recuperacion(store: DataStore, hoy: date) -> dict[str, dict[str, Any]]:
     }
 
 
-def fitness(store: DataStore, historial: HistorialFC | None, hoy: date) -> dict[str, Any]:
-    """What GET /api/fitness answers: the three blocks of the tab."""
-    return {"fecha": hoy.isoformat(), "carga": carga(store, historial, hoy),
-            "ultima_actividad": ultima_actividad(store, historial, hoy), "recuperacion": recuperacion(store, hoy)}
+def lunes_de(dia: date) -> date:
+    return dia - timedelta(days=dia.weekday())
+
+
+def por_semana(actividades: list[dict], primer_lunes: date, n: int,
+               deporte_de: Callable[[dict], str]) -> dict[date, dict[str, list[dict]]]:
+    """The `n` weeks from `primer_lunes` (Monday → sport → its activities, in the order they come): only grouping,
+    each caller sums its way. Shared by Fitness › weeks and the coach's `get_weekly_summary` (unit 090). A week with
+    nothing is there, empty; an activity outside the weeks is left out."""
+    semanas: dict[date, dict[str, list[dict]]] = {primer_lunes + timedelta(weeks=i): {} for i in range(n)}
+    for a in actividades:
+        grupo = semanas.get(lunes_de(date.fromisoformat(a["activity_date"])))
+        if grupo is not None:
+            grupo.setdefault(deporte_de(a), []).append(a)
+    return semanas
+
+
+def deporte_semana(actividad: dict) -> str:
+    """correr · bici · nadar · fuerza, or «otros» (a walk, yoga…)."""
+    tipo = actividad.get("activity_type")
+    return next((nombre for nombre, tipos in DEPORTES_SEMANA if tipo in tipos), OTROS)
+
+
+def _ceros() -> dict[str, float]:
+    return dict.fromkeys(ZONAS_SEMANA, 0.0)
+
+
+def _zonas_por_vueltas(a: dict, laps: list[dict], zonas: tuple[tuple[int, int], ...] | None) -> dict[str, float]:
+    """R-235 (S-82): each lap adds its time to the zone of its mean HR with the zones of that day. A lap with HR
+    under zone 1 is zone 1 (it has HR; Z1 is the lowest). Without HR, or without zones that day: «sin pulso». A session
+    without laps counts as one lap with its duration and mean HR."""
+    vueltas = laps or [{"duration_seconds": a.get("duration_seconds"), "avg_hr": a.get("avg_hr")}]
+    segundos = _ceros()
+    for v in vueltas:
+        pulso = v.get("avg_hr") or None
+        clave = "sin_pulso" if pulso is None or not zonas else f"z{zona(pulso, zonas) or 1}"
+        segundos[clave] += float(v.get("duration_seconds") or 0)
+    return segundos
+
+
+def _vacio(con_km: bool = True) -> dict[str, Any]:
+    return {"horas": 0.0, "km": 0.0 if con_km else None, "carga": 0.0, "zonas": _ceros()}
+
+
+def _redondeo(t: dict[str, Any]) -> dict[str, Any]:
+    return {"horas": round(t["horas"], 2), "km": None if t["km"] is None else _r1(t["km"]), "carga": _r1(t["carga"]),
+            "zonas": {k: round(v) for k, v in t["zonas"].items()}}
+
+
+def semanas(store: DataStore | None, historial: HistorialFC | None, hoy: date, n: int) -> list[dict[str, Any]]:
+    """R3-R6: the `n` Monday-to-Sunday weeks that end in this one (`en_curso`), oldest first, each with its five sports
+    (always there, at zero if nothing) and its `total`. Activities up to `hoy`. Strength never adds km (`km` None).
+    Without a store (no Garmin), the weeks at zero."""
+    primer_lunes = lunes_de(hoy) - timedelta(weeks=n - 1)
+    actividades: list[dict] = []
+    vueltas_de: Callable[[str], list[dict]] = lambda _id: []  # noqa: E731
+    if store is not None:
+        actividades, vueltas_de = store.activities_between(primer_lunes, hoy), store.get_laps
+    grupos = por_semana(actividades, primer_lunes, n, deporte_semana)
+    resultado = []
+    for lunes, por_deporte in grupos.items():
+        deportes = {nombre: _vacio(nombre != "fuerza") for nombre, _ in DEPORTES_SEMANA}
+        deportes[OTROS] = _vacio()
+        total = _vacio()
+        for nombre, lista in por_deporte.items():
+            t = deportes[nombre]
+            for a in lista:
+                laps = vueltas_de(a["activity_id"])
+                dia = date.fromisoformat(a["activity_date"])
+                pulso = historial.vigente(dia) if historial is not None else None
+                horas = float(a.get("duration_seconds") or 0) / 3600
+                km = float(a.get("distance_meters") or 0) / 1000 if t["km"] is not None else 0.0
+                trimp = 0.0
+                if a.get("activity_type") in ALL_SPORT_TYPES:  # what form and fatigue count (daily_tss)
+                    trimp = trimp_for_activity(a, laps, historial.limites(dia) if historial is not None else None)
+                zonas = _zonas_por_vueltas(a, laps, pulso.zonas if pulso is not None else None)
+                for destino in (t, total):
+                    destino["horas"] += horas
+                    destino["carga"] += trimp
+                    if destino["km"] is not None:
+                        destino["km"] += km
+                    for clave, seg in zonas.items():
+                        destino["zonas"][clave] += seg
+        resultado.append({"lunes": lunes.isoformat(), "domingo": (lunes + timedelta(days=6)).isoformat(),
+                          "en_curso": lunes == lunes_de(hoy),
+                          "deportes": {k: _redondeo(v) for k, v in deportes.items()}, "total": _redondeo(total)})
+    return resultado
+
+
+def fitness(store: DataStore, historial: HistorialFC | None, hoy: date,
+            dias: int = DIAS_POR_DEFECTO) -> dict[str, Any]:
+    """What GET /api/fitness answers: the three blocks of the tab, and (unit 090) the weeks of the range."""
+    return {"fecha": hoy.isoformat(), "carga": carga(store, historial, hoy, dias),
+            "ultima_actividad": ultima_actividad(store, historial, hoy), "recuperacion": recuperacion(store, hoy),
+            "semanas": semanas(store, historial, hoy, SEMANAS_DE[dias])}

@@ -67,7 +67,14 @@
       <div id="fitness-forma">
       <p class="suave intro-fitness">Aquí ves tu carga, tu último entreno y tu recuperación.</p>
       <article id="fitness-carga" class="tarjeta bloque-fitness" aria-labelledby="t-carga">
-        <div class="cab-hoy"><h2 id="t-carga">Carga de entreno</h2><span class="suave">últimos 14 días</span></div>
+        <div class="cab-hoy"><h2 id="t-carga">Carga de entreno</h2><span id="fitness-rango-texto" class="suave">últimas 6 semanas</span></div>
+        <!-- unit 090 (R-232): the range of the chart and of the weeks; fitness.js asks /api/fitness?dias= -->
+        <div id="fitness-rango" class="segmentado selector-fitness" role="group" aria-label="Rango de la carga">
+          <button type="button" data-dias="14" aria-pressed="false">14 días</button>
+          <button type="button" data-dias="42" aria-pressed="true">6 semanas</button>
+          <button type="button" data-dias="91" aria-pressed="false">3 meses</button>
+          <button type="button" data-dias="365" aria-pressed="false">1 año</button>
+        </div>
         <div class="cifras-carga">
           <div class="cifra-carga"><span>Forma</span><strong id="fitness-ctl" class="num">—</strong><small>CTL</small></div>
           <div class="cifra-carga"><span>Fatiga</span><strong id="fitness-atl" class="num">—</strong><small>ATL</small></div>
@@ -75,6 +82,28 @@
         </div>
         <div id="fitness-grafica" class="grafica grafica-carga"></div>
         <p id="fitness-pulso" class="suave pulso-fitness"></p>
+        <!-- unit 090 (R-233): how it is computed, folded when it opens -->
+        <details id="fitness-como" class="como-se-calcula">
+          <summary>¿Cómo se calcula?</summary>
+          <p><strong>La carga</strong> de cada sesión sale de su duración y de tu pulso en ella, comparado con tu FC
+            máxima y tu FC en reposo de Ajustes (las de ese día). Es el TRIMP de Banister: no es el TSS de potencia,
+            aunque a veces se le llame «TSS».</p>
+          <p><strong>La forma</strong> (CTL) es la media de tu carga de unos 42 días; <strong>la fatiga</strong> (ATL),
+            la de 7 días; y <strong>la frescura</strong> (TSB) es la forma de ayer menos la fatiga de ayer.</p>
+          <p>Es una tendencia, no una medida exacta: se queda corta en fuerza y en natación por series, donde el pulso
+            dice poco del esfuerzo.</p>
+        </details>
+      </article>
+      <!-- unit 090 (R-234..R-236): the weeks, Monday to Sunday, stacked by sport; fitness.js + grafica.js -->
+      <article id="fitness-semanas" class="tarjeta bloque-fitness" aria-labelledby="t-semanas">
+        <div class="cab-hoy"><h2 id="t-semanas">Tus semanas</h2><span class="suave">de lunes a domingo</span></div>
+        <div id="fitness-medida" class="segmentado selector-fitness" role="group" aria-label="Qué ver por semana">
+          <button type="button" data-medida="horas" aria-pressed="true">Horas</button>
+          <button type="button" data-medida="km" aria-pressed="false">Km</button>
+          <button type="button" data-medida="carga" aria-pressed="false">Carga</button>
+          <button type="button" data-medida="zonas" aria-pressed="false">Zonas</button>
+        </div>
+        <div id="fitness-grafica-semanas" class="grafica grafica-semanas"></div>
       </article>
       <h2 class="titulo-bloque">Última actividad</h2>
       <button id="fitness-ultima" type="button" class="tarjeta actividad-fitness" aria-expanded="false" aria-controls="fitness-detalle"></button>

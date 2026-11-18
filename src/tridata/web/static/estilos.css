@@ -215,6 +215,38 @@ button.signo { min-width: 48px; font-size: 1.1rem; padding: 0 12px; }
 .opciones-seccion { display: flex; flex-wrap: wrap; gap: 8px; }
 .opciones-seccion button { flex: 1 1 auto; color: var(--acento); border-color: var(--acento); }
 
+/* -- the sheet «Ajustes de hoy» (<dialog>); bug 092: put back, unit 080 had taken it away --------------------------------------------- */
+dialog.hoja {
+  position: fixed; inset: auto 0 0 0; margin: 0 auto; width: 100%; max-width: 640px; max-height: 90vh; max-height: 90dvh;
+  padding: 0; border: 0; border-radius: 22px 22px 0 0; background: var(--fondo); color: var(--texto);
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, .18); overflow-y: auto; overscroll-behavior: contain;
+}
+dialog.hoja::backdrop { background: rgba(10, 14, 20, .45); }
+.hoja-in { padding: 8px 16px calc(28px + env(safe-area-inset-bottom)); }
+.asa { width: 40px; height: 5px; border-radius: 3px; background: var(--borde); margin: 2px auto 8px; }
+.hoja-cab { display: flex; align-items: center; justify-content: space-between; }
+.hoja-cab h3 { margin: 0; font-size: 1.25rem; }
+.cerrar { min-height: 44px; padding: 0 14px; border: 0; background: transparent; color: var(--acento); font-weight: 700; }
+.bloque { padding: 12px 14px; margin: 10px 0 0; gap: 6px; }
+.bloque h4 { margin: 0; font-size: 1rem; }
+.bloque p { margin: 2px 0; font-size: .93rem; }
+.dato-fila { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.enlace-boton { min-height: 44px; padding: 0 2px; border: 0; background: transparent; color: var(--acento); font-weight: 500; font-size: .9rem; text-decoration: underline; }
+.segmentado { display: flex; background: var(--pista); border-radius: 12px; padding: 3px; gap: 3px; }
+.segmentado button { flex: 1; min-width: 0; min-height: 44px; padding: 0 4px; border: 0; border-radius: 10px; background: transparent; font-size: .95rem; }
+.segmentado button[aria-pressed="true"] { background: var(--tarjeta); color: var(--acento); box-shadow: 0 1px 3px rgba(0, 0, 0, .15); }
+.botones { display: flex; gap: 8px; margin-top: 4px; }
+.botones .boton { flex: 1; }
+.boton.ancho { width: 100%; }
+.desplegable { display: grid; gap: 8px; padding-top: 4px; }
+.objetivo-dia { color: var(--texto); }
+.desglose { display: grid; gap: 0; font-size: .95rem; }
+.desglose .linea { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--borde); }
+.desglose .linea:first-child { border-top: 0; }
+.desglose .linea span:last-child { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.desglose .linea.suma { font-weight: 700; }
+.desglose p { font-size: .9rem; }
+.desglose .aviso { margin: 4px 0 0; }
 .garmin { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
 .garmin p { flex: 1; min-width: 8em; margin: 0; }
 .garmin p.error { color: var(--error); }

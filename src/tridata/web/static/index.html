@@ -97,6 +97,14 @@
       <!-- unit 090 (R-234..R-236): the weeks, Monday to Sunday, stacked by sport; fitness.js + grafica.js -->
       <article id="fitness-semanas" class="tarjeta bloque-fitness" aria-labelledby="t-semanas">
         <div class="cab-hoy"><h2 id="t-semanas">Tus semanas</h2><span class="suave">de lunes a domingo</span></div>
+        <!-- unit 091 (R-237, R-238): one sport or all of them; it only filters what the chart already has -->
+        <div id="fitness-deporte" class="segmentado selector-fitness" role="group" aria-label="Qué deporte ver">
+          <button type="button" data-deporte="todos" aria-pressed="true">Todos</button>
+          <button type="button" data-deporte="correr" aria-pressed="false">Correr</button>
+          <button type="button" data-deporte="bici" aria-pressed="false">Bici</button>
+          <button type="button" data-deporte="nadar" aria-pressed="false">Nadar</button>
+          <button type="button" data-deporte="fuerza" aria-pressed="false">Fuerza</button>
+        </div>
         <div id="fitness-medida" class="segmentado selector-fitness" role="group" aria-label="Qué ver por semana">
           <button type="button" data-medida="horas" aria-pressed="true">Horas</button>
           <button type="button" data-medida="km" aria-pressed="false">Km</button>

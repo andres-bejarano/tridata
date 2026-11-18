@@ -224,3 +224,123 @@ def test_rango_semanas_y_como_se_calcula(servidor, abrir, ir_a, capturar, oscuro
     expect(p.locator("#fitness-carga")).to_contain_text("último año")
     _sin_scroll(p, "fitness-1-ano")
     capturar(p, f"fitness-1-ano{sufijo}", completa=True)
+
+
+# -- unit 091 (E2E-12 of `ver-fitness`): «Tus semanas» of one sport (R-237, R-238) -----------------------------------
+
+SIN_BICI = LUNES - timedelta(weeks=2)  # 5-11/10: only a run, the bike at zero
+
+
+def _sembrar_deportes(servidor) -> None:
+    """In course (19-25/10): 15 km of bike and a strength session. 12-18/10: a 10 km run (20 min Z2 + 10 Z4 by laps),
+    30 km of bike (30 min Z5 by laps) and the conftest swim (no HR). 5-11/10: an 8 km run, no bike."""
+    store = servidor.store
+    store.save_activities([
+        Activity(activity_id="bici-curso", activity_date=HOY - timedelta(days=1), activity_type="cycling",
+                 name="Bici de prueba", duration_seconds=2700, distance_meters=15000, avg_hr=125),
+        Activity(activity_id="fuerza-curso", activity_date=LUNES, activity_type="strength_training",
+                 name="Fuerza de prueba", duration_seconds=2700, distance_meters=400, avg_hr=110),
+        Activity(activity_id="carrera-previa", activity_date=PREVIA + timedelta(days=1), activity_type="running",
+                 name="Carrera de prueba", duration_seconds=1800, distance_meters=10000, avg_hr=140),
+        Activity(activity_id="bici-previa", activity_date=PREVIA + timedelta(days=3), activity_type="cycling",
+                 name="Bici larga de prueba", duration_seconds=1800, distance_meters=30000, avg_hr=172),
+        Activity(activity_id="carrera-sin-bici", activity_date=SIN_BICI + timedelta(days=2), activity_type="running",
+                 name="Rodaje de prueba", duration_seconds=2400, distance_meters=8000, avg_hr=135),
+    ])
+    store.save_activity_laps([ActivityLap(activity_id="carrera-previa", lap_index=i, duration_seconds=s, avg_hr=h)
+                              for i, (s, h) in enumerate(((1200, 130), (600, 160)))]
+                             + [ActivityLap(activity_id="bici-previa", lap_index=0, duration_seconds=1800, avg_hr=175)])
+
+
+def _semana(p, lunes: date):
+    return p.locator(f'#fitness-grafica-semanas svg .semana[data-lunes="{lunes.isoformat()}"]')
+
+
+@TEMAS
+def test_semanas_de_un_deporte(servidor, abrir, ir_a, capturar, oscuro):  # E2E-12 · C-295..C-297
+    _sembrar_deportes(servidor)
+    servidor.ajustes.cambiar(PULSO, desde=DESDE_SIEMPRE)
+    sufijo = "-oscuro" if oscuro else "-claro"
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
+    ir_a(p, "fitness")
+    grafica = p.locator("#fitness-grafica-semanas")
+    barras = grafica.locator("svg .barra-semana")
+    deporte = p.locator("#fitness-deporte")
+    medida = p.locator("#fitness-medida")
+    previa, sin_bici, en_curso = _semana(p, PREVIA), _semana(p, SIN_BICI), grafica.locator("svg .semana.en-curso")
+
+    # C-295: it opens in «Todos», the chart as before (every sport of the week stacked)
+    expect(deporte.locator('button[aria-pressed="true"]')).to_have_text("Todos")
+    for nombre in ("Todos", "Correr", "Bici", "Nadar", "Fuerza"):
+        expect(deporte.get_by_role("button", name=nombre)).to_be_visible()
+    medida.get_by_role("button", name="Km").click()
+    expect(previa.locator(".total-semana")).to_have_text("40,0")  # 10 running + 30 cycling (the swim has no distance)
+    expect(previa.locator('.barra-semana[data-deporte="correr"]')).to_have_count(1)
+
+    # C-295 (R1, the load-bearing one): «Bici» + km shows only the bike and its total; a week without bike at zero
+    deporte.get_by_role("button", name="Bici").click()
+    expect(deporte.locator('button[aria-pressed="true"]')).to_have_text("Bici")
+    expect(grafica.locator("svg .semana")).to_have_count(6)
+    expect(barras).to_have_count(2)
+    expect(grafica.locator('svg .barra-semana:not([data-deporte="bici"])')).to_have_count(0)
+    expect(previa.locator(".total-semana")).to_have_text("30,0")
+    expect(en_curso.locator(".total-semana")).to_have_text("15,0")
+    expect(grafica).to_contain_text("en curso")
+    expect(sin_bici.locator(".barra-semana")).to_have_count(0)
+    expect(sin_bici.locator(".total-semana")).to_have_text("0,0")
+    expect(p.locator("#fitness-semanas .leyenda-grafica")).to_contain_text("bici")
+    expect(p.locator("#fitness-semanas .leyenda-grafica")).not_to_contain_text("correr")
+    _sin_scroll(p, "semanas-bici-km")
+    p.locator("#fitness-semanas").scroll_into_view_if_needed()
+    capturar(p, f"fitness-semanas-bici-km{sufijo}")
+
+    # changing the measure or the range keeps the sport
+    medida.get_by_role("button", name="Horas").click()
+    expect(deporte.locator('button[aria-pressed="true"]')).to_have_text("Bici")
+    expect(previa.locator(".total-semana")).to_have_text("0,5")
+    expect(en_curso.locator(".total-semana")).to_have_text("0,8")
+    expect(grafica.locator('svg .barra-semana:not([data-deporte="bici"])')).to_have_count(0)
+    p.locator("#fitness-rango").get_by_role("button", name="3 meses").click()
+    expect(grafica.locator("svg .semana")).to_have_count(13)
+    expect(deporte.locator('button[aria-pressed="true"]')).to_have_text("Bici")
+    expect(barras).to_have_count(2)
+    expect(grafica.locator('svg .barra-semana:not([data-deporte="bici"])')).to_have_count(0)
+    p.locator("#fitness-rango").get_by_role("button", name="6 semanas").click()
+    expect(grafica.locator("svg .semana")).to_have_count(6)
+
+    # C-296 (R2): «Correr» + zones: only the zones of the runs (Z2 and Z4), not the bike's Z5 nor the swim without HR
+    deporte.get_by_role("button", name="Correr").click()
+    medida.get_by_role("button", name="Zonas").click()
+    expect(p.locator("#fitness-semanas")).to_contain_text("aproximado por vueltas")
+    expect(previa.locator('.barra-semana[data-zona="z2"]')).to_have_count(1)
+    expect(previa.locator('.barra-semana[data-zona="z4"]')).to_have_count(1)
+    expect(previa.locator('.barra-semana[data-zona="z5"]')).to_have_count(0)
+    expect(previa.locator('.barra-semana[data-zona="sin_pulso"]')).to_have_count(0)
+    expect(previa.locator(".total-semana")).to_have_text("0,5")  # 30 min of laps of the run
+    expect(en_curso.locator(".barra-semana")).to_have_count(0)
+    capturar(p, f"fitness-semanas-correr-zonas{sufijo}")
+    # with «Todos» the zones add every sport again
+    deporte.get_by_role("button", name="Todos").click()
+    expect(previa.locator('.barra-semana[data-zona="z5"]')).to_have_count(1)
+    expect(previa.locator('.barra-semana[data-zona="sin_pulso"]')).to_have_count(1)
+
+    # C-297 (R3): «Fuerza» + km: no bars, it says strength adds no km, the week in course still «en curso»
+    deporte.get_by_role("button", name="Fuerza").click()
+    medida.get_by_role("button", name="Km").click()
+    expect(barras).to_have_count(0)
+    expect(grafica).to_contain_text("la fuerza no suma km")
+    expect(grafica).to_contain_text("en curso")
+    expect(grafica.locator("svg .semana")).to_have_count(6)
+    capturar(p, f"fitness-semanas-fuerza-km{sufijo}")
+    # with hours the strength session is there
+    medida.get_by_role("button", name="Horas").click()
+    expect(en_curso.locator('.barra-semana[data-deporte="fuerza"]')).to_have_count(1)
+    expect(grafica.locator('svg .barra-semana:not([data-deporte="fuerza"])')).to_have_count(0)
+
+    # back to «Todos»: the chart of always
+    deporte.get_by_role("button", name="Todos").click()
+    medida.get_by_role("button", name="Km").click()
+    expect(previa.locator(".total-semana")).to_have_text("40,0")
+    expect(previa.locator('.barra-semana[data-deporte="bici"]')).to_have_count(1)
+    expect(p.locator("#fitness-semanas .leyenda-grafica")).to_contain_text("la fuerza no suma km")
+    _sin_scroll(p, "semanas-todos")

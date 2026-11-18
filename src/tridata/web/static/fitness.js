@@ -7,6 +7,8 @@
 // Unit 090 (REC-35): the range of the load (14 días · 6 semanas · 3 meses · 1 año; it opens in 6 semanas) asks
 // /api/fitness?dias= again, and «Tus semanas» draws its weeks stacked by sport, in hours, km, load or zones
 // (approximated by laps). «¿Cómo se calcula?» is a <details> of index.html.
+// Unit 091 (REC-36): a sport selector over «Tus semanas» (it opens in «Todos») filters the weeks already received,
+// without asking the server again; the measure and the range keep it.
 
 import { graficaCarga, graficaSemanas, leyendaCarga, leyendaSemanas } from "./grafica.js";
 
@@ -24,6 +26,7 @@ let abierta = null; // id of the activity whose detail is open
 let hoyISO = null;
 let dias = 42; // unit 090: the range on screen
 let medida = "horas"; // unit 090: what «Tus semanas» shows
+let deporte = "todos"; // unit 091: the sport of «Tus semanas» (todos · correr · bici · nadar · fuerza)
 let semanasVistas = []; // the weeks of the last answer, to repaint without asking again
 const PERIODOS = { 14: "últimos 14 días", 42: "últimas 6 semanas", 91: "últimos 3 meses", 365: "último año" };
 const ETIQUETAS = { 14: "de los últimos 14 días", 42: "de las últimas 6 semanas", 91: "de los últimos 3 meses", 365: "del último año" };
@@ -65,6 +68,7 @@ export function iniciarFitness(opciones) {
   $("fitness-ultima").addEventListener("click", alternarDetalle);
   selector("fitness-rango", "dias", (valor) => { dias = Number(valor); cargarFitness(); });
   selector("fitness-medida", "medida", (valor) => { medida = valor; pintarSemanas(semanasVistas); });
+  selector("fitness-deporte", "deporte", (valor) => { deporte = valor; pintarSemanas(semanasVistas); });
 }
 
 export async function cargarFitness() {
@@ -85,7 +89,8 @@ export async function cargarFitness() {
 function pintarSemanas(semanas) {
   semanasVistas = semanas;
   const caja = $("fitness-grafica-semanas");
-  caja.replaceChildren(graficaSemanas(semanas, medida, caja.clientWidth - 8), leyendaSemanas(medida));
+  caja.replaceChildren(graficaSemanas(semanas, medida, caja.clientWidth - 8, deporte),
+    leyendaSemanas(medida, deporte));
 }
 
 function pintarCarga(c) {

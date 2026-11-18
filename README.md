@@ -1,169 +1,314 @@
 <p align="center">
-  <img src="src/tridata/web/static/icono-512.png" width="112" alt="TriData logo">
+  <img src="src/tridata/web/static/icono-512.png" width="112" alt="Logo de TriData">
 </p>
 
 <h1 align="center">TriData</h1>
 
-**A personal, local-first training and nutrition app for one triathlete — with an AI coach that sees the whole picture.**
-
-TriData started as a script that pulled Garmin Connect data into a file you could paste into Claude. It has grown
-into a phone app that runs on your own PC: it tracks what you eat, how you train, how you sleep and recover, and
-puts an AI assistant on top of *all of it at once*.
+<p align="center">
+  <b>Tu entrenamiento, tu comida y tu recuperación en un solo sitio, con un equipo de IA que lo ve todo a la vez.</b><br>
+  Datos de Garmin · kcal del día · carga de entrenamiento · coach, nutricionista y fisio en tu PC · app en el móvil.<br>
+  <sub>Local, privado y sin cuotas: todo vive en tu ordenador.</sub>
+</p>
 
 <p align="center">
-  <img src="docs/screenshots/today.png" width="200" alt="Today: food left, training and recovery at a glance">
-  <img src="docs/screenshots/nutrition.png" width="200" alt="Nutrition: the day's kcal budget and meals">
-  <img src="docs/screenshots/fitness.png" width="200" alt="Fitness: training load, last activity and recovery">
-  <img src="docs/screenshots/assistant.png" width="200" alt="Assistant: a conversation about a 10K goal">
+  <img src="docs/screenshots/today.png" width="200" alt="Hoy: kcal que quedan, entreno y cómo llegas">
+  <img src="docs/screenshots/nutrition.png" width="200" alt="Nutrición: presupuesto de kcal y comidas del día">
+  <img src="docs/screenshots/fitness.png" width="200" alt="Fitness: carga, última actividad y recuperación">
+  <img src="docs/screenshots/assistant.png" width="200" alt="El equipo: una conversación sobre un objetivo de 10K">
 </p>
-<p align="center"><sub>Screenshots from the end-to-end tests, with invented data. The interface is in Spanish.</sub></p>
+<p align="center"><sub>Capturas de las pruebas automáticas, con datos inventados.</sub></p>
 
-## The step forward: an AI coach with full context
+---
 
-Most training apps see one slice of you: the watch sees your runs, the food app sees your meals, the lab report
-sits in a drawer. A coach that only sees one slice can only give generic advice.
+## Qué es
 
-TriData's assistant sees **everything, together**:
+Tu reloj sabe cómo entrenas. Tu app de comida sabe lo que comes. Tu analítica está en un cajón.
+**Ninguno ve el cuadro completo**, y por eso los consejos que recibes son genéricos.
 
-- **Training** — every Garmin activity with laps and weather, training load (CTL / ATL / TSB), heart-rate zones.
-- **Recovery** — sleep, HRV, resting heart rate.
-- **Nutrition** — every meal logged, the daily kcal budget, weight trend and the deficit over time.
-- **Health** — your blood tests and stress-test reports, read from their PDFs on your own disk.
+TriData lo junta todo en tu ordenador y le pone encima un **equipo**: entrenador, nutricionista y
+fisio. El equipo lee tus entrenos, tus comidas, tu sueño y tus análisis **a la vez**, y razona
+contigo con tus números de verdad.
 
-That changes the conversation. You can *negotiate* a training plan instead of receiving one — «I want to run
-10 km under 45 minutes on December 3rd, but this week I slept badly and I'm eating in a deficit» — and you can
-discuss health questions with something that has actually read your numbers.
+> «Quiero bajar de 45 minutos en un 10K el 3 de diciembre, pero esta semana he dormido mal y estoy en déficit.»
+>
+> Con TriData ese plan se negocia, no se recibe.
 
-It is only a seed. Today the metrics are those of a consumer watch and a yearly blood test, and the models are
-the ones we can afford to call. As sensors get more precise and models get more capable, this is what a personal
-coach will look like: one that knows your body as a whole, remembers all of it, and reasons about it with you.
+Son tres piezas que trabajan juntas:
 
-## What it does today
+| Pieza | Dónde vive | Qué hace |
+|---|---|---|
+| 🖥️ **La app** | En tu PC | Se trae cada día tus datos de Garmin, guarda lo que comes y calcula tu carga y tus kcal. |
+| 📱 **El móvil** | En tu pantalla de inicio | La misma app, instalada como una más. Apuntas la comida y miras cómo vas desde cualquier sitio. |
+| 🤖 **El equipo** | Claude Code, en tu PC | Coach, nutricionista y fisio. Ven todo tu contexto, te proponen y cambian cosas **solo cuando dices «sí»**. Le hablas también desde el móvil. |
 
-| Tab | What you get |
-|---|---|
-| **Hoy** (Today) | One screen: kcal left for the day, today's training and how you arrive (sleep, HRV, resting HR, freshness). |
-| **Nutrición** | The day's kcal budget from your basal expenditure, your Garmin steps and a chosen deficit level; meals in sections with drag and drop; a balance and weight chart between any two dates; recipes with versions and pot tares; 80+ common foods preloaded. |
-| **Fitness** | Training load of the last 14 days, the last activity with laps and weather, sleep, HRV and resting HR against their 7-day averages. |
-| **Ajustes** | Basal kcal, kcal per step, deficit level, HR max / rest and zones (with their origin: a stress test or a setting), Google Calendar, and «Lo que ha hecho el coach»: the changes the coach made from the PC. |
+## Puntos fuertes
 
-And everywhere:
+- **Todo tu contexto, de una vez.** Entrenos con vueltas y clima, carga (CTL / ATL / TSB), zonas
+  de pulso, sueño, VFC, pulso en reposo, comidas, peso, analíticas y prueba de esfuerzo. Nada de
+  copiar y pegar entre apps.
+- **Cuenta calorías de verdad.** Tu presupuesto del día sale de tu gasto basal, tus pasos de
+  Garmin y el déficit que elijas. Apuntas por secciones, con recetas con versiones, tara de la olla
+  y más de 80 alimentos comunes ya cargados. El balance y el peso se ven entre las fechas que quieras.
+- **Analiza tu entrenamiento.** Forma, fatiga y frescura con la fórmula a la vista. Tus semanas
+  apiladas por deporte en horas, km, carga o zonas, filtrables por natación, bici o carrera. Cada
+  sesión con sus vueltas, su ritmo y su pulso.
+- **Un equipo que actúa, no solo opina.** Apunta comida, peso, cafés y suplementos. Cambia el plan,
+  importa un plan en Markdown, lee el PDF de tu última analítica y prepara una carrera sobre el
+  perfil real del recorrido. Siempre te enseña antes lo que va a guardar y espera tu «sí».
+- **Plan, reloj y calendario.** Lleva tu plan semana a semana, manda las sesiones a tu reloj
+  Garmin y las pone en tu Google Calendar.
+- **Privado de verdad.** Un único fichero SQLite en tu PC, con copia verificada antes de cada
+  sincronización. Sin nube nuestra, sin cuenta y sin telemetría. Tus datos de salud nunca llegan a
+  este repositorio.
+- **Sin cuotas.** La app no llama a ninguna IA de pago ni necesita clave de API. El equipo usa tu
+  propia suscripción de Claude.
 
-- **The coach on the PC**: Claude Code (your own subscription) talks to TriData through its MCP server. It sees the
-  whole context and logs a meal, a weight, a coffee or a change of the plan **only after you say «sí»**; the app
-  itself calls no paid AI.
-- **Daily Garmin sync** at 08:00, retrying every hour until 14:00, backing off when Garmin rate-limits; the app warns
-  when Garmin is behind and can catch up on demand.
-- **Installable on the phone** (it is a web app served by your PC; reach it from outside through Tailscale).
-- **MCP server** so Claude Code or Claude Desktop can query the same data (read-only) and the coach, nutritionist and physio on the PC can make changes once Andrés says «sí».
+## ¿Es para mí?
 
-## Privacy and cost
+Sí, si tienes un **reloj Garmin**, entrenas en serio (triatlón, carrera, bici o natación) y quieres
+que alguien mire **todo** junto contigo.
 
-- **Everything lives in one SQLite file on your PC** (`~/.tridata/data.sqlite3`), with verified backups before
-  every sync. No cloud of ours, no account, no telemetry.
-- **The app calls no paid AI and needs no API key.** What you ask the coach goes through your own Claude Code
-  session on the PC. Garmin credentials stay in a local `.env` and only talk to Garmin.
-- **Health data never reaches this repository.** Tests and fixtures are invented, and
-  `tridata comprobar-privados` checks the code, the git history and the logs for the values of your own medical
-  documents, printing only counts.
+> ⚠️ **Siendo sinceros:** hoy instalarlo pide algo de soltura con la terminal. Hay que clonar un
+> repositorio, rellenar un fichero de configuración y dejar dos servicios en marcha. Si alguna vez
+> has instalado un programa con `pip`, puedes hacerlo: calcula **una tarde tranquila**. Está
+> probado en **Linux**. En macOS debería funcionar con pequeños cambios (los servicios), y en
+> Windows, con WSL.
 
-## Install
+Necesitas:
 
-Python 3.10 or 3.11.
+- Un **PC que esté encendido** cuando quieras usar la app (es el servidor).
+- **Python 3.10 o superior** y `git`.
+- Tu cuenta de **Garmin Connect**.
+- **Tailscale** (gratis), para ver la app en el móvil fuera de casa.
+- Una suscripción de **Claude** con **Claude Code**, para el equipo.
+- Opcional: una cuenta de **Google**, para el calendario.
+
+## Instalación paso a paso
+
+### 1. Bajar e instalar
 
 ```bash
 git clone https://github.com/andres-bejarano/tridata.git
 cd tridata
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[app]"          # the app
-pip install -e ".[mcp]"          # the MCP server, with the team's tools
-cp .env.example .env             # Garmin email/password, optional settings
-tridata sync --since 2026-01-01  # first backfill from Garmin
-tridata web                      # http://127.0.0.1:8765 — this PC only by default
+pip install -e ".[app]"   # la app
+pip install -e ".[mcp]"   # el servidor MCP del equipo
 ```
 
-| Extra | For |
-|---|---|
-| `app` | `tridata web`: the web server. |
-| `mcp` | `tridata-mcp`, the MCP server: the Garmin tools and the team's. |
-| `dev` | Tests, linters and the security checks. |
-| `e2e` | End-to-end tests of the phone screen in a real Chromium (Playwright). |
+### 2. Configurar Garmin y tus datos
 
-Optional settings in `.env`: `TRIDATA_MEDICOS_DIR` (the folder with your medical PDFs; they are read there, never copied) and
-`TRIDATA_GOOGLE_CLIENTE` (the path of the JSON of your Google OAuth client for Google Calendar, outside any
-repository; the token is saved in `~/.tridata/google-token.json`).
+```bash
+cp .env.example .env
+```
 
-## Commands
+Abre `.env` y rellena lo que pide. `.env` no se sube nunca a git.
 
-| Command | Does |
-|---|---|
-| `tridata web` | Runs the app. |
-| `tridata sync` | Pulls what is new from Garmin Connect (`--since` to backfill, `--revalidate-days` to re-check recent days). |
-| `tridata backup` | A verified copy of the store in `~/.tridata/backups/`. |
-| `tridata export` · `export-metrics` · `export-running` · `export-cycling` · `export-swimming` · `export-gym` · `export-pmc` · `export-nutricion` | Markdown / JSON exports, for reading or for any AI chat. |
-| `tridata show-laps` | Per-lap splits of one activity. |
-| `tridata importar-deficit` · `importar-recetas` · `importar-detalle` | One-off imports from a previous Markdown food diary, reviewing the dubious lines first. |
-| `tridata comprobar-privados` | Counts appearances of your private health values in the repo, its history and the logs (never prints them). |
-| `tridata-mcp` | The MCP server: `list_activities`, `get_activity`, `get_daily_metrics`, `get_training_load`, `get_weekly_summary`, `get_records` (read-only); and the team's: `get_contexto`, `preparar_cambio`, `preparar_plan`, `preparar_transcripcion`, `get_analiticas_pendientes`, `get_recetas`, `get_rutas`, `get_perfil_ruta` (read-only), and `hacer_cambio`, `apuntar_comida`, `apuntar_peso`, `apuntar_toma`, `apuntar_leche_cafes`, `importar_plan`, `guardar_transcripcion`, which write only after Andrés's «sí» and leave a message in «Desde el PC». |
+- `GARMIN_EMAIL` y `GARMIN_PASSWORD`: tu cuenta de Garmin Connect. Solo se usan para hablar con Garmin.
+- `TRIDATA_HR_MAX` y `TRIDATA_HR_REST`: tu pulso máximo y en reposo. Con ellos se calcula la carga.
+- `TRIDATA_BASAL_KCAL` y `TRIDATA_KCAL_POR_PASO`: tu gasto basal y las kcal por paso. Solo se leen
+  el primer día; después se cambian en **Ajustes**.
+- Opcional, `TRIDATA_MEDICOS_DIR`: la carpeta con los PDF de tus analíticas. Se leen ahí y nunca se copian.
 
-## Daily sync
+### 3. Traer tu historia de Garmin
 
-`daily_update.sh` runs a backup, `tridata sync`, laps, weather and the exports, logging to `sync.log`. On Linux a
-systemd user timer runs it every hour from 08:00 to 14:00 until a sync succeeds (and on the next boot if the PC was
-off):
+```bash
+tridata sync --since 2026-01-01
+```
+
+Pon la fecha desde la que quieras datos. La primera vez tarda: Garmin limita las peticiones y
+TriData espera cuando hace falta.
+
+### 4. Arrancar la app
+
+```bash
+tridata web
+```
+
+Abre <http://127.0.0.1:8765> en el navegador del PC. Ya funciona.
+
+Para que arranque sola con el PC, crea `~/.config/systemd/user/tridata-web.service` (cambia las dos rutas por las tuyas):
+
+```ini
+[Unit]
+Description=TriData web
+After=network-online.target
+
+[Service]
+WorkingDirectory=/ruta/a/tridata
+ExecStart=/ruta/a/tridata/.venv/bin/tridata web
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload && systemctl --user enable --now tridata-web.service
+```
+
+### 5. Sincronizar cada día, sin acordarte
+
+`daily_update.sh` hace una copia de seguridad, trae lo nuevo de Garmin (vueltas y clima
+incluidos) y deja las exportaciones al día. Un temporizador lo lanza cada hora de 08:00 a 14:00
+hasta que sale bien, y también al encender el PC si estaba apagado.
 
 ```bash
 cp .config/systemd/user/tridata-sync.* ~/.config/systemd/user/
+# Edita tridata-sync.service: ExecStart debe apuntar a TU daily_update.sh
 systemctl --user daemon-reload && systemctl --user enable --now tridata-sync.timer
 ```
 
-Recent days are re-checked on every run (Garmin sometimes finalizes a day's totals late) and a wider 45-day sweep
-runs about once a week. `cron` works too, without the catch-up after a missed run.
+### 6. La app en tu móvil
 
-## Architecture
+La app la sirve tu PC. Para verla desde el móvil, también fuera de casa, sin abrir puertos ni
+exponerla a internet, usa **Tailscale**: una red privada entre tus dispositivos.
 
-```
-src/tridata/
-├── cli.py                # the `tridata` command
-├── garmin_client.py      # Garmin Connect: auth and typed fetches
-├── sync.py               # incremental sync, retries, revalidation
-├── storage.py            # the local SQLite store
-├── metrics.py            # TRIMP from heart rate, CTL / ATL / TSB
-├── exporters.py          # Markdown / JSON
-├── fitness.py · hoy.py   # what the Fitness and Today screens show
-├── nutricion/            # food log, kcal budget, balance, weight, recipes, common foods, imports
-├── conversaciones/       # the team's context, medical documents and what the coach does from the PC
-├── privados.py           # `comprobar-privados`
-├── mcp_server.py         # `tridata-mcp`
-└── web/                  # Starlette app and the phone UI (plain HTML, CSS and JS)
-```
+1. Instala Tailscale en el PC (<https://tailscale.com/download>) y entra con tu cuenta.
+2. En el PC, publica la app **solo dentro de tu red de Tailscale**:
+   ```bash
+   sudo tailscale serve --bg 8765
+   ```
+   Te dará una dirección del tipo `https://tu-pc.tu-red.ts.net`.
+3. Instala la app de **Tailscale** en el móvil y entra con **la misma cuenta**.
+4. Abre esa dirección en el móvil y añádela a la pantalla de inicio:
 
-Training load is Banister TRIMP from heart rate (measured HR max and rest), not power-based TSS.
+| 📱 iPhone | 🤖 Android |
+|---|---|
+| Ábrela en **Safari** (en iPhone tiene que ser Safari). | Ábrela en **Chrome**. |
+| Toca **Compartir** (el cuadrado con la flecha hacia arriba). | Toca el menú **⋮** de arriba a la derecha. |
+| Baja y elige **Añadir a pantalla de inicio**. | Elige **Instalar aplicación** (o **Añadir a pantalla de inicio**). |
+| Toca **Añadir**. | Confirma con **Instalar**. |
 
-## Development
+Aparece el icono de TriData. Se abre a pantalla completa, como una app más.
+
+> Si cambia el icono y en el móvil sigue saliendo el viejo, borra el acceso directo y vuelve a añadirlo.
+
+### 7. Tu equipo: coach, nutricionista y fisio
+
+El equipo es **Claude Code** hablando con TriData por su **servidor MCP**, que viene instalado
+desde el paso 1.
+
+1. Instala Claude Code (<https://claude.com/claude-code>) y entra con tu cuenta de Claude.
+2. Conéctale TriData para todas tus carpetas:
+   ```bash
+   claude mcp add --scope user tridata -- /ruta/a/tridata/.venv/bin/tridata-mcp
+   ```
+3. Crea una carpeta para tu equipo, por ejemplo `~/coach`, con un `AGENTS.md` que diga quién eres
+   y cómo quieres que te hable. Una base para empezar:
+   ```markdown
+   # Mi equipo: entrenador, nutricionista y fisio
+
+   Aquí no se programa: eres mi equipo. Responde como 🏃 Entrenador, 🥗 Nutricionista o
+   🩺 Fisio según lo que pregunte, con mis números de TriData (empieza por `get_contexto`).
+   Antes de juzgar una sesión, abre sus vueltas. Para cambiar algo, enséñame lo que vas a
+   guardar y espera mi «sí». Respuestas cortas: te escribo desde el móvil.
+
+   Sobre mí: objetivo, próxima carrera, molestias…
+   ```
+   Añade también `CLAUDE.md` con una sola línea, `@AGENTS.md`.
+4. Ábrelo: `cd ~/coach && claude`. Prueba: *«¿cómo voy esta semana?»*.
+5. **Desde el móvil:** activa **Remote Control** en esa sesión de Claude Code (mira la
+   documentación de Claude Code) y háblale desde la app de Claude.
+
+Herramientas del equipo:
+
+- **Solo leen:** `get_contexto`, `list_activities`, `get_activity`, `get_daily_metrics`,
+  `get_training_load`, `get_weekly_summary`, `get_records`, `get_recetas`, `get_rutas`,
+  `get_perfil_ruta`, `get_analiticas_pendientes`, `preparar_cambio`, `preparar_plan` y
+  `preparar_transcripcion`.
+- **Escriben, siempre tras tu «sí»:** `hacer_cambio`, `apuntar_comida`, `apuntar_peso`,
+  `apuntar_toma`, `apuntar_leche_cafes`, `importar_plan` y `guardar_transcripcion`.
+
+Cada cambio deja una nota en **Ajustes › Lo que ha hecho el coach**.
+
+### 8. Opcional: Google Calendar
+
+Para que tus sesiones aparezcan en tu calendario:
+
+1. En <https://console.cloud.google.com>, crea un proyecto y activa la **Google Calendar API**.
+2. En la pantalla de consentimiento OAuth, déjala en modo **Prueba** y añade tu Gmail como
+   **usuario de prueba**.
+3. Crea unas credenciales **OAuth de tipo «App de escritorio»** y descarga el JSON **fuera** del repositorio.
+4. En `.env`, apunta `TRIDATA_GOOGLE_CLIENTE=/ruta/al/client.json` y conecta desde **Ajustes › Google Calendar**.
+   El permiso se guarda en `~/.tridata/google-token.json`.
+
+> En modo **Prueba**, Google caduca el permiso cada **7 días**: cuando pase, vuelve a conectar
+> desde Ajustes. Solo pide permiso sobre los calendarios que crea la propia app.
+
+## Qué hay en la app
+
+| Pantalla | Qué ves |
+|---|---|
+| **Hoy** | De un vistazo: kcal que te quedan, el entreno del día y cómo llegas (sueño, VFC, pulso en reposo, frescura). |
+| **Nutrición** | El día por secciones, el balance y el peso entre dos fechas, tus recetas y la suplementación. |
+| **Fitness** | Forma, fatiga y frescura con su fórmula; tus semanas por deporte (horas, km, carga, zonas); la última sesión con vueltas y clima; tu plan. |
+| **Ajustes** | Gasto basal, kcal por paso, déficit, pulso y zonas (con su origen), carreras, Google Calendar y lo que ha hecho el coach. |
+
+La carga es **TRIMP de Banister calculado con el pulso** (con tu máximo y tu reposo), no el TSS
+de potencia. CTL y ATL son medias exponenciales de 42 y 7 días.
+
+## Privacidad
+
+- Todo vive en `~/.tridata/data.sqlite3`, en tu PC, con copia verificada en `~/.tridata/backups/`
+  antes de cada sincronización.
+- La app no llama a ninguna IA. Lo que preguntas al equipo pasa por **tu** sesión de Claude Code.
+  Ese proveedor recibe lo que el equipo lee para contestarte.
+- Con Tailscale, la app solo se ve desde tus dispositivos: nada queda abierto a internet.
+- `tridata comprobar-privados` revisa el código, el historial de git y los logs buscando los
+  valores de tus analíticas. Solo imprime cuántas veces aparecen, nunca los valores.
+
+## Comandos
+
+| Comando | Hace |
+|---|---|
+| `tridata web` | Arranca la app (`--host` y `--port` para cambiar dónde escucha). |
+| `tridata sync` | Trae lo nuevo de Garmin (`--since` para rellenar historia, `--revalidate-days` para revisar días recientes). |
+| `tridata backup` | Copia verificada de los datos. |
+| `tridata export` y `export-*` | Exportaciones en Markdown o JSON: métricas, carrera, bici, natación, fuerza, carga y nutrición. |
+| `tridata show-laps` | Las vueltas de una actividad. |
+| `tridata comprobar-privados` | Busca tus valores de salud donde no deben estar. |
+| `tridata-mcp` | El servidor MCP del equipo. |
+
+## Para desarrollar
 
 ```bash
 pip install -e ".[dev]"
-scripts/check.sh        # ruff + mypy, the full test suite, gitleaks and pip-audit
+scripts/check.sh        # ruff + mypy, toda la batería de tests, gitleaks y pip-audit
 ```
 
-Tests are written before the code, run against a temporary `HOME`, never call paid APIs
-and never use real health data. The same checks run on GitHub Actions for every pull request. The phone screens have
-their own end-to-end suite (`pip install -e ".[dev,e2e]" && python -m playwright install chromium`, then
-`pytest tests/e2e`).
+Los tests se escriben antes que el código, corren con un `HOME` temporal, no llaman a servicios
+de pago y nunca usan datos de salud reales. Las pantallas del móvil tienen sus propias pruebas en
+un Chromium de verdad: `pip install -e ".[dev,e2e]" && python -m playwright install chromium`,
+y después `pytest tests/e2e`.
 
-## Roadmap
+```
+src/tridata/
+├── cli.py                # el comando `tridata`
+├── garmin_client.py      # Garmin Connect
+├── sync.py               # sincronización incremental, reintentos y revisión
+├── storage.py            # el almacén SQLite local
+├── metrics.py            # TRIMP por pulso, CTL / ATL / TSB
+├── fitness.py · hoy.py   # lo que enseñan Fitness y Hoy
+├── nutricion/            # comidas, presupuesto de kcal, balance, peso y recetas
+├── plan/ · calendario/   # el plan, el reloj y Google Calendar
+├── conversaciones/       # el contexto del equipo y lo que hace desde el PC
+├── mcp_server.py         # `tridata-mcp`
+└── web/                  # la app (Starlette + HTML, CSS y JS sin frameworks)
+```
 
-- [x] Garmin sync and exports for AI chats
-- [x] The phone app: food log with dictation, kcal budget, recipes, balance and weight
-- [x] Today and Fitness screens: training load, last activity, recovery
-- [x] The assistant: conversations over the whole context, medical documents, spending cap
-- [ ] **The team**: a coach that keeps a training plan you negotiate with it, sends sessions to the Garmin watch and to
-      Google Calendar, follows niggles and injuries, and prepares races on the real course profile
-- [ ] **A desktop web version**, to look at and analyse everything in more depth than a phone screen allows
-- [ ] Which model for which job (and which provider), so the monthly cost stays sane as the team grows
-- [ ] A photo of a plate → an estimate of its kcal
+## Lo que viene
 
-## License
+- [x] Datos de Garmin, comida y kcal, recetas, balance y peso
+- [x] Hoy y Fitness: carga, semanas por deporte y recuperación
+- [x] El equipo en el PC: entrenador, nutricionista y fisio, con tu «sí»
+- [x] Plan, reloj Garmin y Google Calendar
+- [ ] Análisis por periodos tipo TrainingPeaks: elegir semanas o meses, compararlos y bajar a cada sesión
+- [ ] El pulso segundo a segundo dentro de cada sesión
+- [ ] Macros y micronutrientes
+- [ ] Versión de escritorio para analizar en pantalla grande
+- [ ] Instalación más sencilla para cualquiera
 
-MIT — see [LICENSE](LICENSE).
+## Licencia
+
+MIT. Mira [LICENSE](LICENSE).

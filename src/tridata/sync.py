@@ -333,6 +333,34 @@ class SyncService:
         logger.info("Lap sync complete: %d/%d activities processed", total, len(candidate_ids))
         return total
 
+    def rellenar_cadencia_bici(self) -> dict[str, Any]:
+        """Unit 093 (R-245, the one exception to G-4): asks Garmin again for the laps of the rides already brought
+        whose laps have no `avg_bike_cadence` key and adds ONLY that field (`DataStore.poner_cadencia_bici`): distance,
+        time, HR and the rest stay as they were. Run by hand (`tridata sync --laps-cadencia-bici`), never by the
+        routine. Like `sync_laps` (bug 079): a 429 or a session failure stops it; any other failure is one line and
+        that ride stays pending, so a second run asks only for those. Returns `{salidas, vueltas_con_cadencia,
+        faltan}`: rides asked, laps that got a cadence, and the IDs still missing."""
+        self._client.login()
+        pendientes = self._store.ids_sin_cadencia_bici(CYCLING_TYPES)
+        faltan: list[str] = []
+        con_cadencia = 0
+        for i, activity_id in enumerate(pendientes, start=1):
+            print(f"cadencia de bici: {i}/{len(pendientes)} salidas", flush=True)
+            try:
+                laps = self._client.get_activity_laps(activity_id)
+            except Exception as exc:
+                if isinstance(exc, (GarminAuthError, GarminRateLimitError)) or _es_429(exc):
+                    raise
+                logger.warning("Bike cadence not fetched for activity %s (%s)", activity_id, type(exc).__name__)
+                faltan.append(activity_id)
+                continue
+            cadencias = {lap.lap_index: lap.avg_bike_cadence for lap in laps}
+            self._store.poner_cadencia_bici(activity_id, cadencias)
+            con_cadencia += sum(1 for c in cadencias.values() if c is not None)
+        logger.info("Bike cadence refill: %d rides, %d laps with cadence, %d missing",
+                    len(pendientes), con_cadencia, len(faltan))
+        return {"salidas": len(pendientes), "vueltas_con_cadencia": con_cadencia, "faltan": faltan}
+
     def sync_weather(self, limit: int = 20) -> int:
         """Fetch weather snapshots for up to `limit` running/cycling activities that have none yet.
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -459,6 +459,33 @@ class DataStore:
             ).fetchall()
         return [r[0] for r in rows]
 
+    def ids_sin_cadencia_bici(self, types: tuple[str, ...]) -> list[str]:
+        """Unit 093 (R-245): IDs (newest first) of the activities of `types` with some lap stored without the
+        `avg_bike_cadence` key (stored before that field existed; a lap whose key is null was already asked)."""
+        placeholders = ",".join("?" * len(types))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT DISTINCT a.activity_id, a.activity_date FROM activities a "  # noqa: S608
+                f"JOIN activity_laps l ON l.activity_id = a.activity_id "
+                f"WHERE json_extract(a.payload,'$.activity_type') IN ({placeholders}) "
+                f"AND json_type(l.payload, '$.avg_bike_cadence') IS NULL "
+                f"ORDER BY a.activity_date DESC, a.activity_id DESC",
+                types,
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def poner_cadencia_bici(self, activity_id: str, cadencias: Mapping[int, float | None]) -> None:
+        """Unit 093 (R-245): sets ONLY `avg_bike_cadence` in the payload of every stored lap of `activity_id` (by
+        `lap_index`; a lap Garmin did not send gets null: it was asked). Nothing else of the payload changes."""
+        with self._connect() as conn:
+            indices = [r[0] for r in conn.execute(
+                "SELECT lap_index FROM activity_laps WHERE activity_id = ?", (activity_id,)).fetchall()]
+            conn.executemany(
+                "UPDATE activity_laps SET payload = json_set(payload, '$.avg_bike_cadence', ?) "
+                "WHERE activity_id = ? AND lap_index = ?",
+                [(cadencias.get(i), activity_id, i) for i in indices],
+            )
+
     def get_laps(self, activity_id: str) -> list[dict]:
         """Return stored laps for an activity, ordered by lap_index."""
         with self._connect() as conn:
@@ -490,6 +517,12 @@ class DataStore:
             activity["weather"] = self.get_weather(activity_id)
             result.append(activity)
         return result
+
+    def primera_fecha_actividad(self) -> date | None:
+        """Unit 093 (R-240): the day of the first activity stored, or None without any."""
+        with self._connect() as conn:
+            (dia,) = conn.execute("SELECT MIN(activity_date) FROM activities").fetchone()
+        return date.fromisoformat(dia) if dia else None
 
     def activities_between(self, start: date, end: date) -> list[dict]:
         """Payloads of the activities with `activity_date` in [start, end], oldest first."""

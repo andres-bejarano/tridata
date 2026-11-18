@@ -53,6 +53,16 @@ class GarminRutaError(RuntimeError):
     """Garmin Connect did not give a route or the GPX of an activity (unit 045, R-153): the app offers the GPX."""
 
 
+# Unit 093 (R-244): the lapDTO key of a ride's cadence. Not verified against a real Garmin answer (none is kept in the
+# repo): `averageBikeCadence` is the one of the splits, `averageBikingCadenceInRevPerMinute` the one of the activity
+# list; the first one given wins.
+_CLAVES_CADENCIA_BICI = ("averageBikeCadence", "averageBikingCadenceInRevPerMinute")
+
+
+def _cadencia_bici(dto: dict) -> float | None:
+    return next((dto[k] for k in _CLAVES_CADENCIA_BICI if dto.get(k) is not None), None)
+
+
 def _es_429(exc: BaseException | None) -> bool:
     """Whether `exc`, or what caused it, is Garmin limiting the requests (a 429)."""
     vistos = 0
@@ -186,6 +196,7 @@ class GarminClient:
                 avg_swim_cadence=dto.get("averageSwimCadence"),
                 total_strokes=dto.get("totalNumberOfStrokes"),
                 swim_stroke=dto.get("swimStroke"),
+                avg_bike_cadence=_cadencia_bici(dto),
             )
             for idx, dto in enumerate(lap_dtos, start=1)
         ]

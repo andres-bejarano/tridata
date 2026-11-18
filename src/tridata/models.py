@@ -327,6 +327,9 @@ class ActivityLap:
     avg_swim_cadence: float | None = None
     total_strokes: int | None = None
     swim_stroke: str | None = None
+    # unit 093 (R-244): pedal strokes per minute of a ride's lap. A lap stored before has no such key at all (not
+    # None): that is how the one-off refill (`SyncService.rellenar_cadencia_bici`) knows what it still has to ask.
+    avg_bike_cadence: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

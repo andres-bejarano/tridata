@@ -112,6 +112,18 @@
           <button type="button" data-medida="zonas" aria-pressed="false">Zonas</button>
         </div>
         <div id="fitness-grafica-semanas" class="grafica grafica-semanas"></div>
+        <p class="suave toca-semana">Toca una semana para ver sus actividades.</p>
+        <!-- unit 093 (REC-37, S-83): the week tapped, under the chart: its totals next to the mean of the 4 before,
+             its activities and the session of the one tapped; fitness.js asks /api/fitness/semana -->
+        <div id="fitness-semana" class="semana-fitness" aria-live="polite" hidden>
+          <div class="cab-semana-fitness">
+            <h3 id="fitness-semana-titulo"></h3>
+            <button id="fitness-semana-cerrar" type="button" class="cerrar-semana">Cerrar</button>
+          </div>
+          <div id="fitness-semana-totales" class="totales-semana"></div>
+          <div id="fitness-semana-lista"></div>
+          <article id="fitness-sesion" class="detalle-fitness sesion-fitness" aria-label="Sesión" hidden></article>
+        </div>
       </article>
       <h2 class="titulo-bloque">Última actividad</h2>
       <button id="fitness-ultima" type="button" class="tarjeta actividad-fitness" aria-expanded="false" aria-controls="fitness-detalle"></button>

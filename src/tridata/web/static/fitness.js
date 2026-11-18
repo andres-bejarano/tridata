@@ -9,6 +9,10 @@
 // (approximated by laps). «¿Cómo se calcula?» is a <details> of index.html.
 // Unit 091 (REC-36): a sport selector over «Tus semanas» (it opens in «Todos») filters the weeks already received,
 // without asking the server again; the measure and the range keep it.
+// Unit 093 (REC-37): tapping a week of «Tus semanas» (or Enter on it) marks it and opens under the chart its totals
+// next to the mean of the 4 weeks before and its activities (GET /api/fitness/semana, of the sport chosen); tapping
+// one opens its session, the same detail as the last activity (`abrirActividad`), whose laps now also carry cadence,
+// stride, SWOLF and climb by sport («—» when Garmin gave none). The same week again, or «Cerrar», closes it.
 
 import { graficaCarga, graficaSemanas, leyendaCarga, leyendaSemanas } from "./grafica.js";
 
@@ -16,6 +20,8 @@ const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
 const unDecimal = new Intl.NumberFormat("es-ES", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const dosDecimales = new Intl.NumberFormat("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const hastaUnDecimal = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 });
+const diaMesCorto = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short" });
 const diaSemana = new Intl.DateTimeFormat("es-ES", { weekday: "long", day: "numeric", month: "short" });
 const NO_HA_LLEGADO = "aún no ha llegado";
 const ICONOS = { Carrera: "🏃", Bici: "🚴", Natación: "🏊", Fuerza: "🏋️" };
@@ -28,6 +34,9 @@ let dias = 42; // unit 090: the range on screen
 let medida = "horas"; // unit 090: what «Tus semanas» shows
 let deporte = "todos"; // unit 091: the sport of «Tus semanas» (todos · correr · bici · nadar · fuerza)
 let semanasVistas = []; // the weeks of the last answer, to repaint without asking again
+let semanaElegida = null; // unit 093: the Monday of the week open under the chart
+let peticionSemana = 0; // drops a late answer of the week
+let sesionAbierta = null; // id of the activity of the week whose session is open
 const PERIODOS = { 14: "últimos 14 días", 42: "últimas 6 semanas", 91: "últimos 3 meses", 365: "último año" };
 const ETIQUETAS = { 14: "de los últimos 14 días", 42: "de las últimas 6 semanas", 91: "de los últimos 3 meses", 365: "del último año" };
 
@@ -68,7 +77,28 @@ export function iniciarFitness(opciones) {
   $("fitness-ultima").addEventListener("click", alternarDetalle);
   selector("fitness-rango", "dias", (valor) => { dias = Number(valor); cargarFitness(); });
   selector("fitness-medida", "medida", (valor) => { medida = valor; pintarSemanas(semanasVistas); });
-  selector("fitness-deporte", "deporte", (valor) => { deporte = valor; pintarSemanas(semanasVistas); });
+  selector("fitness-deporte", "deporte", (valor) => {
+    deporte = valor;
+    pintarSemanas(semanasVistas);
+    if (semanaElegida) cargarSemana();
+  });
+  // unit 093: a tap on a week (its whole column), or Enter / Space on it
+  const grafica = $("fitness-grafica-semanas");
+  grafica.addEventListener("click", (evento) => {
+    const g = evento.target.closest("g.semana");
+    if (g) alternarSemana(g.dataset.lunes);
+  });
+  grafica.addEventListener("keydown", (evento) => {
+    const g = evento.target.closest("g.semana");
+    if (!g || (evento.key !== "Enter" && evento.key !== " ")) return;
+    evento.preventDefault();
+    alternarSemana(g.dataset.lunes);
+  });
+  $("fitness-semana-cerrar").addEventListener("click", cerrarSemana);
+  $("fitness-semana-lista").addEventListener("click", (evento) => {
+    const boton = evento.target.closest("button.actividad-semana");
+    if (boton) alternarSesion(boton.dataset.id);
+  });
 }
 
 export async function cargarFitness() {
@@ -81,6 +111,8 @@ export async function cargarFitness() {
   }
   hoyISO = datos.fecha;
   pintarCarga(datos.carga);
+  // unit 093: another range keeps the week open if it is still on the chart
+  if (semanaElegida && !(datos.semanas ?? []).some((s) => s.lunes === semanaElegida)) cerrarSemana();
   pintarSemanas(datos.semanas ?? []);
   pintarUltima(datos.ultima_actividad);
   pintarRecuperacion(datos.recuperacion);
@@ -89,8 +121,115 @@ export async function cargarFitness() {
 function pintarSemanas(semanas) {
   semanasVistas = semanas;
   const caja = $("fitness-grafica-semanas");
-  caja.replaceChildren(graficaSemanas(semanas, medida, caja.clientWidth - 8, deporte),
+  const enfocada = caja.contains(document.activeElement) ? document.activeElement.dataset?.lunes : null;
+  caja.replaceChildren(graficaSemanas(semanas, medida, caja.clientWidth - 8, deporte, semanaElegida),
     leyendaSemanas(medida, deporte));
+  if (enfocada) caja.querySelector(`g.semana[data-lunes="${enfocada}"]`)?.focus(); // the keyboard keeps its place
+}
+
+// -- unit 093: the week tapped, its activities and the session of one ------------------------------------------------
+
+function alternarSemana(lunes) {
+  if (!lunes) return;
+  if (semanaElegida === lunes) { cerrarSemana(); return; }
+  semanaElegida = lunes;
+  pintarSemanas(semanasVistas);
+  cargarSemana();
+}
+
+function cerrarSemana() {
+  if (!semanaElegida && $("fitness-semana").hidden) return;
+  semanaElegida = null;
+  peticionSemana++;
+  cerrarSesion();
+  $("fitness-semana").hidden = true;
+  pintarSemanas(semanasVistas);
+}
+
+async function cargarSemana() {
+  const mia = ++peticionSemana, lunes = semanaElegida;
+  cerrarSesion();
+  const panel = $("fitness-semana");
+  panel.hidden = false;
+  $("fitness-semana-titulo").textContent = tituloSemana(lunes, sumarDias(lunes, 6), false);
+  $("fitness-semana-totales").replaceChildren();
+  $("fitness-semana-lista").replaceChildren(el("p", { className: "suave", textContent: "Cargando la semana…" }));
+  const { ok, datos } = await api(`/api/fitness/semana?lunes=${encodeURIComponent(lunes)}&deporte=${encodeURIComponent(deporte)}`);
+  if (mia !== peticionSemana) return;
+  if (!ok) {
+    $("fitness-semana-lista").replaceChildren(el("p", { className: "aviso", textContent: datos.error ?? "No he podido cargar la semana." }));
+    return;
+  }
+  pintarSemana(datos);
+}
+
+const fechaCorta = (iso) => diaMesCorto.format(new Date(`${iso}T12:00:00`)).replace(".", "");
+const tituloSemana = (lunes, domingo, enCurso) => `Semana del ${fechaCorta(lunes)} al ${fechaCorta(domingo)}${enCurso ? " · en curso" : ""}`;
+
+function textoMedia(n) {
+  if (n === 4) return "media 4 semanas";
+  return `media de ${n} ${n === 1 ? "semana" : "semanas"}`;
+}
+
+// R-240: each figure next to the mean of the weeks before, in plain text (no alarm colours)
+function cifraSemana(titulo, valor, media, formato, semanasMedia) {
+  const caja = el("div", { className: "cifra-semana" },
+    el("span", { textContent: titulo }),
+    el("strong", { className: "num", textContent: valor === null ? "—" : formato(valor) }));
+  const detalle = semanasMedia ? `${textoMedia(semanasMedia)}: ${media === null ? "—" : formato(media)}` : "sin semanas antes";
+  caja.append(el("small", { textContent: detalle }));
+  return caja;
+}
+
+function pintarSemana(s) {
+  $("fitness-semana-titulo").textContent = tituloSemana(s.lunes, s.domingo, s.en_curso);
+  const t = s.totales, m = s.media ?? {}, k = s.semanas_media;
+  const de = (clave) => (s.media ? m[clave] : null);
+  $("fitness-semana-totales").replaceChildren(
+    cifraSemana("Horas", t.horas, de("horas"), (v) => `${unDecimal.format(v)} h`, k),
+    cifraSemana("Km", t.km, de("km"), (v) => `${unDecimal.format(v)} km`, k),
+    cifraSemana("Carga", t.carga, de("carga"), (v) => enteras.format(Math.round(v)), k),
+    cifraSemana("Nº de sesiones", t.sesiones, de("sesiones"), (v) => hastaUnDecimal.format(v), k));
+  const lista = $("fitness-semana-lista");
+  if (!s.actividades.length) {
+    lista.replaceChildren(el("p", { className: "suave vacia-semana", textContent: "sin actividades esta semana" }));
+    return;
+  }
+  lista.replaceChildren(el("ul", { className: "lista-semana" }, ...s.actividades.map(filaActividad)));
+}
+
+function filaActividad(a) {
+  const cifras = [a.distancia_m ? distancia(a.distancia_m) : null, a.duracion_s ? minutos(a.duracion_s) : null,
+    a.pulso_medio ? `❤ ${enteras.format(Math.round(a.pulso_medio))}` : "sin pulso",
+    a.carga !== null ? `carga ${enteras.format(Math.round(a.carga))}` : null].filter(Boolean);
+  const boton = el("button", { type: "button", className: "actividad-semana", ariaExpanded: "false" },
+    el("span", { className: "icono-actividad", textContent: ICONOS[a.deporte] ?? "⏱️", ariaHidden: "true" }),
+    el("span", { className: "texto-actividad-semana" },
+      el("strong", { textContent: a.nombre }),
+      el("span", { className: "suave", textContent: `${cuando(a.fecha)} · ${a.deporte}` }),
+      el("span", { className: "cifras-actividad-semana", textContent: cifras.join(" · ") })),
+    el("span", { className: "chev", textContent: "›", ariaHidden: "true" }));
+  boton.dataset.id = a.actividad_id;
+  boton.setAttribute("aria-controls", "fitness-sesion");
+  return el("li", {}, boton);
+}
+
+function cerrarSesion() {
+  sesionAbierta = null;
+  $("fitness-sesion").hidden = true;
+  for (const b of document.querySelectorAll("#fitness-semana-lista button.actividad-semana")) b.setAttribute("aria-expanded", "false");
+}
+
+async function alternarSesion(id) {
+  if (!id) return;
+  if (sesionAbierta === id) { cerrarSesion(); return; }
+  cerrarSesion();
+  sesionAbierta = id;
+  const boton = [...document.querySelectorAll("#fitness-semana-lista button.actividad-semana")].find((b) => b.dataset.id === id);
+  boton?.setAttribute("aria-expanded", "true");
+  const caja = $("fitness-sesion");
+  await abrirActividad(id, caja, () => sesionAbierta === id);
+  if (sesionAbierta === id) caja.scrollIntoView({ block: "nearest" });
 }
 
 function pintarCarga(c) {
@@ -150,13 +289,18 @@ async function alternarDetalle() {
   if (abierta === id) { cerrarDetalle(); return; }
   abierta = id;
   $("fitness-ultima").setAttribute("aria-expanded", "true");
-  const caja = $("fitness-detalle");
+  await abrirActividad(id, $("fitness-detalle"), () => abierta === id);
+}
+
+// Unit 093 (R-241): the detail of any activity by its id, in `caja` (the last activity's or the week's session);
+// `sigue()` says whether it is still wanted when the answer comes.
+async function abrirActividad(id, caja, sigue) {
   caja.replaceChildren(el("p", { className: "suave", textContent: "Cargando las vueltas…" }));
   caja.hidden = false;
   const { ok, datos } = await api(`/api/actividad/${encodeURIComponent(id)}`);
-  if (abierta !== id) return;
+  if (!sigue()) return;
   if (!ok) { caja.replaceChildren(el("p", { className: "aviso", textContent: datos.error ?? "No he podido cargarla." })); return; }
-  pintarDetalle(datos);
+  pintarDetalle(datos, caja);
 }
 
 function ritmo(v) {
@@ -166,12 +310,26 @@ function ritmo(v) {
   return null;
 }
 
+// Unit 093 (R-242): only what the lap's sport carries (the server sends only those keys); «—» if Garmin gave none.
+function extrasVuelta(v) {
+  const partes = [];
+  const falta = (titulo) => `${titulo} —`;
+  if ("cadencia" in v) {
+    const unidad = "swolf" in v ? "brazadas/min" : "ppm";
+    partes.push(v.cadencia !== null ? `cadencia ${enteras.format(v.cadencia)} ${unidad}` : falta("cadencia"));
+  }
+  if ("zancada_m" in v) partes.push(v.zancada_m !== null ? `zancada ${dosDecimales.format(v.zancada_m)} m` : falta("zancada"));
+  if ("swolf" in v) partes.push(v.swolf !== null ? `SWOLF ${enteras.format(v.swolf)}` : falta("SWOLF"));
+  if ("subida_m" in v) partes.push(v.subida_m !== null ? `subida +${enteras.format(v.subida_m)} m` : falta("subida"));
+  return partes.length ? el("small", { className: "extra-vuelta", textContent: partes.join(" · ") }) : null;
+}
+
 function filaVuelta(v) {
   const datos = [v.distancia_m ? distanciaVuelta(v.distancia_m) : null, v.duracion_s ? mmss(v.duracion_s) : null, ritmo(v),
     v.pulso_medio ? `❤ ${enteras.format(Math.round(v.pulso_medio))}` : "sin pulso"].filter(Boolean);
   return el("li", { className: "vuelta" },
     el("span", { className: "n-vuelta", textContent: String(v.n) }),
-    el("span", { className: "datos-vuelta", textContent: datos.join(" · ") }),
+    el("span", { className: "datos-vuelta" }, datos.join(" · "), extrasVuelta(v)),
     el("span", { className: `zona-vuelta${v.zona ? ` z${v.zona}` : ""}`, textContent: v.zona ? `Z${v.zona}` : "—" }));
 }
 
@@ -184,7 +342,7 @@ function textoClima(c) {
   return partes.join(" · ");
 }
 
-function pintarDetalle(d) {
+function pintarDetalle(d, caja = $("fitness-detalle")) {
   const nodos = [el("h3", { textContent: `Vueltas de ${d.actividad.nombre}` })];
   if (d.vueltas.length) {
     if (!d.zonas) nodos.push(el("p", { className: "aviso", textContent: "Sin zonas confirmadas para ese día: confírmalas en Ajustes › Pulso y zonas." }));
@@ -194,7 +352,7 @@ function pintarDetalle(d) {
   }
   nodos.push(el("h3", { textContent: "Clima" }),
     el("p", { className: d.clima ? "clima" : "suave", textContent: d.clima ? textoClima(d.clima) : "Sin clima para esta actividad." }));
-  $("fitness-detalle").replaceChildren(...nodos);
+  caja.replaceChildren(...nodos);
 }
 
 function dato(titulo, principal, detalle, estado) {

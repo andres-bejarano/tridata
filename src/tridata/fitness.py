@@ -12,6 +12,10 @@
   «otros» outside `ALL_SPORT_TYPES` adds 0) and seconds in each zone, approximated by laps (S-82): each lap adds its
   time to the zone of its mean HR with the zones in force that day; a lap without HR, or a day without confirmed
   zones, goes to «sin pulso». `por_semana` is the grouping shared with the coach's `get_weekly_summary`.
+- `actividades_semana` (unit 093, REC-37): the activities of one week (newest first, of one sport or all), with its
+  totals (the ones of `semanas`, plus the number of sessions) next to the mean of the 4 weeks before — only the weeks
+  since the first activity stored, and it says how many. Each lap of `detalle_actividad` also carries, by sport, its
+  cadence (steps, pedal strokes or arm strokes per minute), stride, SWOLF and climb (R-242).
 
 Every Garmin datum carries its state, as in `hoy.py` (G-47, never an invented 0): `ok`, `no_ha_llegado` (not given
 yet) or `incompleto` (given half-done: a resting HR of a day whose totals Garmin cached before finishing it, or a
@@ -38,6 +42,8 @@ OTROS = "otros"
 ZONAS_SEMANA = ("z1", "z2", "z3", "z4", "z5", "sin_pulso")
 DIAS_MEDIA = 7
 SIN_CONFIRMAR = "de la configuración: confírmala en Ajustes"
+TODOS = "todos"
+SEMANAS_MEDIA = 4  # unit 093 (R-240): the week tapped next to the mean of the 4 before
 
 
 def _r1(valor: float) -> float:
@@ -118,7 +124,26 @@ def _vuelta(n: int, v: dict, tipo: str | None, zonas: tuple[tuple[int, int], ...
             ritmo_km = round(v.get("avg_pace_seconds_per_km") or segundos / distancia * 1000)
     pulso = v.get("avg_hr") or None
     return {"n": n, "distancia_m": distancia, "duracion_s": segundos, "ritmo_s_km": ritmo_km,
-            "ritmo_s_100m": ritmo_100, "velocidad_kmh": velocidad, "pulso_medio": pulso, "zona": zona(pulso, zonas)}
+            "ritmo_s_100m": ritmo_100, "velocidad_kmh": velocidad, "pulso_medio": pulso, "zona": zona(pulso, zonas),
+            **_cadencia_y_desnivel(v, tipo)}
+
+
+def _redondo(valor: float | None) -> int | None:
+    return round(valor) if valor else None  # what Garmin did not give (or gave as 0) is None, never 0 (G-47)
+
+
+def _cadencia_y_desnivel(v: dict, tipo: str | None) -> dict[str, Any]:
+    """Unit 093 (R-242): only the keys of the lap's sport — run: steps per minute, stride (m) and climb (m); ride:
+    pedal strokes per minute and climb; swim: arm strokes per minute and SWOLF; any other sport, none."""
+    if tipo in RUNNING_TYPES:
+        zancada = v.get("avg_stride_length_cm") or None
+        return {"cadencia": _redondo(v.get("avg_cadence")), "zancada_m": round(zancada / 100, 2) if zancada else None,
+                "subida_m": _redondo(v.get("elevation_gain_m"))}
+    if tipo in CYCLING_TYPES:
+        return {"cadencia": _redondo(v.get("avg_bike_cadence")), "subida_m": _redondo(v.get("elevation_gain_m"))}
+    if tipo in SWIMMING_TYPES:
+        return {"cadencia": _redondo(v.get("avg_swim_cadence")), "swolf": _redondo(v.get("avg_swolf"))}
+    return {}
 
 
 def detalle_actividad(store: DataStore, historial: HistorialFC | None, actividad_id: str) -> dict[str, Any] | None:
@@ -213,15 +238,18 @@ def _redondeo(t: dict[str, Any]) -> dict[str, Any]:
             "zonas": {k: round(v) for k, v in t["zonas"].items()}}
 
 
-def semanas(store: DataStore | None, historial: HistorialFC | None, hoy: date, n: int) -> list[dict[str, Any]]:
+def semanas(store: DataStore | None, historial: HistorialFC | None, hoy: date, n: int,
+            ultimo_lunes: date | None = None) -> list[dict[str, Any]]:
     """R3-R6: the `n` Monday-to-Sunday weeks that end in this one (`en_curso`), oldest first, each with its five sports
     (always there, at zero if nothing) and its `total`. Activities up to `hoy`. Strength never adds km (`km` None).
-    Without a store (no Garmin), the weeks at zero."""
-    primer_lunes = lunes_de(hoy) - timedelta(weeks=n - 1)
+    Without a store (no Garmin), the weeks at zero. Unit 093: `ultimo_lunes` makes them end in that week instead."""
+    ultimo = ultimo_lunes or lunes_de(hoy)
+    primer_lunes = ultimo - timedelta(weeks=n - 1)
     actividades: list[dict] = []
     vueltas_de: Callable[[str], list[dict]] = lambda _id: []  # noqa: E731
     if store is not None:
-        actividades, vueltas_de = store.activities_between(primer_lunes, hoy), store.get_laps
+        hasta = min(hoy, ultimo + timedelta(days=6))
+        actividades, vueltas_de = store.activities_between(primer_lunes, hasta), store.get_laps
     grupos = por_semana(actividades, primer_lunes, n, deporte_semana)
     resultado = []
     for lunes, por_deporte in grupos.items():
@@ -251,6 +279,61 @@ def semanas(store: DataStore | None, historial: HistorialFC | None, hoy: date, n
                           "en_curso": lunes == lunes_de(hoy),
                           "deportes": {k: _redondeo(v) for k, v in deportes.items()}, "total": _redondeo(total)})
     return resultado
+
+
+def comprobar_semana(lunes: str, deporte: str, hoy: date) -> tuple[date, str]:
+    """Unit 093: the Monday (`AAAA-MM-DD`, a Monday not after this week's) and the sport (`todos` or one of «Tus
+    semanas») of GET /api/fitness/semana, or ValueError saying why."""
+    try:
+        dia = date.fromisoformat(lunes)
+    except ValueError:
+        raise ValueError(f"«{lunes}» no es una fecha (AAAA-MM-DD).") from None
+    if dia.weekday() != 0:
+        raise ValueError(f"El {dia.isoformat()} no es lunes: la semana va de lunes a domingo.")
+    if dia > lunes_de(hoy):
+        raise ValueError("Esa semana aún no ha llegado.")
+    deportes = (TODOS, *(nombre for nombre, _ in DEPORTES_SEMANA), OTROS)
+    if deporte not in deportes:
+        raise ValueError(f"El deporte es uno de {', '.join(deportes)}, no «{deporte}».")
+    return dia, deporte
+
+
+def _cifras(semana: dict[str, Any], deporte: str, sesiones: int) -> dict[str, Any]:
+    t = semana["total"] if deporte == TODOS else semana["deportes"][deporte]
+    return {"horas": t["horas"], "km": t["km"], "carga": t["carga"], "sesiones": sesiones}
+
+
+def actividades_semana(store: DataStore | None, historial: HistorialFC | None, lunes: date, deporte: str,
+                       hoy: date) -> dict[str, Any]:
+    """Unit 093 (R-239, R-240, R-243): `{lunes, domingo, en_curso, deporte, actividades, totales, media,
+    semanas_media}` of the week of `lunes` up to `hoy`. `actividades`: the cards of `_resumen`, newest first, of
+    `deporte` («todos» or one of «Tus semanas»), [] if none. `totales`: hours, km, load (the figures of `semanas`, no
+    second aggregation) and sessions; `media`: the same, the mean of the up to 4 weeks before that have history (since
+    the week of the first activity stored), `semanas_media` of them; None if there is none."""
+    *antes, esta = semanas(store, historial, hoy, SEMANAS_MEDIA + 1, ultimo_lunes=lunes)
+    primer_lunes = lunes - timedelta(weeks=SEMANAS_MEDIA)
+    todas = [] if store is None else store.activities_between(primer_lunes, min(hoy, lunes + timedelta(days=6)))
+    delas = [a for a in todas if deporte == TODOS or deporte_semana(a) == deporte]
+    grupos = por_semana(delas, primer_lunes, SEMANAS_MEDIA + 1, lambda _a: deporte)
+    sesiones = {lun.isoformat(): len(g.get(deporte, [])) for lun, g in grupos.items()}
+
+    primera = store.primera_fecha_actividad() if store is not None else None
+    con_historia = [s for s in antes if primera is not None and s["lunes"] >= lunes_de(primera).isoformat()]
+    media = None
+    if con_historia:
+        previas = [_cifras(s, deporte, sesiones[s["lunes"]]) for s in con_historia]
+        k = len(previas)
+        media = {"horas": round(sum(p["horas"] for p in previas) / k, 2),
+                 "km": None if previas[0]["km"] is None else _r1(sum(p["km"] for p in previas) / k),
+                 "carga": _r1(sum(p["carga"] for p in previas) / k),
+                 "sesiones": _r1(sum(p["sesiones"] for p in previas) / k)}
+
+    de_esta = [a for a in delas if a["activity_date"] >= lunes.isoformat()]
+    de_esta.sort(key=lambda a: (a["activity_date"], a.get("start_time_local") or "", a["activity_id"]), reverse=True)
+    return {"lunes": esta["lunes"], "domingo": esta["domingo"], "en_curso": esta["en_curso"], "deporte": deporte,
+            "actividades": [_resumen(store, historial, a) for a in de_esta] if store is not None else [],
+            "totales": _cifras(esta, deporte, sesiones[esta["lunes"]]), "media": media,
+            "semanas_media": len(con_historia)}
 
 
 def fitness(store: DataStore, historial: HistorialFC | None, hoy: date,

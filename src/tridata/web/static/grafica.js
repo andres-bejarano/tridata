@@ -270,6 +270,9 @@ export function leyendaCarga() {
 // Unit 091 (R-237, R-238): `deporte` "todos" | "correr" | "bici" | "nadar" | "fuerza". With one sport each week is only
 // that sport (one layer, or its own zones in «zonas») and its total is that sport's; a week without it is at zero and
 // stays. Strength in km draws no bar and says that strength adds no km.
+// Unit 093 (R-239, S-83): each week is a button (focusable, Enter/Space, aria-pressed) whose touch area is its whole
+// column (`.toque-semana`, under the bars), so a thin bar is still easy to tap; `elegida` (a Monday) marks that week
+// (`.elegida`). fitness.js listens to the taps on the chart and keeps the choice across repaints.
 export const CAPAS_DEPORTE = [["correr", "correr"], ["bici", "bici"], ["nadar", "nadar"], ["fuerza", "fuerza"], ["otros", "otros"]];
 export const CAPAS_ZONA = [["z1", "Z1"], ["z2", "Z2"], ["z3", "Z3"], ["z4", "Z4"], ["z5", "Z5"], ["sin_pulso", "sin pulso"]];
 const UNIDAD_SEMANA = { horas: "h", km: "km", carga: "carga", zonas: "h" };
@@ -300,7 +303,7 @@ function capasSemana(medida, deporte) {
 
 const textoMedida = (v, medida) => (medida === "carga" ? enteras.format(Math.round(v)) : unDecimalSemana.format(v));
 
-export function graficaSemanas(semanas, medida = "horas", ancho = ANCHO_POR_DEFECTO, deporte = "todos") {
+export function graficaSemanas(semanas, medida = "horas", ancho = ANCHO_POR_DEFECTO, deporte = "todos", elegida = null) {
   const W = Math.max(260, Math.round(ancho || ANCHO_POR_DEFECTO));
   const x0 = 34, x1 = W - 8, arriba = 24, abajo = 186;
   const H = abajo + 26;
@@ -327,7 +330,9 @@ export function graficaSemanas(semanas, medida = "horas", ancho = ANCHO_POR_DEFE
     const centro = x0 + (i + 0.5) * hueco;
     const desde = etiquetaDia(s.lunes), hasta = etiquetaDia(s.domingo);
     const total = totales[i];
-    const dentro = [`<title>Semana del ${desde} al ${hasta}${s.en_curso ? " (en curso)" : ""}${deQuien}: ${fuerzaSinKm ? "la fuerza no suma km" : `${textoMedida(total, medida)} ${UNIDAD_SEMANA[medida]}`}</title>`];
+    const resumen = `Semana del ${desde} al ${hasta}${s.en_curso ? " (en curso)" : ""}${deQuien}: ${fuerzaSinKm ? "la fuerza no suma km" : `${textoMedida(total, medida)} ${UNIDAD_SEMANA[medida]}`}`;
+    const dentro = [`<title>${resumen}</title>`,
+      `<rect class="toque-semana" x="${f1(x0 + i * hueco)}" y="${arriba - 16}" width="${f1(hueco)}" height="${abajo - arriba + 40}"/>`];
     let base = 0;
     for (const [clave, nombre] of capas) {
       const v = valorSemana(s, clave, medida, deporte);
@@ -344,7 +349,8 @@ export function graficaSemanas(semanas, medida = "horas", ancho = ANCHO_POR_DEFE
       const xt = Math.min(Math.max(centro, 18), W - 18);
       dentro.push(`<text class="etiqueta-x" x="${f1(xt)}" y="${abajo + 18}" text-anchor="middle">${desde}</text>`);
     }
-    partes.push(`<g class="semana${s.en_curso ? " en-curso" : ""}" data-lunes="${s.lunes}">${dentro.join("")}</g>`);
+    const marcada = s.lunes === elegida;
+    partes.push(`<g class="semana${s.en_curso ? " en-curso" : ""}${marcada ? " elegida" : ""}" data-lunes="${s.lunes}" tabindex="0" role="button" aria-pressed="${marcada}" aria-label="${resumen}. Ver sus actividades">${dentro.join("")}</g>`);
   });
   if (fuerzaSinKm) {
     partes.push(`<text class="eje" x="${(x0 + x1) / 2}" y="${(arriba + abajo) / 2}" text-anchor="middle">La fuerza no suma km</text>`);
@@ -353,7 +359,7 @@ export function graficaSemanas(semanas, medida = "horas", ancho = ANCHO_POR_DEFE
   }
   const lienzo = document.createElement("div");
   const que = { horas: "horas", km: "kilómetros", carga: "carga", zonas: "tiempo en cada zona de pulso" }[medida];
-  lienzo.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Tus semanas de lunes a domingo: ${que}${deQuien} por ${medida === "zonas" ? "zona" : deporte === "todos" ? "deporte" : "semana"}">${partes.join("")}</svg>`;
+  lienzo.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="group" aria-label="Tus semanas de lunes a domingo: ${que}${deQuien} por ${medida === "zonas" ? "zona" : deporte === "todos" ? "deporte" : "semana"}">${partes.join("")}</svg>`;
   return lienzo.firstChild;
 }
 

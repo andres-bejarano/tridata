@@ -57,8 +57,13 @@
                                   each with its `estado`). Every day with the HR in force that day in Ajustes (G-49).
                                   Unit 090: `?dias=14|42|91|365` (42 by default; another value, 400) and `semanas`: the
                                   2, 6, 13 or 52 Monday-to-Sunday weeks by sport (hours, km, load, time by zone)
+    GET  /api/fitness/semana      unit 093 (REC-37): `?lunes=AAAA-MM-DD&deporte=todos|correr|bici|nadar|fuerza|otros`
+                                  the activities of that week (newest first) with its hours, km, load and sessions
+                                  next to the mean of the 4 weeks before (`fitness.actividades_semana`); a date that
+                                  is not a Monday up to this week, or another sport, is 422
     GET  /api/actividad/ID        unit 031: one activity with its laps (pace or speed, mean HR and its zone) and its
-                                  weather; 404 if it does not exist
+                                  weather; 404 if it does not exist. Unit 093: each lap also with its cadence, stride,
+                                  SWOLF and climb, by sport
     POST /api/toma                unit 082 (R-227): a dose by hand {"dia", "que" (cafe|b12), "forma"?, "hora"?, "mg"?,
                                   "solo"?, "gramos"?, "fraccion"?, "cucharadas"?, "dosis"?}; today without an hour
                                   takes the hour it is now (R-231), another day without one is 422. Its mg are by
@@ -192,7 +197,8 @@ from ..nutricion.objetivo_dia import PREVISTOS_MAX
 from ..nutricion.asistente import Contexto as ContextoAsistente
 from ..nutricion.recetas import ErrorDatos, _numero
 from ..nutricion.suplementacion import Suplementacion
-from ..fitness import DIAS_POR_DEFECTO, RANGOS_DIAS, SEMANAS_DE, detalle_actividad, fitness, texto_pulso
+from ..fitness import (DIAS_POR_DEFECTO, RANGOS_DIAS, SEMANAS_DE, TODOS, actividades_semana, comprobar_semana,
+                       detalle_actividad, fitness, texto_pulso)
 from ..fitness import semanas as semanas_fitness
 from ..hoy import como_llegas, entreno, texto_sync
 from ..storage import DataStore
@@ -991,6 +997,15 @@ def crear_app(
             return _error("El rango de Fitness es de 14, 42, 91 o 365 días.", 400)
         return JSONResponse(await run_in_threadpool(_fitness, dias))
 
+    async def ver_semana(request: Request) -> Response:
+        try:
+            lunes, deporte = comprobar_semana(request.query_params.get("lunes", ""),
+                                              request.query_params.get("deporte", TODOS), hoy())
+        except ValueError as exc:
+            return _error(f"{exc}", 422)
+        return JSONResponse(await run_in_threadpool(actividades_semana, store, ajustes.historial_fc(), lunes, deporte,
+                                                    hoy()))
+
     async def ver_actividad(request: Request) -> Response:
         if store is None:
             return _error("Esa actividad no está.", 404)
@@ -1031,6 +1046,7 @@ def crear_app(
         Route("/api/garmin/actualizar", actualizar, methods=["POST"]),
         Route("/api/hoy", ver_hoy),
         Route("/api/fitness", ver_fitness),
+        Route("/api/fitness/semana", ver_semana),
         Route("/api/actividad/{id}", ver_actividad),
         Route("/api/ajustes", ver_ajustes),
         Route("/api/ajustes", guardar_ajustes, methods=["POST"]),

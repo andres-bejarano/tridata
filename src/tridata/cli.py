@@ -11,6 +11,9 @@ Examples:
     tridata sync --laps
     tridata sync --laps --laps-backfill-limit 50
 
+    # Once (unit 093): add the cadence to the laps of the rides already brought (copies the database first)
+    tridata sync --laps-cadencia-bici
+
     # Inspect the laps of a specific activity
     tridata show-laps 24026027227
 
@@ -162,6 +165,12 @@ def _build_parser() -> argparse.ArgumentParser:
     sync_cmd.add_argument(
         "--laps-backfill-limit", type=int, default=20, metavar="N",
         help="Max number of activities to fetch laps for in one run (default: 20).",
+    )
+    sync_cmd.add_argument(
+        "--laps-cadencia-bici", action="store_true", default=False,
+        help=("Unit 093: once, ask Garmin again for the laps of the rides already brought without cadence and add "
+              "ONLY their cadence (after a verified copy of the database). Not part of the daily routine; running it "
+              "again asks only for the rides still missing."),
     )
     sync_cmd.add_argument(
         "--weather", action="store_true", default=False,
@@ -351,12 +360,14 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-        normal = not args.laps and not args.weather  # only the normal sync is written down (R-90)
+        normal = not args.laps and not args.weather and not args.laps_cadencia_bici  # only the normal one (R-90)
         try:
             # unit 030 (G-48): the same lock as the app's «Actualizar Garmin», next to the database; nothing of
             # Garmin is built while the other one runs
             with cerrojo_sync(DEFAULT_DB_PATH.parent):
                 svc = SyncService(GarminClient(email, password), store)
+                if args.laps_cadencia_bici:
+                    return _cmd_cadencia_bici(store, svc)
                 if args.laps:
                     n = svc.sync_laps(limit=args.laps_backfill_limit)
                     print(f"Lap sync complete: {n} activities processed.")
@@ -476,6 +487,20 @@ def _cmd_export_nutricion(out: Path, *, db_path: Path | None = None, hoy: date |
     historial = historial_md.componer(db_path, DataStore(db_path), hoy or date.today())
     ruta = historial_md.escribir(historial.texto, out)
     print(f"Wrote {ruta} · {historial.dias} días, {historial.pesos} pesos, {historial.recetas} recetas")
+    return 0
+
+
+def _cmd_cadencia_bici(store: DataStore, svc: SyncService) -> int:
+    """Unit 093 (R-245): a verified copy of the database (none removed), then the one-off refill of the bike
+    cadence. Says how many rides and laps, and which rides are still missing (exit 1 while any is)."""
+    if _cmd_backup(store, DEFAULT_BACKUP_DIR, 0, []) != 0:
+        print("Sin copia de la base no se rellena nada.", file=sys.stderr)
+        return 1
+    r = svc.rellenar_cadencia_bici()
+    print(f"Cadencia de bici: {r['salidas']} salidas pedidas, {r['vueltas_con_cadencia']} vueltas con cadencia.")
+    if r["faltan"]:
+        print(f"Faltan {len(r['faltan'])} (Garmin falló; relánzalo para pedir solo esas): {', '.join(r['faltan'])}")
+        return 1
     return 0
 
 

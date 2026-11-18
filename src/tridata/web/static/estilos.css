@@ -786,3 +786,32 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .capa-z4 { fill: var(--zona-4); color: var(--zona-4); }
 .capa-z5 { fill: var(--zona-5); color: var(--zona-5); }
 .capa-sin_pulso { fill: var(--pista); color: var(--suave); stroke: var(--suave); stroke-width: .5; }
+
+/* -- unit 093: Fitness — the week tapped in «Tus semanas», its activities and the session (fitness.js, grafica.js) -- */
+.grafica .toque-semana { fill: transparent; }
+.grafica g.semana { cursor: pointer; outline: none; }
+.grafica g.semana:focus-visible .toque-semana { stroke: var(--acento); stroke-width: 2; }
+.grafica g.semana.elegida .toque-semana { fill: var(--acento-suave); }
+.grafica g.semana.elegida .barra-semana { stroke: var(--texto); stroke-width: 1; }
+.toca-semana { margin: 2px 0 0; font-size: .85rem; }
+.semana-fitness { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--borde); }
+.cab-semana-fitness { display: flex; align-items: center; gap: 8px; }
+.cab-semana-fitness h3 { flex: 1; min-width: 0; margin: 0; font-size: 1rem; }
+.cerrar-semana { min-height: 44px; min-width: 44px; padding: 0 14px; border: 1px solid var(--borde); border-radius: 12px; background: var(--tarjeta); color: var(--acento); font: inherit; font-weight: 600; }
+.totales-semana { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 10px 0; }
+.totales-semana:empty { display: none; }
+.cifra-semana { display: grid; gap: 2px; padding: 8px 10px; border-radius: 12px; background: var(--pista); min-width: 0; }
+.cifra-semana span, .cifra-semana small { color: var(--suave); font-size: .82rem; }
+.cifra-semana strong { font-size: 1.15rem; }
+.lista-semana { list-style: none; margin: 0; padding: 0; }
+.lista-semana li + li { border-top: 1px solid var(--borde); }
+.actividad-semana { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 10px 4px; border: 0; border-radius: 12px; background: transparent; color: var(--texto); font: inherit; text-align: left; cursor: pointer; }
+.actividad-semana[aria-expanded="true"] { background: var(--acento-suave); }
+.actividad-semana .chev { color: var(--suave); font-size: 1.3rem; transition: transform .15s; }
+.actividad-semana[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.texto-actividad-semana { flex: 1; min-width: 0; display: grid; gap: 1px; overflow-wrap: anywhere; }
+.texto-actividad-semana .suave { margin: 0; font-size: .85rem; }
+.cifras-actividad-semana { font-size: .88rem; }
+.vacia-semana { margin: 8px 0; }
+.sesion-fitness { margin-top: 8px; border: 1px solid var(--acento); border-radius: 14px; }
+.extra-vuelta { display: block; color: var(--suave); font-size: .82rem; margin-top: 2px; }

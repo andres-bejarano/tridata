@@ -328,3 +328,18 @@ def test_el_informe_dice_cuantas_actividades_y_carreras_pero_nunca_cuales(repo, 
     for dato in (DIA, "2163", "10023", "Dunas", "1:29:59", "2026-11-22"):
         assert dato not in salida
 
+
+
+# -- unit 096 (R9 · G-49): the zones of ride and swim saved under a stress test are private as well -------------------
+
+def test_las_zonas_de_bici_y_natacion_de_la_prueba_tambien_son_privadas(repo, tmp_path):  # 096 R9
+    d = tmp_path / "con-bici.sqlite3"
+    a = Ajustes(d)
+    a.cambiar(PULSO, desde=DESDE_SIEMPRE)
+    a.cambiar({"zonas_fc_bici": [[43, 111], [112, 127], [128, 141], [142, 158], [159, VALOR]],
+               "zonas_fc_natacion": [[43, 114], [115, 129], [130, 145], [146, 162], [163, VALOR]]},
+              desde=date(2026, 3, 1))
+    assert privados.comprobar(d, repo, [])["valores"] == 10 + 16  # 8 new limits of each sport
+    (repo / "notas.md").write_text("bici: 112-127 y 142\n")
+    _git(repo, "add", "notas.md")
+    assert privados.comprobar(d, repo, [])["repo"] == 1

@@ -19,6 +19,11 @@ one after the other with no gap, from the resting HR to the max) and `fc_origen`
 checked together: what is in force from `desde` once saved must hang together. `HistorialFC` reads their whole
 history at once, so the load can ask the HR of each day without one query per day; `historial_fc_de(db)` does it
 without creating anything (the MCP and `export-pmc` only read).
+
+Unit 096 (REC-41, R-255..R-257): zones by sport. `zonas_fc` stays the run's (nothing migrated); `zonas_fc_bici` and
+`zonas_fc_natacion` are the ride's and the swim's, with the same check and by date. `PulsoVigente.zonas_de(deporte)`
+gives a sport's zones of that day and whether they are estimated: without its own, from the run's threshold (start of
+Z5) minus 7 with Friel's percentages of that sport (`umbral.zonas_desde_umbral`).
 """
 from __future__ import annotations
 
@@ -69,8 +74,12 @@ _RANGOS: dict[str, tuple[str, bool, float, float]] = {
 }
 PESO_KG = (30, 250)  # the same range unit 007 uses for the weight of a day
 DIAS_MANTENIMIENTO = (0, 14)
-CLAVES_FC = ("fc_max", "fc_reposo", "zonas_fc", "fc_origen")
-CLAVES = (*_RANGOS, "objetivo_peso", "zonas_fc", "fc_origen")
+# unit 096: the zones of each sport — `zonas_fc` is the run's
+CLAVE_ZONAS = {"carrera": "zonas_fc", "bici": "zonas_fc_bici", "natacion": "zonas_fc_natacion"}
+CLAVES_ZONAS = tuple(CLAVE_ZONAS.values())
+CLAVES_FC = ("fc_max", "fc_reposo", *CLAVES_ZONAS, "fc_origen")
+CLAVES = (*_RANGOS, "objetivo_peso", *CLAVES_ZONAS, "fc_origen")
+RESTA_ESTIMADA = 7  # unit 096 (R-256): ride and swim without their own, the run's threshold minus 7 ppm
 N_ZONAS = 5
 PPM_ZONA = (30, 230)
 _MES = re.compile(r"^(\d{4})-(\d{2})$")
@@ -122,7 +131,7 @@ def _validar(clave: str, valor: Any, desde: date) -> Any:
         if fecha < desde:
             raise ValueError("La fecha del objetivo de peso no puede ser anterior a la fecha desde la que vale")
         return {"kg": kg, "fecha": fecha.isoformat()}
-    if clave == "zonas_fc":
+    if clave in CLAVES_ZONAS:
         return _zonas(valor)
     if clave == "fc_origen":
         return _origen(valor)
@@ -163,17 +172,22 @@ def _origen(valor: Any) -> dict:
 
 def _pulso_coherente(valores: Mapping[str, Any]) -> None:
     """What is in force for «Pulso y zonas» from a date, once saved, must hang together (unit 031, R7)."""
-    fc_max, fc_reposo, zonas = valores.get("fc_max"), valores.get("fc_reposo"), valores.get("zonas_fc")
+    fc_max, fc_reposo = valores.get("fc_max"), valores.get("fc_reposo")
     if (fc_max is None) != (fc_reposo is None):
         raise ValueError("Guarda la FC máxima y la FC en reposo juntas")
     if fc_max is None or fc_reposo is None:
-        if zonas is not None:
+        if any(valores.get(clave) is not None for clave in CLAVES_ZONAS):
             raise ValueError("Las zonas van con la FC máxima y la FC en reposo: guárdalas juntas")
         return
     if fc_reposo >= fc_max:
         raise ValueError(f"La FC en reposo ({fc_reposo}) tiene que ser menor que la FC máxima ({fc_max})")
-    if zonas is None:
-        return
+    for clave in CLAVES_ZONAS:  # unit 096: the ride's and the swim's are checked like the run's
+        zonas = valores.get(clave)
+        if zonas is not None:
+            _zonas_coherentes(zonas, fc_max, fc_reposo)
+
+
+def _zonas_coherentes(zonas: list[list[int]], fc_max: int, fc_reposo: int) -> None:
     if zonas[0][0] != fc_reposo:
         raise ValueError(f"La zona 1 tiene que empezar en tu FC en reposo ({fc_reposo}), no en {zonas[0][0]}")
     if zonas[-1][1] != fc_max:
@@ -421,9 +435,26 @@ class PulsoVigente:
 
     fc_max: int
     fc_reposo: int
-    zonas: tuple[tuple[int, int], ...] | None
+    zonas: tuple[tuple[int, int], ...] | None  # the run's (`zonas_fc`)
     origen: dict | None
     desde: date
+    propias: Mapping[str, tuple[tuple[int, int], ...]] = field(default_factory=dict)  # unit 096: ride/swim's own
+    desde_zonas: Mapping[str, date] = field(default_factory=dict)  # unit 096: since when each sport's own apply
+
+    def zonas_de(self, deporte: str) -> tuple[tuple[tuple[int, int], ...] | None, bool]:
+        """Unit 096 (R-255, R-256): `(zonas, estimadas)` of `deporte` (carrera · bici · natacion) on that day. Ride
+        and swim without their own: from the run's threshold (start of its Z5) minus `RESTA_ESTIMADA`, with Friel's
+        percentages of that sport, and `estimadas` True. Without the run's zones there is nothing to estimate from."""
+        if deporte == "carrera" or deporte not in CLAVE_ZONAS:
+            return self.zonas, False
+        if deporte in self.propias:
+            return self.propias[deporte], False
+        if not self.zonas:
+            return None, False
+        from ..umbral import zonas_desde_umbral  # here: `umbral` reads `fitness`, which reads this module
+
+        zonas = zonas_desde_umbral(self.zonas[-1][0] - RESTA_ESTIMADA, deporte, self.fc_reposo, self.fc_max)
+        return tuple((z[0], z[1]) for z in zonas), True
 
 
 class HistorialFC:
@@ -442,11 +473,15 @@ class HistorialFC:
         if "fc_max" not in valores or "fc_reposo" not in valores:
             return None
         zonas = valores.get("zonas_fc", (None, None))[0]
+        propias = {deporte: tuple((z[0], z[1]) for z in valores[clave][0])
+                   for deporte, clave in CLAVE_ZONAS.items() if deporte != "carrera" and clave in valores}
         return PulsoVigente(
             fc_max=valores["fc_max"][0], fc_reposo=valores["fc_reposo"][0],
             zonas=tuple((z[0], z[1]) for z in zonas) if zonas else None,
             origen=valores.get("fc_origen", (None, None))[0],
             desde=max(valores["fc_max"][1], valores["fc_reposo"][1]),
+            propias=propias,
+            desde_zonas={deporte: valores[clave][1] for deporte, clave in CLAVE_ZONAS.items() if clave in valores},
         )
 
     def limites(self, dia: date) -> tuple[float, float] | None:
@@ -458,12 +493,12 @@ class HistorialFC:
         """Every HR and zone limit saved while a stress test was the origin in force (what must never leak, R9)."""
         valores: set[int] = set()
         for clave, valor, desde in self._filas:
-            if clave not in ("fc_max", "fc_reposo", "zonas_fc"):
+            if clave not in ("fc_max", "fc_reposo", *CLAVES_ZONAS):
                 continue
             pulso = self.vigente(desde)
             if pulso is None or not pulso.origen or pulso.origen.get("tipo") != "prueba":
                 continue
-            if clave == "zonas_fc":
+            if clave in CLAVES_ZONAS:
                 valores.update(int(v) for z in valor for v in z)
             else:
                 valores.add(int(valor))

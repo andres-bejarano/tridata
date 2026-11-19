@@ -57,7 +57,7 @@ def test_piscina_y_fuerza_no_encienden_el_aviso(base):  # R1 · R-253, C-317
     _actividad(store, "carrera", LUNES, "running", 600, avg_hr=110)  # laps say Z1, detail says Z5
     store.guardar_detalle("carrera", _detalle(600, 175.0))
     _actividad(store, "bici", LUNES + timedelta(days=1), "cycling", 300, avg_hr=110)
-    store.guardar_detalle("bici", _detalle(300, 130.0))  # Z2
+    store.guardar_detalle("bici", _detalle(300, 140.0))  # Z2
     _actividad(store, "piscina", LUNES + timedelta(days=2), "lap_swimming", 900, avg_hr=150)  # Z3 by laps
     _actividad(store, "fuerza", LUNES + timedelta(days=3), "strength_training", 1200, avg_hr=110)  # Z1 by laps
 

@@ -7,6 +7,12 @@
 // rest, the five zones and their origin together, from a date (the server checks they hang together, R7).
 // Unit 043: «Google Calendar» says whether it is connected (and to «TriData»), when it was last updated and why it
 // failed; «Conectar Google Calendar» opens Google's permission in the browser of the PC, «Sincronizar ahora» a pass.
+// Unit 096 (REC-41): under the HR row, one block per sport — carrera, bici, natación — with its threshold and its five
+// zones; ride and swim say «estimado desde carrera» while they have none of their own (the run's minus 7). The run's
+// opens the same card as the HR (its zones are `zonas_fc`); ride and swim open a card of their five zones, saved from a
+// date. Above them, the pending proposals of a new threshold with Sí / No (`avisoPropuesta`, shared with Fitness).
+
+import { avisoPropuesta } from "./fitness.js";
 
 const $ = (id) => document.getElementById(id);
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2, useGrouping: "always" });
@@ -37,6 +43,9 @@ let abierto = null; // key of the setting whose change card is open
 let carreraAbierta = null; // id of the race being changed, or "nueva"
 let preguntaLimite = null; // { desde } while the healthy-limit question is shown
 const PULSO = "pulso"; // `abierto` when the «Pulso y zonas» card is open (unit 031)
+// unit 096: the sports with zones of their own, and the key each one saves
+const DEPORTES = { carrera: { nombre: "Carrera", clave: "zonas_fc" }, bici: { nombre: "Bici", clave: "zonas_fc_bici" },
+  natacion: { nombre: "Natación", clave: "zonas_fc_natacion" } };
 
 function el(etiqueta, props = {}, ...hijos) {
   const nodo = document.createElement(etiqueta);
@@ -237,7 +246,79 @@ function filasPulso() {
     mensaje("");
     pintar();
   });
-  return abierto === PULSO ? [fila, fichaPulso()] : [fila];
+  const propuestas = (vista.propuestas ?? []).map((p) => avisoPropuesta(p, responderPropuesta));
+  const bloques = (vista.zonas_deporte ?? []).flatMap(filaZonas);
+  return [...propuestas, fila, ...(abierto === PULSO ? [fichaPulso()] : []), ...bloques];
+}
+
+// -- unit 096: the zones of each sport and the proposals of a new threshold ------------------------------------------
+
+const textoZonas = (zonas) => zonas.map((z, i) => `Z${i + 1} ${z[0]}–${z[1]}`).join(" · ");
+
+async function responderPropuesta(id, respuesta) {
+  const { ok, datos } = await api(`/api/umbral/propuestas/${id}`, { respuesta });
+  if (!ok) return datos.error ?? "No se ha podido responder.";
+  vista = datos.ajustes;
+  mensaje(respuesta === "si" ? `Guardado: umbral de ${datos.propuesta.deporte === "natacion" ? "natación" : datos.propuesta.deporte} ${datos.propuesta.estimado} desde hoy.` : "Propuesta descartada: no volverá a salir.", "bien");
+  pintar();
+  return null;
+}
+
+function filaZonas(b) {
+  const deporte = DEPORTES[b.deporte];
+  const notas = [];
+  if (b.estimadas) notas.push("estimado desde carrera");
+  else if (b.desde && b.desde !== SIEMPRE) notas.push(desdeTexto(b.desde));
+  notas.push(b.zonas ? textoZonas(b.zonas) : "sin zonas: confirma antes tu FC y las zonas de carrera");
+  const clave = `zonas-${b.deporte}`;
+  const fila = el("button", { type: "button", className: `ajuste bloque-deporte${b.estimadas ? " estimadas" : ""}` },
+    el("span", { className: "que" }, deporte.nombre, el("span", { textContent: notas.join(" · ") })),
+    el("span", { className: "valor num", textContent: b.umbral === null ? "—" : `umbral ${b.umbral}` }),
+    el("span", { className: "chev", textContent: "›" }));
+  fila.dataset.deporte = b.deporte;
+  // the run's zones live in the HR card (they are checked with it); ride and swim, in their own
+  const propio = b.deporte === "carrera" ? PULSO : clave;
+  fila.setAttribute("aria-expanded", String(abierto === propio));
+  fila.addEventListener("click", () => {
+    abierto = abierto === propio ? null : propio;
+    carreraAbierta = null;
+    mensaje("");
+    pintar();
+  });
+  return abierto === clave && b.deporte !== "carrera" ? [fila, fichaZonas(b)] : [fila];
+}
+
+function fichaZonas(b) {
+  const deporte = DEPORTES[b.deporte];
+  const zonas = (b.zonas ?? [[], [], [], [], []]).map((z, i) => [
+    campo(`Zona ${i + 1} desde`, z[0], "text", numerico("numeric")),
+    campo(`Zona ${i + 1} hasta`, z[1], "text", numerico("numeric")),
+  ]);
+  const desde = campo("Desde", hoyISO, "date");
+  const aviso = el("p", { className: "aviso", hidden: true });
+  const guardar = el("button", { type: "button", className: "principal", textContent: "Guardar" });
+  const cancelar = el("button", { type: "button", textContent: "Cancelar" });
+  cancelar.addEventListener("click", () => { abierto = null; mensaje(""); pintar(); });
+  guardar.addEventListener("click", async () => {
+    if (!desde.entrada.value) { aviso.textContent = "Di desde qué día vale."; aviso.hidden = false; return; }
+    const datos = { [deporte.clave]: zonas.map(([d, h]) => [crudo(d.entrada) || null, crudo(h.entrada) || null]) };
+    guardar.disabled = true;
+    const { ok, datos: r } = await api("/api/ajustes", { datos, desde: desde.entrada.value });
+    guardar.disabled = false;
+    if (!ok) { aviso.textContent = r.error ?? "No se ha podido guardar."; aviso.hidden = false; return; }
+    abierto = null;
+    vista = r.ajustes;
+    mensaje(`Guardado: zonas de ${deporte.nombre.toLowerCase()} ${desdeTexto(r.desde)}.`, "bien");
+    pintar();
+  });
+  setTimeout(() => zonas[0][1].entrada.focus(), 0);
+  const nota = b.estimadas
+    ? "Ahora son las estimadas desde carrera (su umbral menos 7). Si las guardas, pasan a ser tuyas y dejan de seguir a las de carrera."
+    : "Cinco zonas seguidas, sin huecos: la 1 empieza en tu FC en reposo y la 5 acaba en tu FC máxima.";
+  return el("article", { className: "tarjeta nueva" },
+    el("p", { className: "suave nota", textContent: nota }),
+    el("div", { className: "zonas-pulso" }, ...zonas.map(([d, h]) => el("div", { className: "fila dos" }, d, h))),
+    desde, aviso, el("div", { className: "acciones" }, guardar, cancelar));
 }
 
 function fichaPulso() {

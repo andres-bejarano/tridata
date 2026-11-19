@@ -21,6 +21,10 @@
   second where the session has its detail (S-85), by laps where not; each week says `aproximado` while one of its
   sessions is still by laps (R-253). Unit 095 (C-319): only the sessions whose detail can still be brought count for
   it — a type of `DETALLE_TYPES` not asked yet; pool, strength and the ones Garmin answered without detail do not.
+- Unit 096 (REC-41, R-258): laps, curve and time in zone — of the session and of «Tus semanas» — use the zones of the
+  session's SPORT in force that day (`PulsoVigente.zonas_de`, `umbral.deporte_de`): a ride with the ride's, a swim
+  with the swim's, the rest with the run's. `detalle_actividad` says which (`zonas_deporte`) and whether they are
+  estimated from the run (C-329). The load never uses zones: it does not change (R-262).
 
 Every Garmin datum carries its state, as in `hoy.py` (G-47, never an invented 0): `ok`, `no_ha_llegado` (not given
 yet) or `incompleto` (given half-done: a resting HR of a day whose totals Garmin cached before finishing it, or a
@@ -151,20 +155,43 @@ def _cadencia_y_desnivel(v: dict, tipo: str | None) -> dict[str, Any]:
     return {}
 
 
+def _deporte_zonas(tipo: str | None) -> str:
+    from .umbral import deporte_de  # here: `umbral` reads this module
+
+    return deporte_de(tipo)
+
+
+def zonas_sesion(pulso: PulsoVigente | None, tipo: str | None) -> tuple[tuple[tuple[int, int], ...] | None, bool]:
+    """Unit 096 (R-258): `(zonas, estimadas)` of a session of type `tipo` with the HR in force on its day."""
+    return pulso.zonas_de(_deporte_zonas(tipo)) if pulso is not None else (None, False)
+
+
+def _zonas_deporte(tipo: str | None, zonas: tuple[tuple[int, int], ...] | None, estimadas: bool) -> dict[str, Any]:
+    """Unit 096 (C-329): which sport's zones a session uses, its threshold and «zonas de bici estimadas desde
+    carrera» when they are."""
+    from .umbral import NOMBRE
+
+    deporte = _deporte_zonas(tipo)
+    texto = f"zonas de {NOMBRE[deporte]}" + (" estimadas desde carrera" if estimadas else "")
+    return {"deporte": deporte, "estimadas": estimadas, "umbral": zonas[-1][0] if zonas else None, "texto": texto}
+
+
 def detalle_actividad(store: DataStore, historial: HistorialFC | None, actividad_id: str) -> dict[str, Any] | None:
-    """`{actividad, vueltas, clima, zonas, pulso, curva}` of one activity (R3), or None if it does not exist. `zonas`
-    says whether zones were confirmed for its day (without them no lap gets a zone); `clima` None: none synced.
-    Unit 094: `curva` (see `_curva`), None without detail second by second (not brought yet, or tried, R-254)."""
+    """`{actividad, vueltas, clima, zonas, pulso, curva, zonas_deporte}` of one activity (R3), or None if it does not
+    exist. `zonas` says whether zones were confirmed for its day (without them no lap gets a zone); `clima` None: none
+    synced. Unit 094: `curva` (see `_curva`), None without detail second by second (not brought yet, or tried, R-254).
+    Unit 096: every zone with its sport's of that day; `zonas_deporte` says which and whether estimated."""
     a = store.get_activity(actividad_id)
     if a is None:
         return None
     pulso = historial.vigente(date.fromisoformat(a["activity_date"])) if historial is not None else None
-    zonas = pulso.zonas if pulso is not None else None
+    zonas, estimadas = zonas_sesion(pulso, a.get("activity_type"))
     vueltas = [_vuelta(i, v, a.get("activity_type"), zonas)
                for i, v in enumerate(store.get_laps(actividad_id), start=1)]
     return {"actividad": _resumen(store, historial, a), "vueltas": vueltas, "clima": store.get_weather(actividad_id),
             "zonas": zonas is not None, "pulso": texto_pulso(pulso),
-            "curva": _curva(store.leer_detalle(actividad_id), vueltas, zonas)}
+            "curva": _curva(store.leer_detalle(actividad_id), vueltas, zonas),
+            "zonas_deporte": _zonas_deporte(a.get("activity_type"), zonas, estimadas)}
 
 
 # -- Unit 094 (REC-40, R-250..R-253): the HR second by second ------------------------------------------------------
@@ -351,7 +378,7 @@ def semanas(store: DataStore | None, historial: HistorialFC | None, hoy: date, n
                 trimp = 0.0
                 if a.get("activity_type") in ALL_SPORT_TYPES:  # what form and fatigue count (daily_tss)
                     trimp = trimp_for_activity(a, laps, historial.limites(dia) if historial is not None else None)
-                zonas = _zonas_de(a, laps, detalle, pulso.zonas if pulso is not None else None)
+                zonas = _zonas_de(a, laps, detalle, zonas_sesion(pulso, a.get("activity_type"))[0])  # unit 096
                 for destino in (t, total):
                     destino["horas"] += horas
                     destino["carga"] += trimp

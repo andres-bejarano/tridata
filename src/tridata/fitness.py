@@ -25,6 +25,11 @@
   session's SPORT in force that day (`PulsoVigente.zonas_de`, `umbral.deporte_de`): a ride with the ride's, a swim
   with the swim's, the rest with the run's. `detalle_actividad` says which (`zonas_deporte`) and whether they are
   estimated from the run (C-329). The load never uses zones: it does not change (R-262).
+- Unit 097 (REC-42, R-263..R-268): the period is a shortcut (the last 14, 42, 91 or 365 days up to today) or dates
+  chosen (`periodo`: from 7 days to 2 years, «hasta» not after today). With dates, the load series is cut to them
+  (computed whole, as always; `hoy` is still today's) and «Tus semanas» shows the weeks that touch them. `comparar`:
+  hours, km, sessions and hours per week by sport and in total of the period and of the one before of the same days
+  (`anterior`), with the difference and its % (None when the one before is 0, or the history starts inside it).
 
 Every Garmin datum carries its state, as in `hoy.py` (G-47, never an invented 0): `ok`, `no_ha_llegado` (not given
 yet) or `incompleto` (given half-done: a resting HR of a day whose totals Garmin cached before finishing it, or a
@@ -88,17 +93,66 @@ def comprobar_dias(dias: int) -> int:
     return dias
 
 
+MIN_DIAS_PERIODO, MAX_DIAS_PERIODO = 7, 731  # unit 097 (R-268): from 7 days to 2 years, both ends counted
+NO_VALE = "El periodo no vale: "
+
+
+def _fecha(valor: date | str) -> date:
+    if isinstance(valor, date):
+        return valor
+    try:
+        return date.fromisoformat(valor)
+    except (TypeError, ValueError):
+        raise ValueError(f"{NO_VALE}«{valor}» no es una fecha (AAAA-MM-DD).") from None
+
+
+def periodo(hoy: date, dias: int | None = None, desde: date | str | None = None,
+            hasta: date | str | None = None) -> tuple[date, date]:
+    """Unit 097 (R-263, R-265, R-268): `(desde, hasta)` of the period on screen. A shortcut (`dias`, one of the four
+    ranges; 42 without anything) is the last `dias` days up to `hoy`. Dates: both ends counted, from 7 days to 2 years,
+    «hasta» not after `hoy`; otherwise ValueError saying why."""
+    if desde is None and hasta is None:
+        n = comprobar_dias(DIAS_POR_DEFECTO if dias is None else dias)
+        return hoy - timedelta(days=n - 1), hoy
+    if desde is None or hasta is None:
+        raise ValueError(f"{NO_VALE}hacen falta «desde» y «hasta».")
+    inicio, fin = _fecha(desde), _fecha(hasta)
+    if inicio > fin:
+        raise ValueError(f"{NO_VALE}el “desde” tiene que ser antes del “hasta”.")
+    if fin > hoy:
+        raise ValueError(f"{NO_VALE}el “hasta” no puede ser después de hoy.")
+    n = (fin - inicio).days + 1
+    if n < MIN_DIAS_PERIODO:
+        raise ValueError(f"{NO_VALE}tiene que tener al menos {MIN_DIAS_PERIODO} días, y tiene {n}.")
+    if n > MAX_DIAS_PERIODO:
+        raise ValueError(f"{NO_VALE}como mucho 2 años ({MAX_DIAS_PERIODO} días), y tiene {n}.")
+    return inicio, fin
+
+
+def anterior(desde: date, hasta: date) -> tuple[date, date]:
+    """Unit 097 (R-265): the period before, of the same days, that ends the day before `desde`."""
+    n = (hasta - desde).days + 1
+    return desde - timedelta(days=n), desde - timedelta(days=1)
+
+
 def carga(store: DataStore, historial: HistorialFC | None, hoy: date,
-          dias: int = DIAS_POR_DEFECTO) -> dict[str, Any]:
+          dias: int = DIAS_POR_DEFECTO, periodo: tuple[date, date] | None = None) -> dict[str, Any]:
     """`{hoy, serie, pulso}`: today's CTL/ATL/TSB, the `dias` days up to today and where today's HR comes from (R1,
     R6). The series is computed whole (the EMAs need it) and only cut. Rounded to one decimal, as `tridata export-pmc`
-    writes them. No activities at all: `hoy` None, `serie` []."""
+    writes them. No activities at all: `hoy` None, `serie` []. Unit 097: with `periodo` (`desde`, `hasta`) the series
+    is cut to those dates instead; `hoy` is still today's."""
     comprobar_dias(dias)
     limites = historial.limites if historial is not None else None
     serie = pmc_hasta(compute_pmc(daily_tss(store.get_activities_with_laps(ALL_SPORT_TYPES), limites)), hoy)
     puntos = [{"fecha": p["date"].isoformat(), "tss": _r1(p["tss"]), "ctl": _r1(p["ctl"]), "atl": _r1(p["atl"]),
-               "tsb": _r1(p["tsb"])} for p in serie[-dias:]]
-    return {"hoy": puntos[-1] if puntos and puntos[-1]["fecha"] == hoy.isoformat() else None, "serie": puntos,
+               "tsb": _r1(p["tsb"])} for p in serie]
+    hoy_punto = puntos[-1] if puntos and puntos[-1]["fecha"] == hoy.isoformat() else None
+    if periodo is None:
+        vistos = puntos[-dias:]
+    else:
+        inicio, fin = (d.isoformat() for d in periodo)
+        vistos = [p for p in puntos if inicio <= p["fecha"] <= fin]
+    return {"hoy": hoy_punto, "serie": vistos,
             "pulso": texto_pulso(historial.vigente(hoy) if historial is not None else None)}
 
 
@@ -447,9 +501,94 @@ def actividades_semana(store: DataStore | None, historial: HistorialFC | None, l
             "semanas_media": len(con_historia)}
 
 
-def fitness(store: DataStore, historial: HistorialFC | None, hoy: date,
-            dias: int = DIAS_POR_DEFECTO) -> dict[str, Any]:
-    """What GET /api/fitness answers: the three blocks of the tab, and (unit 090) the weeks of the range."""
-    return {"fecha": hoy.isoformat(), "carga": carga(store, historial, hoy, dias),
+# -- Unit 097 (REC-42, R-264..R-267): this period against the one before ------------------------------------------
+
+MEDIDAS = ("horas", "km", "sesiones", "horas_semana")
+TOTAL = "total"
+
+
+def _volumen(actividades: list[dict], dias: int) -> dict[str, dict[str, float]]:
+    """Hours, km, sessions and hours per week (hours ÷ days × 7) of each sport and of the total; strength adds no km
+    (its `km` is dropped by `_sin_km`)."""
+    nombres = [*(nombre for nombre, _ in DEPORTES_SEMANA), OTROS, TOTAL]
+    suma = {nombre: dict.fromkeys(MEDIDAS, 0.0) for nombre in nombres}
+    for a in actividades:
+        deporte = deporte_semana(a)
+        for destino in (suma[deporte], suma[TOTAL]):
+            destino["horas"] += float(a.get("duration_seconds") or 0) / 3600
+            destino["sesiones"] += 1
+            if deporte != "fuerza":
+                destino["km"] += float(a.get("distance_meters") or 0) / 1000
+    for t in suma.values():
+        t["horas_semana"] = t["horas"] / dias * 7
+    return suma
+
+
+REDONDEO: dict[str, Callable[[float], float | int]] = {
+    "horas": lambda v: round(v, 2), "km": _r1, "sesiones": round, "horas_semana": lambda v: round(v, 2)}
+
+
+def _sin_km(deporte: str, medida: str) -> bool:
+    return deporte == "fuerza" and medida == "km"  # strength never has km («—»)
+
+
+def comparar(store: DataStore | None, desde: date, hasta: date) -> dict[str, Any]:
+    """R-264..R-267: `{este, anterior, historial_desde, filas}`. `este` and `anterior`: `{desde, hasta, dias}` of the
+    period and of the one before (`anterior`). `filas`: correr, bici, nadar, fuerza, otros and total — always all of
+    them, whatever sport «Tus semanas» shows —, each with `este`, `anterior`, `diferencia` (this minus the one before)
+    and `porcentaje` (whole number; None when the one before is 0, and every one None with `historial_desde`) of
+    `horas`, `km` (None for strength), `sesiones` and `horas_semana`. `historial_desde`: the day of the first activity
+    stored when it is after the start of the one before (the comparison would be with days without data), else None.
+    Without a store (no Garmin), everything at zero and no warning."""
+    inicio, fin = anterior(desde, hasta)
+    dias = (hasta - desde).days + 1
+    este_lista = store.activities_between(desde, hasta) if store is not None else []
+    antes_lista = store.activities_between(inicio, fin) if store is not None else []
+    primera = store.primera_fecha_actividad() if store is not None else None
+    historial_desde = primera.isoformat() if primera is not None and primera > inicio else None
+    este, antes = _volumen(este_lista, dias), _volumen(antes_lista, dias)
+    filas = []
+    for nombre, e in este.items():
+        a = antes[nombre]
+        fila: dict[str, Any] = {"deporte": nombre, "este": {}, "anterior": {}, "diferencia": {}, "porcentaje": {}}
+        for medida in MEDIDAS:
+            if _sin_km(nombre, medida):
+                for parte in ("este", "anterior", "diferencia", "porcentaje"):
+                    fila[parte][medida] = None
+                continue
+            dif = e[medida] - a[medida]
+            fila["este"][medida] = REDONDEO[medida](e[medida])
+            fila["anterior"][medida] = REDONDEO[medida](a[medida])
+            fila["diferencia"][medida] = REDONDEO[medida](dif)
+            fila["porcentaje"][medida] = None if historial_desde or not a[medida] else round(dif / a[medida] * 100)
+        filas.append(fila)
+    return {"este": {"desde": desde.isoformat(), "hasta": hasta.isoformat(), "dias": dias},
+            "anterior": {"desde": inicio.isoformat(), "hasta": fin.isoformat(), "dias": dias},
+            "historial_desde": historial_desde, "filas": filas}
+
+
+def semanas_periodo(store: DataStore | None, historial: HistorialFC | None, hoy: date, dias: int | None,
+                    desde: date, hasta: date) -> list[dict[str, Any]]:
+    """Unit 097 (R-263): «Tus semanas» of the period — with a shortcut, as always (`SEMANAS_DE`); with dates, the
+    Monday-to-Sunday weeks that touch them."""
+    if dias is not None:
+        return semanas(store, historial, hoy, SEMANAS_DE[dias])
+    ultimo = lunes_de(hasta)
+    return semanas(store, historial, hoy, (ultimo - lunes_de(desde)).days // 7 + 1, ultimo_lunes=ultimo)
+
+
+def fitness(store: DataStore, historial: HistorialFC | None, hoy: date, dias: int | None = None,
+            desde: date | str | None = None, hasta: date | str | None = None) -> dict[str, Any]:
+    """What GET /api/fitness answers: the three blocks of the tab, and (unit 090) the weeks of the range. Unit 097:
+    the range is a shortcut (`dias`, 42 by default) or dates (`desde`, `hasta`; ValueError if they are not valid);
+    `periodo` says which and `comparacion` compares it with the one before."""
+    inicio, fin = periodo(hoy, dias, desde, hasta)
+    atajo = None if desde is not None or hasta is not None else (DIAS_POR_DEFECTO if dias is None else dias)
+    corte = None if atajo is not None else (inicio, fin)
+    return {"fecha": hoy.isoformat(),
+            "periodo": {"desde": inicio.isoformat(), "hasta": fin.isoformat(), "dias": (fin - inicio).days + 1,
+                        "atajo": atajo},
+            "carga": carga(store, historial, hoy, atajo or DIAS_POR_DEFECTO, periodo=corte),
             "ultima_actividad": ultima_actividad(store, historial, hoy), "recuperacion": recuperacion(store, hoy),
-            "semanas": semanas(store, historial, hoy, SEMANAS_DE[dias])}
+            "semanas": semanas_periodo(store, historial, hoy, atajo, inicio, fin),
+            "comparacion": comparar(store, inicio, fin)}

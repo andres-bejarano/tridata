@@ -23,6 +23,10 @@
 // (GET /api/umbral/propuestas): «tu umbral de carrera pasa de X a Y (…), ¿actualizo desde hoy?», the zones it would
 // give, and Sí / No (POST /api/umbral/propuestas/N). Only «Sí» changes the zones, from today. `avisoPropuesta` is
 // shared with Ajustes › Pulso y zonas.
+// Unit 097 (REC-42): a fifth button of the range, «Elegir fechas», opens «desde», «hasta» and «Aplicar»
+// (/api/fitness?desde=&hasta=): the chart and «Tus semanas» of that period. Dates that are not valid show the
+// server's reason and nothing is repainted. Under «Tus semanas», the table of this period against the one before of
+// the same days (the `comparacion` of the answer): every sport and the total, whatever sport is chosen above.
 
 import { graficaCarga, graficaPulso, graficaSemanas, leyendaCarga, leyendaSemanas } from "./grafica.js";
 
@@ -47,6 +51,8 @@ let semanasVistas = []; // the weeks of the last answer, to repaint without aski
 let semanaElegida = null; // unit 093: the Monday of the week open under the chart
 let peticionSemana = 0; // drops a late answer of the week
 let sesionAbierta = null; // id of the activity of the week whose session is open
+let fechas = null; // unit 097: {desde, hasta} of the period chosen with dates on screen; null with a shortcut
+let periodoVisto = null; // unit 097: the `periodo` of the last answer (to fill «desde» and «hasta»)
 const PERIODOS = { 14: "últimos 14 días", 42: "últimas 6 semanas", 91: "últimos 3 meses", 365: "último año" };
 const ETIQUETAS = { 14: "de los últimos 14 días", 42: "de las últimas 6 semanas", 91: "de los últimos 3 meses", 365: "del último año" };
 
@@ -87,7 +93,9 @@ export function iniciarFitness(opciones) {
   // unit 096: the proposals of a new threshold go above the load (a box of their own, created here)
   $("fitness-carga").before(el("div", { id: "fitness-propuestas", className: "propuestas-umbral", ariaLive: "polite" }));
   $("fitness-ultima").addEventListener("click", alternarDetalle);
-  selector("fitness-rango", "dias", (valor) => { dias = Number(valor); cargarFitness(); });
+  $("fitness-rango").addEventListener("click", alPulsarRango);
+  $("fitness-fechas").noValidate = true; // the server says why a date does not go (R-268)
+  $("fitness-fechas").addEventListener("submit", (evento) => { evento.preventDefault(); aplicarFechas(); });
   selector("fitness-medida", "medida", (valor) => { medida = valor; pintarSemanas(semanasVistas); });
   selector("fitness-deporte", "deporte", (valor) => {
     deporte = valor;
@@ -113,16 +121,69 @@ export function iniciarFitness(opciones) {
   });
 }
 
-export async function cargarFitness() {
+// -- unit 097: the range, a shortcut or dates of its own (R-263, R-268) ---------------------------------------------
+
+function marcarRango(valor) {
+  for (const b of $("fitness-rango").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.dias === valor));
+}
+
+function mostrarFechas(abiertas) {
+  $("fitness-fechas").hidden = !abiertas;
+  $("fitness-rango").querySelector('button[data-dias="fechas"]').setAttribute("aria-expanded", String(abiertas));
+  $("fitness-fechas-error").hidden = true;
+  if (!abiertas) return;
+  if (hoyISO) { $("fitness-desde").max = hoyISO; $("fitness-hasta").max = hoyISO; }
+  if (periodoVisto) { $("fitness-desde").value = periodoVisto.desde; $("fitness-hasta").value = periodoVisto.hasta; }
+}
+
+function alPulsarRango(evento) {
+  const boton = evento.target.closest("button");
+  if (!boton) return;
+  if (boton.dataset.dias === "fechas") { mostrarFechas($("fitness-fechas").hidden); return; }
+  mostrarFechas(false);
+  if (boton.getAttribute("aria-pressed") === "true") return;
+  marcarRango(boton.dataset.dias);
+  dias = Number(boton.dataset.dias);
+  fechas = null;
+  cargarFitness();
+}
+
+function errorFechas(texto) {
+  $("fitness-fechas-error").textContent = texto;
+  $("fitness-fechas-error").hidden = false;
+}
+
+async function aplicarFechas() {
+  const desde = $("fitness-desde").value, hasta = $("fitness-hasta").value;
+  if (!desde || !hasta) { errorFechas("Elige el «desde» y el «hasta»."); return; }
+  $("fitness-fechas-error").hidden = true;
+  await cargarFitness({ desde, hasta });
+}
+
+// «del 1/9 al 15/10» (with the year when the two ends are of different years)
+function textoPeriodo(desde, hasta) {
+  const corta = (iso, conAno) => { const [a, m, d] = iso.split("-").map(Number); return conAno ? `${d}/${m}/${a}` : `${d}/${m}`; };
+  const conAno = desde.slice(0, 4) !== hasta.slice(0, 4);
+  return `del ${corta(desde, conAno)} al ${corta(hasta, conAno)}`;
+}
+
+// `candidatas` ({desde, hasta}): dates still to be accepted; a 400 says why and leaves the screen as it was (C-337).
+export async function cargarFitness(candidatas = null) {
   const mia = ++peticion;
-  const { ok, datos } = await api(`/api/fitness?dias=${dias}`);
+  const elegidas = candidatas ?? fechas;
+  const consulta = elegidas ? `desde=${encodeURIComponent(elegidas.desde)}&hasta=${encodeURIComponent(elegidas.hasta)}` : `dias=${dias}`;
+  const { ok, datos } = await api(`/api/fitness?${consulta}`);
   if (mia !== peticion) return;
   if (!ok) {
+    if (candidatas) { errorFechas(datos.error ?? "Esas fechas no valen."); return; }
     $("fitness-pulso").textContent = datos.error ?? "No he podido cargar Fitness.";
     return;
   }
+  if (candidatas) { fechas = candidatas; marcarRango("fechas"); }
   hoyISO = datos.fecha;
+  periodoVisto = datos.periodo ?? null;
   pintarCarga(datos.carga);
+  pintarComparacion(datos.comparacion);
   // unit 093: another range keeps the week open if it is still on the chart
   if (semanaElegida && !(datos.semanas ?? []).some((s) => s.lunes === semanaElegida)) cerrarSemana();
   pintarSemanas(datos.semanas ?? []);
@@ -289,10 +350,53 @@ function pintarCarga(c) {
   $("fitness-tsb").textContent = h ? conSigno(h.tsb) : "—";
   $("fitness-tsb").classList.toggle("bien", Boolean(h) && Math.round(h.tsb) > 0);
   const caja = $("fitness-grafica");
-  $("fitness-rango-texto").textContent = PERIODOS[dias];
-  caja.replaceChildren(graficaCarga(c.serie, caja.clientWidth - 8, ETIQUETAS[dias]), leyendaCarga());
+  const periodo = fechas && periodoVisto ? textoPeriodo(periodoVisto.desde, periodoVisto.hasta) : null;
+  $("fitness-rango-texto").textContent = periodo ?? PERIODOS[dias];
+  caja.replaceChildren(graficaCarga(c.serie, caja.clientWidth - 8, periodo ?? ETIQUETAS[dias]), leyendaCarga());
   $("fitness-pulso").textContent = `Tu FC y tus zonas: ${c.pulso.texto}.`;
   $("fitness-pulso").classList.toggle("aviso", !c.pulso.confirmada);
+}
+
+// -- unit 097: this period against the one before (R-264..R-267) ---------------------------------------------------
+
+const NOMBRES_TABLA = { correr: "Carrera", bici: "Bici", nadar: "Natación", fuerza: "Fuerza", otros: "Otros", total: "Total" };
+const MEDIDAS_TABLA = [["horas", "Horas", (v) => `${unDecimal.format(v)} h`], ["km", "Km", (v) => `${unDecimal.format(v)} km`],
+  ["sesiones", "Sesiones", (v) => enteras.format(v)], ["horas_semana", "Horas por semana", (v) => `${unDecimal.format(v)} h`]];
+const fechaLarga = (iso) => { const [a, m, d] = iso.split("-").map(Number); return `${d}/${m}/${a}`; };
+
+// The difference with its sign, coloured «more» / «less» without judging it (no traffic lights), and its % or «—».
+function celdaDiferencia(valor, pct, formato) {
+  const td = el("td");
+  if (valor === null) { td.textContent = "—"; return td; }
+  const texto = formato(Math.abs(valor));
+  const cero = formato(0) === texto;
+  td.append(cero ? texto : `${valor > 0 ? "+" : "−"}${texto}`);
+  if (!cero) td.classList.add(valor > 0 ? "dif-mas" : "dif-menos");
+  td.append(el("span", { className: "pct", textContent: pct === null ? "—" : `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${enteras.format(Math.abs(pct))} %` }));
+  return td;
+}
+
+function pintarComparacion(c) {
+  if (!c) return;
+  $("fitness-comparar-periodos").textContent = `Este periodo, ${textoPeriodo(c.este.desde, c.este.hasta)} (${c.este.dias} días), frente al anterior, ${textoPeriodo(c.anterior.desde, c.anterior.hasta)}.`;
+  const aviso = $("fitness-comparar-aviso");
+  aviso.hidden = !c.historial_desde;
+  aviso.textContent = c.historial_desde
+    ? `Ojo: tu historial empieza el ${fechaLarga(c.historial_desde)}, así que el periodo anterior no está entero y no doy %.` : "";
+  const cabeza = el("thead", {}, el("tr", {}, el("th", { scope: "col", textContent: "" }),
+    el("th", { scope: "col", textContent: "Este periodo" }), el("th", { scope: "col", textContent: "El anterior" }),
+    el("th", { scope: "col", textContent: "Diferencia" })));
+  const cuerpos = c.filas.map((f) => {
+    const cuerpo = el("tbody", {}, el("tr", {}, el("th", { scope: "colgroup", colSpan: 4, textContent: NOMBRES_TABLA[f.deporte] ?? f.deporte })));
+    cuerpo.dataset.deporte = f.deporte;
+    for (const [clave, nombre, formato] of MEDIDAS_TABLA) {
+      const valor = (v) => (v === null ? "—" : formato(v));
+      cuerpo.append(el("tr", {}, el("td", { textContent: nombre }), el("td", { textContent: valor(f.este[clave]) }),
+        el("td", { textContent: valor(f.anterior[clave]) }), celdaDiferencia(f.diferencia[clave], f.porcentaje[clave], formato)));
+    }
+    return cuerpo;
+  });
+  $("fitness-comparar-tabla").replaceChildren(el("table", { ariaLabel: "Este periodo frente al anterior, por deporte" }, cabeza, ...cuerpos));
 }
 
 function chips(a) {

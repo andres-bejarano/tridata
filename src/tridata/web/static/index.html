@@ -74,7 +74,17 @@
           <button type="button" data-dias="42" aria-pressed="true">6 semanas</button>
           <button type="button" data-dias="91" aria-pressed="false">3 meses</button>
           <button type="button" data-dias="365" aria-pressed="false">1 año</button>
+          <button type="button" data-dias="fechas" aria-pressed="false" aria-expanded="false" aria-controls="fitness-fechas">Elegir fechas</button>
         </div>
+        <!-- unit 097 (R-263, R-268): a period of its own, from 7 days to 2 years, «hasta» up to today -->
+        <form id="fitness-fechas" class="fechas-fitness" hidden>
+          <div class="fechas-campos">
+            <label class="campo-fecha">Desde <input id="fitness-desde" type="date" required></label>
+            <label class="campo-fecha">Hasta <input id="fitness-hasta" type="date" required></label>
+            <button id="fitness-aplicar" type="submit" class="principal">Aplicar</button>
+          </div>
+          <p id="fitness-fechas-error" class="aviso" role="alert" hidden></p>
+        </form>
         <div class="cifras-carga">
           <div class="cifra-carga"><span>Forma</span><strong id="fitness-ctl" class="num">—</strong><small>CTL</small></div>
           <div class="cifra-carga"><span>Fatiga</span><strong id="fitness-atl" class="num">—</strong><small>ATL</small></div>
@@ -124,6 +134,14 @@
           <div id="fitness-semana-lista"></div>
           <article id="fitness-sesion" class="detalle-fitness sesion-fitness" aria-label="Sesión" hidden></article>
         </div>
+      </article>
+      <!-- unit 097 (R-264..R-267): this period against the one before of the same days, every sport and the total,
+           whatever sport «Tus semanas» shows; fitness.js paints it from the `comparacion` of /api/fitness -->
+      <article id="fitness-comparar" class="tarjeta bloque-fitness" aria-labelledby="t-comparar">
+        <div class="cab-hoy"><h2 id="t-comparar">Frente al periodo anterior</h2></div>
+        <p id="fitness-comparar-periodos" class="suave periodos-comparar"></p>
+        <p id="fitness-comparar-aviso" class="aviso" hidden></p>
+        <div id="fitness-comparar-tabla" class="tabla-comparar"></div>
       </article>
       <h2 class="titulo-bloque">Última actividad</h2>
       <button id="fitness-ultima" type="button" class="tarjeta actividad-fitness" aria-expanded="false" aria-controls="fitness-detalle"></button>

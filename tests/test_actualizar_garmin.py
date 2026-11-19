@@ -204,9 +204,10 @@ def test_actualizar_trae_tambien_las_vueltas_y_el_tiempo(monkeypatch):  # 069 ·
     servicio = MagicMock()
     _actualizar_con(servicio, date(2026, 11, 5))
     nombres = [c[0] for c in servicio.method_calls]
-    assert nombres == ["sync", "sync_laps", "sync_weather"]  # the days first, then what hangs from them
+    assert nombres == ["sync", "sync_laps", "sync_weather", "sync_detalle"]  # the days first, then what hangs from them
     servicio.sync_laps.assert_called_once_with(limit=5)
     servicio.sync_weather.assert_called_once_with(limit=5)
+    servicio.sync_detalle.assert_called_once_with(limit=5)  # unit 094 (R-247)
 
 
 @pytest.mark.parametrize("falla", ["sync_laps", "sync_weather"])

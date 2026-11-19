@@ -39,6 +39,11 @@ SWIMMING_TYPES = (
 )
 GYM_TYPES = ("strength_training",)
 ALL_SPORT_TYPES = RUNNING_TYPES + CYCLING_TYPES + SWIMMING_TYPES + GYM_TYPES
+# Unit 094 (R-246): the sessions whose detail second by second is asked: run, ride, open water and walks; never the
+# pool nor strength. Up to 20 per pass (S-86, G-63); the copy before the refill looks at sessions older than 2 days.
+DETALLE_TYPES = RUNNING_TYPES + CYCLING_TYPES + ("open_water_swimming", "hiking", "walking")
+DETALLE_POR_PASADA = 20
+DIAS_NUEVA = 2
 
 # -- unit 018: the last good sync, the warning of today and what «Actualizar Garmin» brings (R-90, R-91) --
 HORAS_AVISO = 26  # one day plus the margin of the routine: older than this, today's screen warns
@@ -360,6 +365,66 @@ class SyncService:
         logger.info("Bike cadence refill: %d rides, %d laps with cadence, %d missing",
                     len(pendientes), con_cadencia, len(faltan))
         return {"salidas": len(pendientes), "vueltas_con_cadencia": con_cadencia, "faltan": faltan}
+
+    def sync_detalle(self, limit: int = DETALLE_POR_PASADA) -> int:
+        """Unit 094 (R-246..R-249, G-63): the detail second by second of up to `limit` sessions of `DETALLE_TYPES`
+        never asked, newest first — the new ones enter first and the history fills itself, pass after pass. Like
+        `sync_laps` (bug 079): a 429 or a session failure stops the pass (what was saved stays; the next one goes on
+        where it was); any other failure is one line and that session stays pending. No detail, or none with HR:
+        «intentado», never asked again. Before the FIRST pass that asks for a session older than `DIAS_NUEVA` days,
+        a verified copy of the database (`_copia_antes_del_relleno`). Only `activity_detail` is written. Returns the
+        number of sessions asked."""
+        self._client.login()
+        pendientes = self._store.ids_sin_detalle(DETALLE_TYPES)[:limit]
+        actividades = {aid: self._store.get_activity(aid) or {} for aid in pendientes}
+        self._copia_antes_del_relleno([a.get("activity_date") for a in actividades.values()])
+
+        total = len(pendientes)
+        for i, activity_id in enumerate(pendientes, start=1):
+            print(f"detalle: {i}/{total} sesiones procesadas", flush=True)
+            try:
+                detalle = self._client.get_activity_detail(activity_id,
+                                                           actividades[activity_id].get("duration_seconds") or 0)
+            except Exception as exc:
+                if isinstance(exc, (GarminAuthError, GarminRateLimitError)) or _es_429(exc):
+                    raise
+                logger.warning("Detail not fetched for activity %s (%s)", activity_id, type(exc).__name__)
+                continue
+            if detalle is None:
+                self._store.marcar_detalle_intentado(activity_id)
+                logger.info("No detail with HR for activity %s: tried, not asked again", activity_id)
+            else:
+                self._store.guardar_detalle(activity_id, detalle)
+                logger.info("Detail synced for activity %s (%d points)", activity_id, len(detalle["t"]))
+        logger.info("Detail sync complete: %d activities processed", total)
+        return total
+
+    def _copia_antes_del_relleno(self, fechas: list[str | None]) -> None:
+        """R-249: once, before the first pass that asks for an old session, a verified copy of the database in
+        `<carpeta de la base>/backups/<sello>-pulso/data.sqlite3` (the folder of `tridata backup`, with
+        `DataStore.backup`, which checks it), and its path written down so it is not repeated. A failure raises:
+        without a copy nothing old is asked."""
+        if self._store.copia_detalle() is not None:
+            return
+        frontera = (date.today() - timedelta(days=DIAS_NUEVA)).isoformat()
+        if not any(f and f < frontera for f in fechas):
+            return
+        carpeta = self._store.db_path.parent / "backups"
+        carpeta.mkdir(parents=True, exist_ok=True)
+        carpeta.chmod(0o700)
+        sello = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+        for n in range(1000):
+            destino = carpeta / (f"{sello}-pulso" if n == 0 else f"{sello}-pulso-{n:03d}")
+            try:
+                destino.mkdir()
+                break
+            except FileExistsError:
+                continue
+        destino.chmod(0o700)
+        copia = destino / "data.sqlite3"
+        self._store.backup(copia)
+        self._store.marcar_copia_detalle(copia)
+        logger.info("Verified copy of the database before the detail refill: %s", copia)
 
     def sync_weather(self, limit: int = 20) -> int:
         """Fetch weather snapshots for up to `limit` running/cycling activities that have none yet.

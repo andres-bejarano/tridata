@@ -16,6 +16,10 @@
   totals (the ones of `semanas`, plus the number of sessions) next to the mean of the 4 weeks before — only the weeks
   since the first activity stored, and it says how many. Each lap of `detalle_actividad` also carries, by sport, its
   cadence (steps, pedal strokes or arm strokes per minute), stride, SWOLF and climb (R-242).
+- Unit 094 (REC-40): `detalle_actividad` also carries `curva`, the HR second by second of the session (reduced to
+  draw, with the real seconds in each zone and the segment of each lap), and `semanas` counts the zones second by
+  second where the session has its detail (S-85), by laps where not; each week says `aproximado` while one of its
+  sessions is still by laps (R-253).
 
 Every Garmin datum carries its state, as in `hoy.py` (G-47, never an invented 0): `ok`, `no_ha_llegado` (not given
 yet) or `incompleto` (given half-done: a resting HR of a day whose totals Garmin cached before finishing it, or a
@@ -147,8 +151,9 @@ def _cadencia_y_desnivel(v: dict, tipo: str | None) -> dict[str, Any]:
 
 
 def detalle_actividad(store: DataStore, historial: HistorialFC | None, actividad_id: str) -> dict[str, Any] | None:
-    """`{actividad, vueltas, clima, zonas, pulso}` of one activity (R3), or None if it does not exist. `zonas` says
-    whether zones were confirmed for its day (without them no lap gets a zone); `clima` None: none synced."""
+    """`{actividad, vueltas, clima, zonas, pulso, curva}` of one activity (R3), or None if it does not exist. `zonas`
+    says whether zones were confirmed for its day (without them no lap gets a zone); `clima` None: none synced.
+    Unit 094: `curva` (see `_curva`), None without detail second by second (not brought yet, or tried, R-254)."""
     a = store.get_activity(actividad_id)
     if a is None:
         return None
@@ -157,7 +162,70 @@ def detalle_actividad(store: DataStore, historial: HistorialFC | None, actividad
     vueltas = [_vuelta(i, v, a.get("activity_type"), zonas)
                for i, v in enumerate(store.get_laps(actividad_id), start=1)]
     return {"actividad": _resumen(store, historial, a), "vueltas": vueltas, "clima": store.get_weather(actividad_id),
-            "zonas": zonas is not None, "pulso": texto_pulso(pulso)}
+            "zonas": zonas is not None, "pulso": texto_pulso(pulso),
+            "curva": _curva(store.leer_detalle(actividad_id), vueltas, zonas)}
+
+
+# -- Unit 094 (REC-40, R-250..R-253): the HR second by second ------------------------------------------------------
+
+MAX_PUNTOS_CURVA = 600  # the curve is reduced only to draw it; the time in zone counts every second
+
+
+def _segundos_por_zona(detalle: dict[str, list[float | None]],
+                       zonas: tuple[tuple[int, int], ...] | None) -> dict[str, float]:
+    """R-252: each point adds the seconds until the next one (the last, one second) to the zone of its HR, with the
+    zones of that day; an HR under zone 1 is zone 1 (as by laps); no HR, or no zones that day: «sin pulso»."""
+    t, hr = detalle["t"], detalle["pulso"]
+    segundos = _ceros()
+    clave_de: dict[float, str] = {}
+    for i, (ti, p) in enumerate(zip(t, hr, strict=True)):
+        if ti is None:
+            continue
+        siguiente = t[i + 1] if i + 1 < len(t) else None
+        paso = 1.0 if siguiente is None else siguiente - ti
+        if paso <= 0:
+            continue
+        if not p or not zonas:
+            clave = "sin_pulso"
+        else:
+            clave = clave_de.get(p) or clave_de.setdefault(p, f"z{zona(p, zonas) or 1}")
+        segundos[clave] += paso
+    return segundos
+
+
+def _reducir(t: list[float | None], hr: list[float | None], maximo: int) -> tuple[list[float], list[float | None]]:
+    """At most `maximo` points to draw: the mean of each bucket of consecutive points (HR without its gaps; a bucket
+    without any HR is a gap of the line)."""
+    puntos = [(ti, p) for ti, p in zip(t, hr, strict=True) if ti is not None]
+    cubo = max(1, -(-len(puntos) // maximo))
+    ts: list[float] = []
+    ps: list[float | None] = []
+    for i in range(0, len(puntos), cubo):
+        trozo = puntos[i:i + cubo]
+        con = [p for _, p in trozo if p]
+        ts.append(round(sum(ti for ti, _ in trozo) / len(trozo), 1))
+        ps.append(round(sum(con) / len(con), 1) if con else None)
+    return ts, ps
+
+
+def _curva(detalle: dict[str, list[float | None]] | None, vueltas: list[dict[str, Any]],
+           zonas: tuple[tuple[int, int], ...] | None) -> dict[str, Any] | None:
+    """R-250..R-252: `{t, pulso, fin_s, zonas_s, limites, tramos}` of a session with detail, or None. `t`/`pulso`:
+    the curve reduced to `MAX_PUNTOS_CURVA` points; `fin_s`: its last second; `zonas_s`: seconds in each zone counted
+    with every point; `limites`: the zones `[[desde, hasta]…]` of that day for the bands (None without them);
+    `tramos`: each lap `{n, inicio_s, fin_s, zona}` by adding up their durations (the timer, as `t`)."""
+    if detalle is None:
+        return None
+    t, pulso = _reducir(detalle["t"], detalle["pulso"], MAX_PUNTOS_CURVA)
+    tramos, inicio = [], 0.0
+    for v in vueltas:
+        fin = inicio + float(v.get("duracion_s") or 0)
+        tramos.append({"n": v["n"], "inicio_s": round(inicio), "fin_s": round(fin), "zona": v.get("zona")})
+        inicio = fin
+    ultimos = [ti for ti in detalle["t"] if ti is not None]
+    return {"t": t, "pulso": pulso, "fin_s": ultimos[-1] if ultimos else 0,
+            "zonas_s": {k: round(s) for k, s in _segundos_por_zona(detalle, zonas).items()},
+            "limites": [list(z) for z in zonas] if zonas else None, "tramos": tramos}
 
 
 def _media(valores: list[Any], decimales: int | None = 1) -> float | None:
@@ -229,6 +297,13 @@ def _zonas_por_vueltas(a: dict, laps: list[dict], zonas: tuple[tuple[int, int], 
     return segundos
 
 
+def _zonas_de(a: dict, laps: list[dict], detalle: dict[str, list[float | None]] | None,
+              zonas: tuple[tuple[int, int], ...] | None) -> dict[str, float]:
+    """Unit 094 (R-253, S-85): the seconds in each zone of a session — second by second where it has detail, by laps
+    (S-82) where it has not."""
+    return _segundos_por_zona(detalle, zonas) if detalle is not None else _zonas_por_vueltas(a, laps, zonas)
+
+
 def _vacio(con_km: bool = True) -> dict[str, Any]:
     return {"horas": 0.0, "km": 0.0 if con_km else None, "carga": 0.0, "zonas": _ceros()}
 
@@ -247,19 +322,24 @@ def semanas(store: DataStore | None, historial: HistorialFC | None, hoy: date, n
     primer_lunes = ultimo - timedelta(weeks=n - 1)
     actividades: list[dict] = []
     vueltas_de: Callable[[str], list[dict]] = lambda _id: []  # noqa: E731
+    detalle_de: Callable[[str], dict | None] = lambda _id: None  # noqa: E731
     if store is not None:
         hasta = min(hoy, ultimo + timedelta(days=6))
         actividades, vueltas_de = store.activities_between(primer_lunes, hasta), store.get_laps
+        detalle_de = store.leer_detalle
     grupos = por_semana(actividades, primer_lunes, n, deporte_semana)
     resultado = []
     for lunes, por_deporte in grupos.items():
         deportes = {nombre: _vacio(nombre != "fuerza") for nombre, _ in DEPORTES_SEMANA}
         deportes[OTROS] = _vacio()
         total = _vacio()
+        aproximado = False  # unit 094 (R-253): some session of the week still by laps
         for nombre, lista in por_deporte.items():
             t = deportes[nombre]
             for a in lista:
                 laps = vueltas_de(a["activity_id"])
+                detalle = detalle_de(a["activity_id"])
+                aproximado = aproximado or detalle is None
                 dia = date.fromisoformat(a["activity_date"])
                 pulso = historial.vigente(dia) if historial is not None else None
                 horas = float(a.get("duration_seconds") or 0) / 3600
@@ -267,7 +347,7 @@ def semanas(store: DataStore | None, historial: HistorialFC | None, hoy: date, n
                 trimp = 0.0
                 if a.get("activity_type") in ALL_SPORT_TYPES:  # what form and fatigue count (daily_tss)
                     trimp = trimp_for_activity(a, laps, historial.limites(dia) if historial is not None else None)
-                zonas = _zonas_por_vueltas(a, laps, pulso.zonas if pulso is not None else None)
+                zonas = _zonas_de(a, laps, detalle, pulso.zonas if pulso is not None else None)
                 for destino in (t, total):
                     destino["horas"] += horas
                     destino["carga"] += trimp
@@ -276,7 +356,7 @@ def semanas(store: DataStore | None, historial: HistorialFC | None, hoy: date, n
                     for clave, seg in zonas.items():
                         destino["zonas"][clave] += seg
         resultado.append({"lunes": lunes.isoformat(), "domingo": (lunes + timedelta(days=6)).isoformat(),
-                          "en_curso": lunes == lunes_de(hoy),
+                          "en_curso": lunes == lunes_de(hoy), "aproximado": aproximado,
                           "deportes": {k: _redondeo(v) for k, v in deportes.items()}, "total": _redondeo(total)})
     return resultado
 

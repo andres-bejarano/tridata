@@ -8,6 +8,7 @@ Examples:
     tridata sync
 
     # Backfill per-lap splits for the 20 most recent unprocessed activities
+    # (unit 094: then the HR second by second of up to 20 sessions without it, newest first)
     tridata sync --laps
     tridata sync --laps --laps-backfill-limit 50
 
@@ -371,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.laps:
                     n = svc.sync_laps(limit=args.laps_backfill_limit)
                     print(f"Lap sync complete: {n} activities processed.")
+                    _traer_detalle(svc)
                 elif args.weather:
                     n = svc.sync_weather(limit=args.weather_backfill_limit)
                     print(f"Weather sync complete: {n} activities processed.")
@@ -488,6 +490,18 @@ def _cmd_export_nutricion(out: Path, *, db_path: Path | None = None, hoy: date |
     ruta = historial_md.escribir(historial.texto, out)
     print(f"Wrote {ruta} · {historial.dias} días, {historial.pesos} pesos, {historial.recetas} recetas")
     return 0
+
+
+def _traer_detalle(svc: SyncService) -> None:
+    """Unit 094 (R-247, G-63): after the laps of `sync --laps` (the 08:00 routine), the detail second by second of up
+    to 20 sessions without it. In its own `try`: a 429 or any failure here is one line and the laps, their output and
+    the exit code stay as they were; the next pass goes on where it was."""
+    try:
+        n = svc.sync_detalle()
+        print(f"Detail sync complete: {n} sessions processed.")
+    except Exception as exc:  # noqa: BLE001 - G-63: never fails the sync; one line, no response body
+        motivo, _ = _motivo_del_fallo(exc)
+        print(f"detail sync stopped: {motivo} ({type(exc).__name__}); the next pass goes on", file=sys.stderr)
 
 
 def _cmd_cadencia_bici(store: DataStore, svc: SyncService) -> int:
@@ -906,7 +920,9 @@ def _actualizador_garmin(store: DataStore, entorno: Mapping[str, str] | None = N
         servicio.sync(since=desde, until=dia, revalidate_days=(dia - desde).days + 1)
         # unit 069: the laps and the weather of the trainings that have none yet, as the 08:00 routine
         # (`sync --laps`, `sync --weather`); a failure here keeps the days already brought (R2).
-        for paso, traer in (("laps", servicio.sync_laps), ("weather", servicio.sync_weather)):
+        # unit 094 (R-247): and the detail second by second, the same queue as the routine's
+        for paso, traer in (("laps", servicio.sync_laps), ("weather", servicio.sync_weather),
+                            ("detalle", servicio.sync_detalle)):
             try:
                 traer(limit=_PENDIENTES_AL_ACTUALIZAR)
             except Exception as exc:  # Garmin failing in several ways; the next press or the routine tries again

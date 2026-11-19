@@ -815,3 +815,21 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .vacia-semana { margin: 8px 0; }
 .sesion-fitness { margin-top: 8px; border: 1px solid var(--acento); border-radius: 14px; }
 .extra-vuelta { display: block; color: var(--suave); font-size: .82rem; margin-top: 2px; }
+
+/* -- unit 094: Fitness — the HR of the session second by second (fitness.js, grafica.js `graficaPulso`) ----------- */
+.curva-pulso { margin: 0 0 6px; }
+.curva-pulso h3 { margin-bottom: 0; }
+.grafica-pulso { padding: 8px 0 0; }
+.grafica .banda-zona { fill-opacity: .22; }
+.grafica .linea-pulso { fill: none; stroke: var(--texto); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.grafica .limite-vuelta { stroke: var(--tarjeta); stroke-width: 1; }
+.grafica .tramo-vuelta { stroke: var(--tarjeta); stroke-width: 1; }
+.grafica .tramo-vuelta.resaltado { stroke: var(--texto); stroke-width: 2.5; }
+.grafica .resalte-vuelta { fill: var(--acento); fill-opacity: .16; stroke: var(--acento); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.leyenda-pulso { margin: 2px 0 6px; }
+.zonas-sesion { list-style: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; margin: 4px 0 10px; padding: 0; font-size: .9rem; font-variant-numeric: tabular-nums; }
+.zonas-sesion li { min-width: 0; overflow-wrap: anywhere; }
+.sin-curva { margin: 4px 0 8px; font-style: italic; }
+.vuelta.vuelta-tocable { cursor: pointer; }
+.vuelta.vuelta-marcada { background: var(--acento-suave); }
+.vuelta.vuelta-tocable:focus-visible { outline: 2px solid var(--acento); outline-offset: -2px; }

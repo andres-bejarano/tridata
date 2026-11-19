@@ -13,8 +13,13 @@
 // next to the mean of the 4 weeks before and its activities (GET /api/fitness/semana, of the sport chosen); tapping
 // one opens its session, the same detail as the last activity (`abrirActividad`), whose laps now also carry cadence,
 // stride, SWOLF and climb by sport («—» when Garmin gave none). The same week again, or «Cerrar», closes it.
+// Unit 094 (REC-40): a session with its detail second by second shows, above its laps, the curve of its HR over the
+// bands of its zones with each lap's segment in its zone's colour (grafica.js `graficaPulso`), and the minutes and %
+// in each zone counted second by second; tapping a lap of the list (or Enter on it) highlights its segment. Without
+// detail it says «sin curva de pulso para esta sesión». In «zonas», «aproximado por vueltas» only while a session of
+// the range is still by laps (each week's `aproximado`).
 
-import { graficaCarga, graficaSemanas, leyendaCarga, leyendaSemanas } from "./grafica.js";
+import { graficaCarga, graficaPulso, graficaSemanas, leyendaCarga, leyendaSemanas } from "./grafica.js";
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -123,7 +128,7 @@ function pintarSemanas(semanas) {
   const caja = $("fitness-grafica-semanas");
   const enfocada = caja.contains(document.activeElement) ? document.activeElement.dataset?.lunes : null;
   caja.replaceChildren(graficaSemanas(semanas, medida, caja.clientWidth - 8, deporte, semanaElegida),
-    leyendaSemanas(medida, deporte));
+    leyendaSemanas(medida, deporte, semanas.some((s) => s.aproximado)));
   if (enfocada) caja.querySelector(`g.semana[data-lunes="${enfocada}"]`)?.focus(); // the keyboard keeps its place
 }
 
@@ -327,10 +332,63 @@ function extrasVuelta(v) {
 function filaVuelta(v) {
   const datos = [v.distancia_m ? distanciaVuelta(v.distancia_m) : null, v.duracion_s ? mmss(v.duracion_s) : null, ritmo(v),
     v.pulso_medio ? `❤ ${enteras.format(Math.round(v.pulso_medio))}` : "sin pulso"].filter(Boolean);
-  return el("li", { className: "vuelta" },
+  const fila = el("li", { className: "vuelta" },
     el("span", { className: "n-vuelta", textContent: String(v.n) }),
     el("span", { className: "datos-vuelta" }, datos.join(" · "), extrasVuelta(v)),
     el("span", { className: `zona-vuelta${v.zona ? ` z${v.zona}` : ""}`, textContent: v.zona ? `Z${v.zona}` : "—" }));
+  fila.dataset.n = String(v.n);
+  return fila;
+}
+
+// -- unit 094: the curve of the HR of the session and its time in each zone ----------------------------------------
+
+const ZONAS_SESION = [["z1", "Z1"], ["z2", "Z2"], ["z3", "Z3"], ["z4", "Z4"], ["z5", "Z5"], ["sin_pulso", "sin pulso"]];
+
+// R-252: minutes and % of the session in each zone, counted second by second; «sin pulso» only if there is any.
+function zonasSesion(zonasS) {
+  const total = Object.values(zonasS).reduce((a, b) => a + b, 0) || 1;
+  const filas = ZONAS_SESION.filter(([clave]) => clave !== "sin_pulso" || zonasS.sin_pulso > 0).map(([clave, nombre]) => {
+    const segundos = zonasS[clave] ?? 0;
+    return el("li", {},
+      el("span", { className: `ley-capa capa-${clave}`, textContent: "■", ariaHidden: "true" }),
+      ` ${nombre} ${enteras.format(Math.round(segundos / 60))}\u00a0min · ${enteras.format(Math.round((segundos / total) * 100))}\u00a0%`);
+  });
+  return el("ul", { className: "zonas-sesion", ariaLabel: "Tiempo en cada zona, segundo a segundo" }, ...filas);
+}
+
+// R-250, R-251: the curve over the laps; tapping a lap (or Enter / Space on it) highlights its segment, again unmarks it.
+function curvaPulso(curva, ancho, lista) {
+  const grafica = el("div", { className: "grafica grafica-pulso" });
+  let elegida = null;
+  const pintar = () => {
+    grafica.replaceChildren(graficaPulso(curva, ancho, elegida));
+    for (const li of lista?.querySelectorAll("li.vuelta") ?? []) {
+      if (Number(li.dataset.n) === elegida) { li.setAttribute("aria-current", "true"); li.classList.add("vuelta-marcada"); }
+      else { li.removeAttribute("aria-current"); li.classList.remove("vuelta-marcada"); }
+    }
+  };
+  const elegir = (li) => { if (!li) return; const n = Number(li.dataset.n); elegida = elegida === n ? null : n; pintar(); };
+  if (lista) {
+    for (const li of lista.querySelectorAll("li.vuelta")) {
+      li.tabIndex = 0;
+      li.title = "Toca para verla en la curva";
+      li.classList.add("vuelta-tocable");
+    }
+    lista.addEventListener("click", (evento) => elegir(evento.target.closest("li.vuelta")));
+    lista.addEventListener("keydown", (evento) => {
+      if (evento.key !== "Enter" && evento.key !== " ") return;
+      const li = evento.target.closest("li.vuelta");
+      if (!li) return;
+      evento.preventDefault();
+      elegir(li);
+    });
+  }
+  pintar();
+  const nodos = [el("h3", { textContent: "Pulso de la sesión" }), grafica,
+    el("p", { className: "leyenda-grafica leyenda-pulso", textContent: "Bandas: tus zonas de ese día · franja de abajo: cada vuelta en el color de su zona" })];
+  nodos.push(curva.limites ? zonasSesion(curva.zonas_s)
+    : el("p", { className: "suave", textContent: "Sin zonas confirmadas ese día: el tiempo en cada zona sale al confirmarlas en Ajustes." }));
+  return el("section", { className: "curva-pulso" }, ...nodos);
 }
 
 function textoClima(c) {
@@ -343,10 +401,14 @@ function textoClima(c) {
 }
 
 function pintarDetalle(d, caja = $("fitness-detalle")) {
-  const nodos = [el("h3", { textContent: `Vueltas de ${d.actividad.nombre}` })];
-  if (d.vueltas.length) {
+  const lista = d.vueltas.length ? el("ol", { className: "vueltas" }, ...d.vueltas.map(filaVuelta)) : null;
+  // unit 094 (R-250, R-254): above the laps, the curve of the HR, or that there is none
+  const nodos = [d.curva ? curvaPulso(d.curva, caja.clientWidth - 30, lista)
+    : el("p", { className: "suave sin-curva", textContent: "sin curva de pulso para esta sesión" })];
+  nodos.push(el("h3", { textContent: `Vueltas de ${d.actividad.nombre}` }));
+  if (lista) {
     if (!d.zonas) nodos.push(el("p", { className: "aviso", textContent: "Sin zonas confirmadas para ese día: confírmalas en Ajustes › Pulso y zonas." }));
-    nodos.push(el("ol", { className: "vueltas" }, ...d.vueltas.map(filaVuelta)));
+    nodos.push(lista);
   } else {
     nodos.push(el("p", { className: "suave", textContent: "Esta actividad no tiene vueltas." }));
   }

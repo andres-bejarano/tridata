@@ -8,6 +8,7 @@ that the rest of the app depends on instead of talking to
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,11 @@ _CLAVES_CADENCIA_BICI = ("averageBikeCadence", "averageBikingCadenceInRevPerMinu
 
 def _cadencia_bici(dto: dict) -> float | None:
     return next((dto[k] for k in _CLAVES_CADENCIA_BICI if dto.get(k) is not None), None)
+
+
+# Unit 094: the series of the detail second by second, and the `key` of Garmin each comes from
+_SERIES_DETALLE = (("t", "sumDuration"), ("distancia", "sumDistance"), ("pulso", "directHeartRate"),
+                   ("velocidad", "directSpeed"), ("altura", "directElevation"), ("potencia", "directPower"))
 
 
 def _es_429(exc: BaseException | None) -> bool:
@@ -200,6 +206,30 @@ class GarminClient:
             )
             for idx, dto in enumerate(lap_dtos, start=1)
         ]
+
+    def get_activity_detail(self, activity_id: str, duracion_s: float) -> dict[str, list[float | None]] | None:
+        """Unit 094 (R-246): the six series second by second of one session — `t` (seconds of timer from the start),
+        `distancia` (m), `pulso` (bpm), `velocidad` (m/s), `altura` (m) and `potencia` (W; all None without it) —,
+        a value per point, None where Garmin gave none. With `maxchart` ≥ the seconds of the session Garmin gives one
+        point per second (with its default, 2000, it reduces); `maxpoly=0`: no coordinates. The metrics are read by
+        `key`, never by position: their order changes between calls. None without points or without any HR."""
+        raw = self.api.get_activity_details(activity_id, maxchart=max(2000, math.ceil(duracion_s or 0) + 60),
+                                            maxpoly=0)
+        filas = (raw or {}).get("activityDetailMetrics") or []
+        indice = {d.get("key"): d.get("metricsIndex") for d in (raw or {}).get("metricDescriptors") or []}
+        if not filas or indice.get("sumDuration") is None:
+            return None
+
+        def serie(clave: str) -> list[float | None]:
+            i = indice.get(clave)
+            if i is None:
+                return [None] * len(filas)
+            return [m[i] if i < len(m) else None for m in (f.get("metrics") or [] for f in filas)]
+
+        detalle = {nombre: serie(clave) for nombre, clave in _SERIES_DETALLE}
+        if not any(p for p in detalle["pulso"]):
+            return None
+        return detalle
 
     def get_daily_stats(self, day: date) -> DailyStats | None:
         raw = self.api.get_stats(day.isoformat())

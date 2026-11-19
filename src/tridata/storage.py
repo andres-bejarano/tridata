@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
+import zlib
+from array import array
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -119,7 +122,65 @@ CREATE TABLE IF NOT EXISTS sync_estado (
     fallo_en TEXT,
     fallo_motivo TEXT
 );
+CREATE TABLE IF NOT EXISTS activity_detail (
+    activity_id TEXT PRIMARY KEY,
+    estado TEXT NOT NULL CHECK (estado IN ('traido', 'intentado')),
+    puntos INTEGER NOT NULL,
+    formato INTEGER,
+    datos BLOB,
+    traido_en TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS activity_detail_copia (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    ruta TEXT NOT NULL,
+    hecha_en TEXT NOT NULL
+);
 """
+
+# -- Unit 094 (R-246): the detail second by second, compressed ---------------------------------------------------------
+# `activity_detail.datos` (formato 1) is zlib of the six series one after the other, each a little-endian array of
+# `puntos` integers at a fixed resolution; a point Garmin did not give is the series' «hueco» value (the mask):
+#   t          'I' tenths of a second from the start (sumDuration)     hueco 2**32-1
+#   distancia  'I' decimetres                                          hueco 2**32-1
+#   pulso      'B' bpm (0 is no HR, as Garmin never gives 0)           hueco 0
+#   velocidad  'H' mm/s                                                hueco 2**16-1
+#   altura     'i' decimetres (it can be under the sea)                hueco -2**31
+#   potencia   'H' watts                                               hueco 2**16-1
+# ~17 B per point before zlib: a 75-minute run (4,500 points) stays far under 100 KB. Reading gives back floats at
+# that resolution and None in the gaps. `estado` 'intentado' (G-63): Garmin gave no detail or no HR; no `datos`.
+FORMATO_DETALLE = 1
+_SERIES_DETALLE = (("t", "I", 10, 2**32 - 1), ("distancia", "I", 10, 2**32 - 1), ("pulso", "B", 1, 0),
+                   ("velocidad", "H", 1000, 2**16 - 1), ("altura", "i", 10, -(2**31)), ("potencia", "H", 1, 2**16 - 1))
+_LIMITES_TIPO = {"I": (0, 2**32 - 2), "B": (1, 255), "H": (0, 2**16 - 2), "i": (-(2**31) + 1, 2**31 - 1)}
+
+
+def _comprimir_detalle(series: Mapping[str, list[float | None]]) -> tuple[int, bytes]:
+    n = len(series["t"])
+    trozos = []
+    for nombre, tipo, escala, hueco in _SERIES_DETALLE:
+        bajo, alto = _LIMITES_TIPO[tipo]
+        valores = list(series.get(nombre) or [None] * n)
+        if len(valores) != n:
+            raise ValueError(f"the series {nombre} has {len(valores)} points, not {n}")
+        enteros = array(tipo, (hueco if v is None or v != v else min(alto, max(bajo, round(v * escala)))
+                               for v in valores))
+        if sys.byteorder == "big":
+            enteros.byteswap()
+        trozos.append(enteros.tobytes())
+    return n, zlib.compress(b"".join(trozos), 6)
+
+
+def _descomprimir_detalle(n: int, datos: bytes) -> dict[str, list[float | None]]:
+    crudo, inicio, series = zlib.decompress(datos), 0, {}
+    for nombre, tipo, escala, hueco in _SERIES_DETALLE:
+        enteros = array(tipo)
+        fin = inicio + n * enteros.itemsize
+        enteros.frombytes(crudo[inicio:fin])
+        if sys.byteorder == "big":
+            enteros.byteswap()
+        series[nombre] = [None if v == hueco else v / escala for v in enteros]
+        inicio = fin
+    return series
 
 # Unit 018 (R-90, G-44): why the last sync with Garmin failed.
 MOTIVOS_FALLO_SYNC = ("sesion", "limite", "conexion")
@@ -485,6 +546,67 @@ class DataStore:
                 "WHERE activity_id = ? AND lap_index = ?",
                 [(cadencias.get(i), activity_id, i) for i in indices],
             )
+
+    # -- The detail second by second (unit 094, R-246..R-249, G-63) ----------------------------------------------------
+
+    def guardar_detalle(self, activity_id: str, series: Mapping[str, list[float | None]]) -> None:
+        """Saves the six series of one session (see `_SERIES_DETALLE`), compressed, as «traido». Only this table."""
+        puntos, datos = _comprimir_detalle(series)
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO activity_detail (activity_id, estado, puntos, formato, datos, traido_en) "
+                "VALUES (?, 'traido', ?, ?, ?, ?)",
+                (activity_id, puntos, FORMATO_DETALLE, datos, datetime.now(timezone.utc).isoformat()),
+            )
+
+    def marcar_detalle_intentado(self, activity_id: str) -> None:
+        """G-63: Garmin gave no detail (or none with HR): asked once, never again. A detail already saved stays."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO activity_detail (activity_id, estado, puntos, traido_en) "
+                "VALUES (?, 'intentado', 0, ?)",
+                (activity_id, datetime.now(timezone.utc).isoformat()),
+            )
+
+    def estado_detalle(self, activity_id: str) -> str | None:
+        """'traido', 'intentado' or None (not asked yet)."""
+        with self._connect() as conn:
+            fila = conn.execute("SELECT estado FROM activity_detail WHERE activity_id = ?", (activity_id,)).fetchone()
+        return fila[0] if fila else None
+
+    def leer_detalle(self, activity_id: str) -> dict[str, list[float | None]] | None:
+        """The six series of a session with detail, or None (not brought, or tried without success)."""
+        with self._connect() as conn:
+            fila = conn.execute(
+                "SELECT puntos, datos FROM activity_detail WHERE activity_id = ? AND estado = 'traido'",
+                (activity_id,),
+            ).fetchone()
+        return _descomprimir_detalle(fila[0], fila[1]) if fila else None
+
+    def ids_sin_detalle(self, types: tuple[str, ...]) -> list[str]:
+        """IDs of the sessions of `types` never asked for their detail, newest first (by day and start time)."""
+        placeholders = ",".join("?" * len(types))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT a.activity_id FROM activities a "  # noqa: S608 - only placeholders
+                f"LEFT JOIN activity_detail d ON d.activity_id = a.activity_id "
+                f"WHERE d.activity_id IS NULL AND json_extract(a.payload, '$.activity_type') IN ({placeholders}) "
+                f"ORDER BY a.activity_date DESC, json_extract(a.payload, '$.start_time_local') DESC, "
+                f"a.activity_id DESC",
+                types,
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def copia_detalle(self) -> str | None:
+        """R-249: the path of the verified copy taken before the first refill of old sessions, or None if not yet."""
+        with self._connect() as conn:
+            fila = conn.execute("SELECT ruta FROM activity_detail_copia WHERE id = 1").fetchone()
+        return fila[0] if fila else None
+
+    def marcar_copia_detalle(self, ruta: Path | str) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT OR REPLACE INTO activity_detail_copia (id, ruta, hecha_en) VALUES (1, ?, ?)",
+                         (str(ruta), datetime.now(timezone.utc).isoformat()))
 
     def get_laps(self, activity_id: str) -> list[dict]:
         """Return stored laps for an activity, ordered by lap_index."""

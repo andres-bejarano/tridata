@@ -364,8 +364,9 @@ export function graficaSemanas(semanas, medida = "horas", ancho = ANCHO_POR_DEFE
 }
 
 // The legend of the weeks, with text and not only colour; in «zonas» it says it is approximated by laps (R-235).
-// Unit 091: with one sport, only what is drawn.
-export function leyendaSemanas(medida = "horas", deporte = "todos") {
+// Unit 091: with one sport, only what is drawn. Unit 094 (R-253): «aproximado por vueltas» only while `aproximado`
+// (some session of the range still without its detail second by second).
+export function leyendaSemanas(medida = "horas", deporte = "todos", aproximado = true) {
   const p = document.createElement("p");
   p.className = "leyenda-grafica leyenda-semanas";
   const capas = capasSemana(medida, deporte).filter(([clave]) => medida !== "km" || clave !== "fuerza");
@@ -378,6 +379,63 @@ export function leyendaSemanas(medida = "horas", deporte = "todos") {
     p.append(s, ` ${texto}`);
   });
   if (medida === "km" && (deporte === "todos" || deporte === "fuerza")) p.append(capas.length ? " · la fuerza no suma km" : "la fuerza no suma km");
-  if (medida === "zonas") p.append(" · aproximado por vueltas");
+  if (medida === "zonas" && aproximado) p.append(" · aproximado por vueltas");
   return p;
+}
+
+// Unit 094 (R-250, R-251): the HR of one session second by second (`curva` of GET /api/actividad/ID: the curve
+// already reduced to draw, `fin_s`, `limites` of the zones of that day and the `tramos` of its laps). On top the line of
+// the HR over five bands, one per zone (always the five: the scale reaches from Z2's start down and Z5's start up);
+// under it a strip with each lap's segment in the colour of the zone of its mean HR. `elegida` (a lap number) is
+// highlighted: its segment outlined and its stretch shaded over the curve. One <svg role="group">, like the weeks.
+const TIEMPOS_EJE = [60, 120, 300, 600, 900, 1200, 1800, 3600, 7200];
+
+export function graficaPulso(curva, ancho = ANCHO_POR_DEFECTO, elegida = null) {
+  const W = Math.max(260, Math.round(ancho || ANCHO_POR_DEFECTO));
+  const x0 = 34, x1 = W - 8, arriba = 22, abajo = 158, franja = 166, altoFranja = 14;
+  const H = franja + altoFranja + 24;
+  const tramos = curva.tramos ?? [];
+  const fin = Math.max(1, curva.fin_s || 0, ...tramos.map((v) => v.fin_s));
+  const x = (s) => x0 + (Math.min(Math.max(s, 0), fin) / fin) * (x1 - x0);
+  const con = curva.pulso.filter((p) => p !== null);
+  const limites = curva.limites;
+  let lo = Math.min(...con), hi = Math.max(...con);
+  if (limites) { lo = Math.min(lo, limites[1][0]); hi = Math.max(hi, limites[4][0]); }
+  lo = Math.floor((lo - 8) / 10) * 10;
+  hi = Math.ceil((hi + 8) / 10) * 10;
+  const y = escala(lo, hi, arriba, abajo);
+  const partes = [];
+  if (limites) {
+    limites.forEach(([desde], k) => {
+      const techo = k < 4 ? limites[k + 1][0] : hi;
+      const suelo = k === 0 ? lo : desde;
+      const yTop = y(Math.min(Math.max(techo, lo), hi)), yBajo = y(Math.min(Math.max(suelo, lo), hi));
+      partes.push(`<rect class="banda-zona capa-z${k + 1}" x="${x0}" y="${f1(yTop)}" width="${f1(x1 - x0)}" height="${f1(Math.max(0, yBajo - yTop))}"><title>Z${k + 1}: desde ${desde} ppm</title></rect>`);
+    });
+  }
+  const paso = hi - lo <= 60 ? 10 : 20;
+  for (let v = Math.ceil(lo / paso) * paso; v <= hi; v += paso) {
+    partes.push(`<line class="rejilla" x1="${x0}" y1="${f1(y(v))}" x2="${x1}" y2="${f1(y(v))}"/>`,
+      `<text class="eje" x="${x0 - 6}" y="${f1(y(v) + 4)}" text-anchor="end">${v}</text>`);
+  }
+  const marcada = tramos.find((v) => v.n === elegida);
+  if (marcada) {
+    partes.push(`<rect class="resalte-vuelta" x="${f1(x(marcada.inicio_s))}" y="${arriba}" width="${f1(Math.max(1, x(marcada.fin_s) - x(marcada.inicio_s)))}" height="${abajo - arriba}"/>`);
+  }
+  tramos.slice(1).forEach((v) => partes.push(`<line class="limite-vuelta" x1="${f1(x(v.inicio_s))}" y1="${arriba}" x2="${f1(x(v.inicio_s))}" y2="${franja + altoFranja}"/>`));
+  const puntos = curva.t.map((t, i) => (curva.pulso[i] === null ? null : `${f1(x(t))},${f1(y(curva.pulso[i]))}`)).filter(Boolean);
+  partes.push(`<polyline class="linea-pulso" points="${puntos.join(" ")}"/>`);
+  tramos.forEach((v) => {
+    const clase = `tramo-vuelta ${v.zona ? `capa-z${v.zona}` : "capa-sin_pulso"}${v.n === elegida ? " resaltado" : ""}`;
+    partes.push(`<rect class="${clase}" data-n="${v.n}" x="${f1(x(v.inicio_s))}" y="${franja}" width="${f1(Math.max(1, x(v.fin_s) - x(v.inicio_s)))}" height="${altoFranja}"><title>Vuelta ${v.n}: ${v.zona ? `Z${v.zona}` : "sin zona"}</title></rect>`);
+  });
+  const cada = TIEMPOS_EJE.find((s) => (s / fin) * (x1 - x0) >= SEPARACION_MIN + 6) ?? 14_400;
+  for (let s = 0; s <= fin; s += cada) {
+    const xt = Math.min(Math.max(x(s), 14), W - 22);
+    partes.push(`<text class="etiqueta-x" x="${f1(xt)}" y="${franja + altoFranja + 16}" text-anchor="middle">${s ? `${Math.round(s / 60)} min` : "0"}</text>`);
+  }
+  partes.push(`<text class="titulo-eje" x="4" y="12">ppm</text>`);
+  const lienzo = document.createElement("div");
+  lienzo.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="group" aria-label="Pulso de la sesión sobre tus zonas">${partes.join("")}</svg>`;
+  return lienzo.firstChild;
 }

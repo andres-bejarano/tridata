@@ -56,14 +56,18 @@
                                   `ultima_actividad` and `recuperacion` (sleep, resting HR, HRV with their 7-day means,
                                   each with its `estado`). Every day with the HR in force that day in Ajustes (G-49).
                                   Unit 090: `?dias=14|42|91|365` (42 by default; another value, 400) and `semanas`: the
-                                  2, 6, 13 or 52 Monday-to-Sunday weeks by sport (hours, km, load, time by zone)
+                                  2, 6, 13 or 52 Monday-to-Sunday weeks by sport (hours, km, load, time by zone);
+                                  unit 094: the zones second by second where there is detail, and each week's
+                                  `aproximado` (some session of it still by laps)
     GET  /api/fitness/semana      unit 093 (REC-37): `?lunes=AAAA-MM-DD&deporte=todos|correr|bici|nadar|fuerza|otros`
                                   the activities of that week (newest first) with its hours, km, load and sessions
                                   next to the mean of the 4 weeks before (`fitness.actividades_semana`); a date that
                                   is not a Monday up to this week, or another sport, is 422
     GET  /api/actividad/ID        unit 031: one activity with its laps (pace or speed, mean HR and its zone) and its
                                   weather; 404 if it does not exist. Unit 093: each lap also with its cadence, stride,
-                                  SWOLF and climb, by sport
+                                  SWOLF and climb, by sport. Unit 094: `curva`, the HR second by second (reduced to
+                                  draw), the seconds in each zone, the zones of that day and each lap's segment;
+                                  None without detail (`fitness._curva`)
     POST /api/toma                unit 082 (R-227): a dose by hand {"dia", "que" (cafe|b12), "forma"?, "hora"?, "mg"?,
                                   "solo"?, "gramos"?, "fraccion"?, "cucharadas"?, "dosis"?}; today without an hour
                                   takes the hour it is now (R-231), another day without one is 422. Its mg are by

@@ -15,6 +15,9 @@
 // too (provisional); «Añadir ingrediente» opens an empty line, and the name of every line is the search box of
 // buscador.js with only ingredients: choosing one leaves its grams or units and its kcal (the server recomputes
 // them with what is saved). `cuenta()` lives in buscador.js, the same for every screen.
+// Unit 098 (R-273): the card of an ingredient shows and changes its protein, carbs and fat (on the base of its kcal),
+// marked «estimado», «de etiqueta» or «sin macros»; saved by hand they are «de etiqueta» (the server decides it). The
+// card of a recipe says its macros per 100 g (or of the whole recipe, not weighed) or how many ingredients have none.
 
 import { buscador, cuenta, fracciones, ponerGuardado, textoReceta, unidadPropia } from "./buscador.js";
 
@@ -246,6 +249,24 @@ async function enviar(ruta, cuerpo, texto) {
 }
 
 const alias = (texto) => texto.split(",").map((a) => a.trim()).filter(Boolean);
+const sinPuntos = (n) => (n === null || n === undefined ? "" : numero.format(n).replace(/\./g, ""));
+const ORIGEN_MACROS = { estimado: "estimado", etiqueta: "de etiqueta" };
+
+// Unit 098 (R-273): P · H · G of an ingredient on the base of its kcal, with where they come from.
+function macrosFijo(f, por) {
+  const tiene = Boolean(f && f.proteina !== null && f.proteina !== undefined);
+  const marca = el("span", { className: "marca marca-macros", textContent: tiene ? ORIGEN_MACROS[f.macros_origen] ?? "estimado" : "sin macros" });
+  const titulo = el("span");
+  const pintarTitulo = () => { titulo.textContent = `Macros ${por.entrada.value === "unidad" ? "por unidad" : "por 100 g"} `; };
+  pintarTitulo();
+  por.entrada.addEventListener("change", pintarTitulo);
+  const campos = [["Proteína (g)", "proteina"], ["Hidratos (g)", "hidratos"], ["Grasa (g)", "grasa"]]
+    .map(([etiqueta, clave]) => [clave, campo(etiqueta, f ? sinPuntos(f[clave]) : "", "text", numerico)]);
+  const caja = el("div", { className: "macros-fijo" }, el("p", { className: "titulo-pieza" }, titulo, marca),
+    el("div", { className: "fila" }, ...campos.map(([, c]) => c)));
+  const leer = () => Object.fromEntries(campos.map(([clave, c]) => [clave, comoNumero(c.entrada.value)]));
+  return { caja, leer };
+}
 
 function fichaFijo(f) {
   const nombre = campo("Nombre", f ? f.nombre : "");
@@ -253,16 +274,19 @@ function fichaFijo(f) {
   const por = seleccion("Por", [["100g", "por 100 g"], ["unidad", "por unidad"]], f ? f.por : "100g");
   const alias_ = campo("Alias (separa con comas)", f ? f.alias.join(", ") : "");
   const nota = campo("Nota", f ? f.nota : "", "text", { placeholder: "p. ej. «no la fruta»" });
+  const macros = macrosFijo(f, por);
   const ruta = f ? `/api/fijos/${f.id}` : "/api/fijos";
   const { tarjeta } = armazon({
     clase: "ficha-fijo", nombre: f && f.nombre, textoGuardar: "Guardar",
-    nodos: [nombre, el("div", { className: "fila dos" }, kcal, por), alias_, nota],
+    nodos: [nombre, el("div", { className: "fila dos" }, kcal, por), macros.caja, alias_, nota],
     guardar: () => {
       const valor = comoNumero(kcal.entrada.value);
       if (!nombre.entrada.value.trim()) return "Ponle nombre.";
       if (valor === null || Number.isNaN(valor)) return "Pon sus kcal.";
+      const pgh = macros.leer();
+      if (Object.values(pgh).some((n) => Number.isNaN(n))) return "Revisa los macros: hay un número que no vale.";
       return enviar(ruta, { nombre: nombre.entrada.value, kcal: valor, por: por.entrada.value,
-        alias: alias(alias_.entrada.value), nota: nota.entrada.value }, `Guardado: ${nombre.entrada.value.trim()}.`);
+        alias: alias(alias_.entrada.value), nota: nota.entrada.value, ...pgh }, `Guardado: ${nombre.entrada.value.trim()}.`);
     },
     borrar: f && (() => enviar(`/api/fijos/${f.id}/borrar`, { confirmado: true }, `Borrado: ${f.nombre}.`)),
   });
@@ -305,6 +329,7 @@ function fichaReceta(r) {
     lista.lastElementChild.querySelector("input").focus();
   });
   const total = el("p", { className: "total-receta" });
+  const macrosReceta = v ? el("p", { className: "suave macros-receta num", textContent: textoMacros(v) }) : null;
   const ollas = [["", "Sin olla: escribo el peso neto"], ...datos.ollas.map((o) => [String(o.id), `${o.nombre} (${numero.format(o.tara_g)} g)`])];
   const olla = seleccion("Olla", ollas, v && v.olla_id && datos.ollas.some((o) => o.id === v.olla_id) ? String(v.olla_id) : "");
   const peso = campo("Olla llena (g)", "", "text", numerico);
@@ -361,7 +386,8 @@ function fichaReceta(r) {
         if (i.aMano) i.estado = nuevo !== null && !Number.isNaN(nuevo) ? "estimado" : "dudoso";
         if (nuevo !== i.kcal && nuevo !== null && !Number.isNaN(nuevo) && i.estado === "dudoso") i.estado = "estimado";
         if (nombreI.entrada.value.trim() !== i.nombre && i.estado === "dudoso" && nuevo !== null) i.estado = "estimado";
-        Object.assign(i, { nombre: nombreI.entrada.value.trim(), cantidad: comoNumero(cant.entrada.value), unidad: unidad.entrada.value.trim() || null, kcal: nuevo });
+        Object.assign(i, { nombre: nombreI.entrada.value.trim(), cantidad: comoNumero(cant.entrada.value), unidad: unidad.entrada.value.trim() || null, kcal: nuevo,
+          proteina_g: null, hidratos_g: null, grasa_g: null }); // unit 098: touched by hand, its macros no longer hold
         pintarTotal();
       };
       for (const c of [nombreI, cant, unidad, kcal]) c.entrada.addEventListener("input", leer);
@@ -415,8 +441,10 @@ function fichaReceta(r) {
       if (olla.entrada.value) c.peso_lleno_g = g; else c.peso_neto_g = g;
     }
     if (modelo.ingredientes.length || modelo.teniaIngredientes || !r) {
+      // unit 098: an estimated line keeps its macros (the server takes a saved one's from what is saved)
       c.ingredientes = modelo.ingredientes.map((i) => ({ nombre: i.nombre, cantidad: i.cantidad, unidad: i.unidad,
-        kcal: i.kcal, dudoso: i.estado === "dudoso", guardado: i.estado === "guardado" ? i.nombre : null }));
+        kcal: i.kcal, dudoso: i.estado === "dudoso", guardado: i.estado === "guardado" ? i.nombre : null,
+        ...(i.estado === "estimado" ? { proteina_g: i.proteina_g ?? null, hidratos_g: i.hidratos_g ?? null, grasa_g: i.grasa_g ?? null } : {}) }));
     }
     return c;
   }
@@ -443,7 +471,7 @@ function fichaReceta(r) {
   }
 
   const nodos = [nombre, el("p", { className: "titulo-ingredientes", textContent: "Ingredientes" }), lista, anadirLinea, total,
-    el("div", { className: "fila dos" }, olla, peso), aprox, calculo, alias_, nota];
+    macrosReceta, el("div", { className: "fila dos" }, olla, peso), aprox, calculo, alias_, nota].filter(Boolean);
   const { tarjeta, acciones } = armazon({
     clase: "ficha-receta", aviso, textoGuardar: r ? "Guardar cambios" : "Guardar receta", nodos,
     guardar: () => (r ? guardarComo(`/api/recetas/${r.id}`, {}, `Guardada: ${r.nombre}.`, true)
@@ -468,6 +496,15 @@ function fichaReceta(r) {
   }
   pintarIngredientes();
   return tarjeta;
+}
+
+// Unit 098 (R-273): what the recipe in use carries, from its ingredients.
+function textoMacros(v) {
+  const pgh = (m) => `proteína ${numero.format(m.proteina_g)} · hidratos ${numero.format(m.hidratos_g)} · grasa ${numero.format(m.grasa_g)}`;
+  if (v.macros_100g) return `Macros por 100 g: ${pgh(v.macros_100g)}`;
+  if (v.macros_total) return `Macros de la receta entera: ${pgh(v.macros_total)}`;
+  if (v.sin_macros) return `Sin macros: ${plural(v.sin_macros, "ingrediente sin macros", "ingredientes sin macros")}`;
+  return "Sin macros: salen de sus ingredientes";
 }
 
 function versiones(r, avisar) {

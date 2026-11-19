@@ -8,6 +8,14 @@ and nothing here ever touches the foods already logged (R-55). Pure functions: `
 `Recetario.resolver` turns what Claude interpreted into what the list shows: the kcal of what is
 saved when it matches (G-31), a visible proposal when it is only alike, and the estimate otherwise.
 Business errors are `ValueError` with the text for Andrés; malformed data are `ErrorDatos`.
+
+Unit 098 (REC-43, R-269..R-273): a fixed food keeps protein, carbs and fat (`proteina`, `hidratos`, `grasa`, on the
+same base as its kcal) and where they come from (`macros_origen`: «estimado» or «etiqueta»); each ingredient line of a
+recipe keeps the grams of its line (`proteina_g`, `hidratos_g`, `grasa_g`): a saved one takes its fixed food's, an
+estimated one the team's. A recipe adds them up (`macros_total`) and spreads them as its kcal (`macros_100g`); one
+line with kcal and without macros leaves it without (`sin_macros` says how many). What is logged from a saved thing
+carries them in proportion to its kcal (`para_apuntar`). `macros_que_faltan` / `validar_macros` / `guardar_macros`
+fill in, once, what is missing, only as «estimado» and only what Andrés accepts; what was logged never changes.
 """
 from __future__ import annotations
 
@@ -26,6 +34,10 @@ from ..storage import DEFAULT_DB_PATH
 
 KCAL_100G_MAX = 900  # G-35: nothing passes 900 kcal/100 g (pure fat)
 POR = ("100g", "unidad")
+MACROS_FIJO = ("proteina", "hidratos", "grasa")  # unit 098: on a fixed food, on the base of its kcal
+MACROS = ("proteina_g", "hidratos_g", "grasa_g")  # unit 098: grams in a line, a recipe or what is logged
+ORIGENES_MACROS = ("estimado", "etiqueta")
+NO_CUADRA = 0.2  # unit 098 (R3): 4·P + 4·H + 9·G more than 20 % away from the kcal is warned, never blocked
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS receta (
@@ -60,7 +72,11 @@ CREATE TABLE IF NOT EXISTS alimento_fijo (
     kcal REAL NOT NULL,
     por TEXT NOT NULL CHECK (por IN ('100g', 'unidad')),
     nota TEXT,
-    comun INTEGER NOT NULL DEFAULT 0
+    comun INTEGER NOT NULL DEFAULT 0,
+    proteina REAL,
+    hidratos REAL,
+    grasa REAL,
+    macros_origen TEXT
 );
 CREATE TABLE IF NOT EXISTS comun_quitado (
     nombre TEXT PRIMARY KEY
@@ -183,9 +199,11 @@ def _ingrediente_crudo(crudo: Any) -> dict:
         raise ValueError(f"«{nombre}»: la cantidad tiene que ser mayor que 0")
     if kcal is not None and kcal < 0:
         raise ValueError(f"«{nombre}»: las kcal no pueden ser negativas")
+    macros = _macros_validos({k: _numero(crudo, k, f"{nombre}: {k}") for k in MACROS}, None, nombre or "")
     return {"nombre": nombre, "cantidad": cantidad, "unidad": (unidad or "").strip() or None, "kcal": kcal,
             "dudoso": bool(crudo.get("dudoso")) or crudo.get("estado") == "dudoso",
-            "guardado": crudo.get("guardado") if isinstance(crudo.get("guardado"), str) else None}
+            "guardado": crudo.get("guardado") if isinstance(crudo.get("guardado"), str) else None,
+            "macros": macros}
 
 
 def _kcal_de_fijo(fijo: dict, cantidad: float | None, unidad: str | None) -> float | None:
@@ -196,6 +214,76 @@ def _kcal_de_fijo(fijo: dict, cantidad: float | None, unidad: str | None) -> flo
         return _redondear(cantidad * fijo["kcal"] / 100)
     if fijo["por"] == "unidad" and unidad == "unidad":
         return _redondear(cantidad * fijo["kcal"])
+    return None
+
+
+# -- unit 098: macros ------------------------------------------------------------------------------------------------
+
+def _macros_de_fijo(fijo: dict, cantidad: float | None, unidad: str | None) -> dict | None:
+    """The grams of protein, carbs and fat of `cantidad` of a fixed food, as its kcal; None without them or unit."""
+    if cantidad is None or any(fijo.get(k) is None for k in MACROS_FIJO):
+        return None
+    if fijo["por"] == "100g" and unidad == "g":
+        factor = cantidad / 100
+    elif fijo["por"] == "unidad" and unidad == "unidad":
+        factor = cantidad
+    else:
+        return None
+    return {g: _redondear(fijo[k] * factor) for k, g in zip(MACROS_FIJO, MACROS, strict=True)}
+
+
+def _suma_macros(ingredientes: list[dict]) -> dict | None:
+    """R1: the macros of the whole recipe, unrounded; None if a line with kcal has none (never half a total).
+
+    A line of 0 kcal (water, salt) adds nothing and asks for nothing; a doubtful line leaves the recipe without kcal,
+    so without macros too."""
+    if not ingredientes or any(i.get("estado") == "dudoso" for i in ingredientes):
+        return None
+    total = dict.fromkeys(MACROS, 0.0)
+    for i in ingredientes:
+        if not i.get("kcal"):
+            continue
+        if any(i.get(k) is None for k in MACROS):
+            return None
+        for k in MACROS:
+            total[k] += i[k]
+    return total
+
+
+def _sin_macros(ingredientes: list[dict]) -> int:
+    """How many lines with kcal have no macros (what the recipe card says it is missing)."""
+    return sum(1 for i in ingredientes if i.get("estado") != "dudoso" and i.get("kcal")
+               and any(i.get(k) is None for k in MACROS))
+
+
+def _escalar(macros: dict | None, factor: float | None) -> dict | None:
+    if macros is None or factor is None:
+        return None
+    return {k: _redondear(macros[k] * factor) for k in MACROS}
+
+
+def _macros_validos(valores: dict[str, float | None], por: str | None, quien: str = "") -> dict[str, float] | None:
+    """All three or none; never negative; per 100 g they cannot add up to more than 100 g (R3). ValueError says why."""
+    de = f"«{quien}»: " if quien else ""
+    if all(v is None for v in valores.values()):
+        return None
+    if any(v is None for v in valores.values()):
+        raise ValueError(f"{de}pon los tres macros (proteína, hidratos y grasa) o ninguno")
+    if any(v < 0 for v in valores.values() if v is not None):
+        raise ValueError(f"{de}los macros no pueden ser negativos")
+    suma = sum(v for v in valores.values() if v is not None)
+    if por == "100g" and suma > 100:
+        raise ValueError(f"{de}proteína + hidratos + grasa suman {suma:g} g por 100 g, y no pueden pasar de 100 g")
+    return {k: float(v) for k, v in valores.items() if v is not None}
+
+
+def no_cuadra(kcal: float | None, proteina: float, hidratos: float, grasa: float) -> str | None:
+    """R3: the warning when 4·P + 4·H + 9·G is more than 20 % away from the kcal (never a block); None if it fits."""
+    if kcal is None:
+        return None
+    salen = 4 * proteina + 4 * hidratos + 9 * grasa
+    if (kcal > 0 and abs(salen - kcal) / kcal > NO_CUADRA) or (kcal == 0 and salen > 0):
+        return f"no cuadra con sus kcal (salen {salen:.0f} de {kcal:g}): revisa"
     return None
 
 
@@ -365,6 +453,10 @@ class Recetario:
             columnas = {c["name"] for c in conn.execute("PRAGMA table_info(alimento_fijo)")}
             if "comun" not in columnas:  # a base from before unit 026
                 conn.execute("ALTER TABLE alimento_fijo ADD COLUMN comun INTEGER NOT NULL DEFAULT 0")
+            for columna, tipo in (("proteina", "REAL"), ("hidratos", "REAL"), ("grasa", "REAL"),
+                                  ("macros_origen", "TEXT")):  # a base from before unit 098
+                if columna not in columnas:
+                    conn.execute(f"ALTER TABLE alimento_fijo ADD COLUMN {columna} {tipo}")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -381,7 +473,8 @@ class Recetario:
     @staticmethod
     def _fijo_fila(f: sqlite3.Row) -> dict:
         return {"id": f["id"], "nombre": f["nombre"], "alias": json.loads(f["alias"]), "kcal": f["kcal"],
-                "por": f["por"], "nota": f["nota"], "comun": bool(f["comun"])}
+                "por": f["por"], "nota": f["nota"], "comun": bool(f["comun"]), "proteina": f["proteina"],
+                "hidratos": f["hidratos"], "grasa": f["grasa"], "macros_origen": f["macros_origen"]}
 
     @staticmethod
     def _version_fila(v: sqlite3.Row, en_uso: int) -> dict:
@@ -393,7 +486,22 @@ class Recetario:
         datos["dudosos"] = sum(i["estado"] == "dudoso" for i in ingredientes)
         datos["estado"] = estado_version(datos)
         datos["en_uso"] = v["numero"] == en_uso
+        suma = _suma_macros(ingredientes)  # unit 098 (R1): the whole recipe, and per 100 g as its kcal
+        datos["macros_total"] = _escalar(suma, 1)
+        datos["macros_100g"] = _escalar(suma, Recetario._factor_100g(datos))
+        datos["sin_macros"] = _sin_macros(ingredientes)
         return datos
+
+    @staticmethod
+    def _factor_100g(v: dict) -> float | None:
+        """What part of the whole recipe 100 g are: its net weight, or (not weighed) its approximate kcal/100 g."""
+        if v.get("kcal_100g") is not None and v.get("peso_neto_g"):
+            return 100 / v["peso_neto_g"]
+        if v.get("kcal_total"):
+            por_100 = v["kcal_100g"] if v.get("kcal_100g") is not None else v.get("kcal_100g_aprox")
+            if por_100 is not None:
+                return por_100 / v["kcal_total"]
+        return None
 
     def _receta_de(self, conn: sqlite3.Connection, r: sqlite3.Row) -> dict:
         versiones = [self._version_fila(v, r["version_en_uso"]) for v in conn.execute(
@@ -496,28 +604,48 @@ class Recetario:
             _kcal_100g_valida(kcal)
         elif kcal < 0:
             raise ValueError("las kcal por unidad no pueden ser negativas")
-        return {"nombre": nombre, "alias": _alias(datos), "kcal": kcal, "por": por, "nota": _texto(datos, "nota")}
+        f = {"nombre": nombre, "alias": _alias(datos), "kcal": kcal, "por": por, "nota": _texto(datos, "nota")}
+        if any(k in datos for k in MACROS_FIJO):  # unit 098 (R7): sent by hand, all three or none
+            f["macros"] = _macros_validos({k: _numero(datos, k) for k in MACROS_FIJO}, por)
+        return f
 
     def crear_fijo(self, datos: dict) -> dict:
+        """Unit 098 (R7): macros written by hand are «de etiqueta»."""
         f = self._datos_fijo(datos)
+        macros = f.get("macros")
         with self._connect() as conn:
             self._unico(conn, [f["nombre"], *f["alias"]], ("fijo", None))
-            cur = conn.execute("INSERT INTO alimento_fijo (nombre, alias, kcal, por, nota) VALUES (?, ?, ?, ?, ?)",
-                               (f["nombre"], json.dumps(f["alias"], ensure_ascii=False), f["kcal"], f["por"], f["nota"]))
+            cur = conn.execute(
+                "INSERT INTO alimento_fijo (nombre, alias, kcal, por, nota, proteina, hidratos, grasa, macros_origen) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (f["nombre"], json.dumps(f["alias"], ensure_ascii=False), f["kcal"], f["por"], f["nota"],
+                 *(macros[k] if macros else None for k in MACROS_FIJO), "etiqueta" if macros else None))
             return self._fijo_fila(self._leer(conn, "alimento_fijo", int(cur.lastrowid or 0)))
 
     def cambiar_fijo(self, fijo_id: int, datos: dict) -> dict:
-        """A2: change it in place. What was logged and the saved recipe versions keep their kcal."""
+        """A2: change it in place. What was logged and the saved recipe versions keep their kcal.
+
+        Unit 098 (R7, C-345): macros not sent stay as they were; sent and different from the saved ones, they are
+        «de etiqueta» (Andrés wrote them with the label in front); sent as they were, they keep their origin. The
+        recipes in use take them for what is logged from then on (their kcal do not change)."""
         with self._connect() as conn:
             antes = self._leer(conn, "alimento_fijo", fijo_id)
             f = self._datos_fijo(datos)
             self._unico(conn, [f["nombre"], *f["alias"]], ("fijo", fijo_id))
             if antes["comun"]:  # unit 026 (R4): corrected, it is his; the common one is not loaded again
                 conn.execute("INSERT OR IGNORE INTO comun_quitado (nombre) VALUES (?)", (normalizar(antes["nombre"]),))
-            conn.execute("UPDATE alimento_fijo SET nombre = ?, alias = ?, kcal = ?, por = ?, nota = ?, comun = 0 "
-                         "WHERE id = ?",
+            viejos = {k: antes[k] for k in MACROS_FIJO}
+            origen = antes["macros_origen"]
+            if "macros" in f:
+                nuevos = f["macros"] or dict.fromkeys(MACROS_FIJO)
+                if nuevos != viejos:
+                    origen = "etiqueta" if f["macros"] else None
+                viejos = nuevos
+            conn.execute("UPDATE alimento_fijo SET nombre = ?, alias = ?, kcal = ?, por = ?, nota = ?, comun = 0, "
+                         "proteina = ?, hidratos = ?, grasa = ?, macros_origen = ? WHERE id = ?",
                          (f["nombre"], json.dumps(f["alias"], ensure_ascii=False), f["kcal"], f["por"], f["nota"],
-                          fijo_id))
+                          *(viejos[k] for k in MACROS_FIJO), origen, fijo_id))
+            self._recalcular_en_uso(conn)
             return self._fijo_fila(self._leer(conn, "alimento_fijo", fijo_id))
 
     def borrar_fijo(self, fijo_id: int, confirmado: bool = False) -> dict:
@@ -607,15 +735,17 @@ class Recetario:
             i = _ingrediente_crudo(crudo)
             fijo = fijos.get(normalizar(i["guardado"])) or fijos.get(normalizar(i["nombre"]))
             kcal = _kcal_de_fijo(fijo, i["cantidad"], i["unidad"]) if fijo and not i["dudoso"] else None
-            if kcal is not None and fijo is not None:
+            if kcal is not None and fijo is not None:  # unit 098: its macros, the fixed food's (never the page's)
                 resultado.append({"nombre": fijo["nombre"], "cantidad": i["cantidad"], "unidad": i["unidad"],
-                                  "kcal": kcal, "estado": "guardado"})
+                                  "kcal": kcal, "estado": "guardado",
+                                  **(_macros_de_fijo(fijo, i["cantidad"], i["unidad"]) or dict.fromkeys(MACROS))})
             elif i["dudoso"] or i["kcal"] is None:
                 resultado.append({"nombre": i["nombre"], "cantidad": i["cantidad"], "unidad": i["unidad"],
-                                  "kcal": None, "estado": "dudoso"})
-            else:
+                                  "kcal": None, "estado": "dudoso", **dict.fromkeys(MACROS)})
+            else:  # unit 098: an estimated line keeps the macros that came with it (the team's, or none)
                 resultado.append({"nombre": i["nombre"], "cantidad": i["cantidad"], "unidad": i["unidad"],
-                                  "kcal": _redondear(i["kcal"]), "estado": "estimado"})
+                                  "kcal": _redondear(i["kcal"]), "estado": "estimado",
+                                  **{k: (_redondear(i["macros"][k]) if i["macros"] else None) for k in MACROS}})
         return resultado
 
     def _version(self, conn: sqlite3.Connection, datos: dict, base: dict | None) -> dict:
@@ -776,7 +906,8 @@ class Recetario:
                 como = "por 100 g: dilo en gramos" if cosa["por"] == "100g" else "por unidad: dilo en unidades"
                 return {"problema": f"«{cosa['nombre']}» está guardado {como}", "dudoso": False}
             origen = "de la lista de comunes" if cosa.get("comun") else f"de tu ingrediente «{cosa['nombre']}»"
-            return {"kcal": kcal, "origen": origen, "provisional": False}
+            return {"kcal": kcal, "origen": origen, "provisional": False,
+                    **(_macros_de_fijo(cosa, cantidad, unidad) or dict.fromkeys(MACROS))}
         v = cosa["en_uso"]
         tanda = f" (tanda {v['numero']})" if len(cosa["versiones"]) > 1 else ""
         origen = f"de tu receta «{cosa['nombre']}»{tanda}"
@@ -785,15 +916,23 @@ class Recetario:
                                 "dudoso y no se puede calcular", "dudoso": True}
         if cantidad is None:
             return {"problema": None, "dudoso": False}
+        suma = _suma_macros(v["ingredientes"])  # unit 098 (R4): a portion takes them in proportion to its kcal
+
+        def con_macros(datos: dict, factor: float | None) -> dict:
+            return {**datos, **(_escalar(suma, factor) or dict.fromkeys(MACROS))}
+
         if unidad == "receta":
-            return {"kcal": _redondear(cantidad * v["kcal_total"]), "origen": origen,
-                    "provisional": v["estado"] != "definitiva"}
+            return con_macros({"kcal": _redondear(cantidad * v["kcal_total"]), "origen": origen,
+                               "provisional": v["estado"] != "definitiva"}, cantidad)
         if unidad == "g":
+            por_100 = Recetario._factor_100g(v)
+            factor = cantidad * por_100 / 100 if por_100 is not None else None
             if v["kcal_100g"] is not None:
-                return {"kcal": _redondear(cantidad * v["kcal_100g"] / 100), "origen": origen, "provisional": False}
+                return con_macros({"kcal": _redondear(cantidad * v["kcal_100g"] / 100), "origen": origen,
+                                   "provisional": False}, factor)
             if v["kcal_100g_aprox"] is not None:
-                return {"kcal": _redondear(cantidad * v["kcal_100g_aprox"] / 100), "origen": origen,
-                        "provisional": True}
+                return con_macros({"kcal": _redondear(cantidad * v["kcal_100g_aprox"] / 100), "origen": origen,
+                                   "provisional": True}, factor)
             return {"problema": f"«{cosa['nombre']}» no está pesada: dilo en fracción («un cuarto de "
                                 f"{cosa['nombre']}») o pon sus kcal/100 g aproximadas en la pestaña Recetas",
                     "dudoso": True}
@@ -833,7 +972,8 @@ class Recetario:
         if "problema" in calculo:  # another unit than its own (or a fraction of a fixed food)
             raise ValueError(calculo["problema"] or "no se puede calcular")
         return {"nombre": cosa["nombre"], "cantidad": cantidad, "unidad": unidad, "kcal": calculo["kcal"],
-                "origen": calculo["origen"], "provisional": calculo["provisional"]}
+                "origen": calculo["origen"], "provisional": calculo["provisional"],
+                **{k: calculo.get(k) for k in MACROS}}
 
     def resolver(self, alimento: dict) -> dict:
         """What the list shows for one interpreted food (D1, D2, D6; R-42, R-43, R-45, R-48).
@@ -868,7 +1008,7 @@ class Recetario:
                 salida.update(estimado=True, supuestos=[*(alimento.get("supuestos") or []), calculo["problema"]])
             return salida
         salida.update(nombre=cosa["nombre"], kcal=calculo["kcal"], estimado=False, dudoso=False,
-                      proteina_g=None, hidratos_g=None, grasa_g=None, supuestos=[], origen=calculo["origen"],
+                      **{k: calculo.get(k) for k in MACROS}, supuestos=[], origen=calculo["origen"],
                       provisional=calculo["provisional"])
         if coincidencia == "parecida":
             que = "tu receta" if tipo == "receta" else "tu ingrediente"
@@ -876,6 +1016,169 @@ class Recetario:
             salida["kcal_estimada"] = alimento.get("kcal")
             salida["supuestos"] = [f"has dicho «{nombre}»: te propongo {que} «{cosa['nombre']}»"]
         return salida
+
+    # -- unit 098 (R-270): filling in the macros that are missing, once ----------------------------------------------
+
+    def _recalcular_en_uso(self, conn: sqlite3.Connection) -> list[str]:
+        """The lines of saved ingredients of every recipe in use take their fixed food's macros now (their kcal stay
+        as they were saved). Returns the names of the recipes whose macros changed."""
+        fijos = self._fijos_por_nombre(conn)
+        cambiadas = []
+        for v in conn.execute("SELECT v.id, v.ingredientes, r.nombre FROM receta_version v JOIN receta r "
+                              "ON r.id = v.receta_id AND r.version_en_uso = v.numero ORDER BY r.id").fetchall():
+            ingredientes = json.loads(v["ingredientes"])
+            nuevos = [self._linea_al_dia(i, fijos) for i in ingredientes]
+            if nuevos != ingredientes:
+                conn.execute("UPDATE receta_version SET ingredientes = ? WHERE id = ?",
+                             (json.dumps(nuevos, ensure_ascii=False), v["id"]))
+                cambiadas.append(v["nombre"])
+        return cambiadas
+
+    @staticmethod
+    def _linea_al_dia(linea: dict, fijos: dict[str, dict]) -> dict:
+        fijo = fijos.get(normalizar(linea.get("nombre"))) if linea.get("estado") == "guardado" else None
+        if fijo is None:
+            return linea
+        macros = _macros_de_fijo(fijo, linea.get("cantidad"), linea.get("unidad")) or dict.fromkeys(MACROS)
+        if all(linea.get(k) == macros[k] for k in MACROS):
+            return linea
+        return {**linea, **macros}
+
+    def _faltan(self, conn: sqlite3.Connection) -> tuple[dict[str, dict], list[str]]:
+        """clave → what is missing (fixed foods without macros; estimated lines of the recipes in use without them),
+        and the recipes in use without ingredients (they cannot have macros: theirs come from their ingredients)."""
+        faltan: dict[str, dict] = {}
+        for f in conn.execute("SELECT * FROM alimento_fijo ORDER BY comun, nombre COLLATE NOCASE, id"):
+            if any(f[k] is None for k in MACROS_FIJO):
+                faltan[f"fijo:{f['id']}"] = {"tipo": "fijo", "id": f["id"], "nombre": f["nombre"], "kcal": f["kcal"],
+                                             "por": f["por"],
+                                             "base": "por 100 g" if f["por"] == "100g" else "por unidad"}
+        sin_ingredientes = []
+        for v in conn.execute("SELECT v.id, v.ingredientes, r.id AS receta_id, r.nombre FROM receta_version v "
+                              "JOIN receta r ON r.id = v.receta_id AND r.version_en_uso = v.numero "
+                              "ORDER BY r.nombre COLLATE NOCASE, r.id").fetchall():
+            ingredientes = json.loads(v["ingredientes"])
+            if not ingredientes:
+                sin_ingredientes.append(v["nombre"])
+            for n, i in enumerate(ingredientes):
+                if i.get("estado") == "estimado" and i.get("kcal") and any(i.get(k) is None for k in MACROS):
+                    cuanto = f"{i['cantidad']:g} {i.get('unidad') or ''}".strip() if i.get("cantidad") else "sin cantidad"
+                    faltan[f"receta:{v['receta_id']}:{n}"] = {
+                        "tipo": "linea", "version_id": v["id"], "indice": n, "nombre": i["nombre"],
+                        "receta": v["nombre"], "kcal": i["kcal"], "cantidad": i.get("cantidad"),
+                        "unidad": i.get("unidad"), "base": f"{cuanto} en «{v['nombre']}»"}
+        return faltan, sin_ingredientes
+
+    def macros_que_faltan(self) -> dict:
+        """R2: what has no macros yet (each with its `clave`), and the recipes that cannot have them. Read-only."""
+        with self._connect() as conn:
+            faltan, sin_ingredientes = self._faltan(conn)
+        return {"filas": [{"clave": c, **{k: x for k, x in f.items() if k in ("tipo", "nombre", "receta", "base",
+                                                                                 "kcal")}}
+                          for c, f in faltan.items()],
+                "sin_ingredientes": sin_ingredientes}
+
+    def _filas_propuestas(self, conn: sqlite3.Connection, propuestas: Any) -> list[dict]:
+        """The team's values checked against what is missing now (R3). ValueError with every reason."""
+        if not isinstance(propuestas, list) or not propuestas:
+            raise ErrorDatos("propuestas tiene que ser una lista con clave, proteina, hidratos y grasa")
+        faltan, _ = self._faltan(conn)
+        todos = {f"fijo:{f['id']}": f for f in conn.execute("SELECT * FROM alimento_fijo")}
+        filas, errores, vistas = [], [], set()
+        for p in propuestas:
+            if not isinstance(p, dict) or not isinstance(p.get("clave"), str):
+                raise ErrorDatos("cada propuesta tiene que ser un objeto con su clave")
+            clave = p["clave"].strip()
+            if clave in vistas:
+                errores.append(f"«{clave}» va dos veces")
+                continue
+            vistas.add(clave)
+            que = faltan.get(clave)
+            if que is None:
+                ya = todos.get(clave)
+                errores.append(f"«{ya['nombre']}» ya tiene sus macros: no se tocan" if ya is not None
+                               else f"«{clave}» no es nada que falte (mira preparar_macros sin propuestas)")
+                continue
+            try:
+                valores = {k: _numero(p, k, f"{que['nombre']}: {k}") for k in MACROS_FIJO}
+                por = que["por"] if que["tipo"] == "fijo" else None
+                macros = _macros_validos(valores, por, que["nombre"])
+                if macros is None:
+                    raise ValueError(f"«{que['nombre']}»: faltan sus macros")
+                if que["tipo"] == "linea" and que["unidad"] in ("g", "ml") and que["cantidad"]:
+                    _macros_validos({k: v / que["cantidad"] * 100 for k, v in macros.items()}, "100g", que["nombre"])
+            except ValueError as exc:
+                errores.append(str(exc))
+                continue
+            filas.append({"clave": clave, **que, **{k: _redondear(macros[k]) for k in MACROS_FIJO},
+                          "aviso": no_cuadra(que["kcal"], *(macros[k] for k in MACROS_FIJO))})
+        if errores:
+            raise ValueError("; ".join(errores))
+        return filas
+
+    def _aplicar_macros(self, conn: sqlite3.Connection, filas: list[dict]) -> list[str]:
+        """Write the accepted rows as «estimado» and recompute the recipes in use (in the caller's transaction)."""
+        lineas: dict[int, list[dict]] = {}
+        for f in filas:
+            if f["tipo"] == "fijo":
+                conn.execute("UPDATE alimento_fijo SET proteina = ?, hidratos = ?, grasa = ?, macros_origen = "
+                             "'estimado' WHERE id = ?", (f["proteina"], f["hidratos"], f["grasa"], f["id"]))
+                continue
+            if f["version_id"] not in lineas:
+                fila = conn.execute("SELECT ingredientes FROM receta_version WHERE id = ?",
+                                    (f["version_id"],)).fetchone()
+                lineas[f["version_id"]] = json.loads(fila["ingredientes"])
+            linea = lineas[f["version_id"]][f["indice"]]
+            linea.update({g: f[k] for k, g in zip(MACROS_FIJO, MACROS, strict=True)})
+        for version_id, ingredientes in lineas.items():
+            conn.execute("UPDATE receta_version SET ingredientes = ? WHERE id = ?",
+                         (json.dumps(ingredientes, ensure_ascii=False), version_id))
+        return self._recalcular_en_uso(conn)
+
+    def validar_macros(self, propuestas: Any) -> dict:
+        """R2, R3: what `guardar_macros` would save (each row with its warning if it does not match its kcal) and the
+        recipes in use it touches, with whether they would have macros. Writes NOTHING (it works on a copy in memory
+        of the same file and throws it away). ValueError with every reason if a value is impossible."""
+        with self._connect() as conn:
+            filas = self._filas_propuestas(conn, propuestas)
+            copia = sqlite3.connect(":memory:")
+            copia.row_factory = sqlite3.Row
+            try:
+                conn.backup(copia)
+                recetas = self._aplicar_macros(copia, filas)
+                estado = self._estado_macros(copia, recetas)
+            finally:
+                copia.close()
+        return {"filas": filas, "recetas": estado}
+
+    @staticmethod
+    def _estado_macros(conn: sqlite3.Connection, nombres: list[str]) -> list[dict]:
+        estado = []
+        for v in conn.execute("SELECT v.ingredientes, r.nombre FROM receta_version v JOIN receta r "
+                              "ON r.id = v.receta_id AND r.version_en_uso = v.numero ORDER BY r.nombre COLLATE NOCASE"):
+            if v["nombre"] in nombres:
+                ingredientes = json.loads(v["ingredientes"])
+                estado.append({"nombre": v["nombre"], "sin_macros": _sin_macros(ingredientes),
+                               "con_macros": _suma_macros(ingredientes) is not None})
+        return estado
+
+    def guardar_macros(self, propuestas: Any, rechazar: Any = None) -> dict:
+        """R2 (C-343): save the accepted rows as «estimado» (minus `rechazar`, the claves Andrés said no to, which stay
+        without macros) and recompute the recipes in use, in ONE write. What was logged never changes."""
+        if rechazar is None:
+            rechazar = []
+        if not isinstance(rechazar, list) or not all(isinstance(c, str) for c in rechazar):
+            raise ErrorDatos("rechazar tiene que ser una lista de claves")
+        with self._connect() as conn:
+            filas = self._filas_propuestas(conn, propuestas)
+            claves = {f["clave"] for f in filas}
+            fuera = [c for c in rechazar if c.strip() not in claves]
+            if fuera:
+                raise ValueError(f"rechazar: {', '.join(fuera)} no está en la propuesta")
+            aceptadas = [f for f in filas if f["clave"] not in {c.strip() for c in rechazar}]
+            recetas = self._aplicar_macros(conn, aceptadas)
+            estado = self._estado_macros(conn, recetas)
+        return {"filas": aceptadas, "rechazadas": len(filas) - len(aceptadas), "recetas": estado}
 
     # -- D7: loading deficit.md ------------------------------------------------------------------------------
 

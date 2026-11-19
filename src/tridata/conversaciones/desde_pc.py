@@ -35,6 +35,11 @@ in `apuntar_comida_desde_pc`. The same rule as `apuntar_comida`: Andrés's «sí
 Bug 085: when a food is logged more than once with that name, the answer shows each one with its number, and the
 change says which one with `eleccion`.
 
+Unit 098 (REC-43, R-269..R-273): `recetario_texto` shows the macros of what is saved; `preparar_macros_desde_pc`
+lists what has no macros and, with the coach's values, the table and its fingerprint (writes nothing);
+`guardar_macros_desde_pc` saves them as «estimado» only with Andrés's «sí» and that fingerprint (minus what he says no
+to). Logging from a saved thing takes its macros (`_de_lo_guardado`); anything else, the ones the coach estimated.
+
 Each save leaves its message in «Desde el PC» (R-196). Nothing here calls a paid AI.
 
 What a tool answers never carries a value of Andrés beyond what the card says; the logs carry ids and counts only.
@@ -59,7 +64,7 @@ from ..nutricion.asistente import (Cambiado, Contexto as ContextoAsistente, NoVa
                                    confirmar, descripcion_alimento, numero, proponer)
 from ..nutricion.ajustes import DESDE_SIEMPRE
 from ..nutricion.peso import peso_valido
-from ..nutricion.recetas import normalizar
+from ..nutricion.recetas import ErrorDatos, normalizar
 from ..nutricion.registro import validar_seccion
 from ..nutricion.suplementacion import FALTA_LA_HORA, Suplementacion, describir, validar_hora
 from ..plan import Planes
@@ -419,9 +424,13 @@ def recetario_texto(equipo: Equipo) -> str:
             "id": r["id"], "nombre": r["nombre"], "alias": r["alias"],
             "estado": "por_revisar" if r["por_revisar"] else v.get("estado"), "kcal_100g": v.get("kcal_100g"),
             "kcal_100g_aprox": v.get("kcal_100g_aprox") if v.get("kcal_100g") is None else None,
-            "kcal_receta": v.get("kcal_total")}.items() if x not in (None, [])})
+            "kcal_receta": v.get("kcal_total"), "macros_100g": v.get("macros_100g"),
+            "macros_receta": v.get("macros_total"), "sin_macros": v.get("sin_macros") or None}.items()
+            if x not in (None, [])})
     ingredientes = [{k: x for k, x in {"id": f["id"], "nombre": f["nombre"], "alias": f["alias"], "kcal": f["kcal"],
-                                         "por": f["por"], "comun": f["comun"] or None}.items() if x not in (None, [])}
+                                         "por": f["por"], "comun": f["comun"] or None, "proteina": f["proteina"],
+                                         "hidratos": f["hidratos"], "grasa": f["grasa"],
+                                         "macros_origen": f["macros_origen"]}.items() if x not in (None, [])}
                     for f in recetario.fijos()]
     return json.dumps({"recetas": recetas, "ingredientes": ingredientes}, ensure_ascii=False, separators=(",", ":"))
 
@@ -443,7 +452,8 @@ def _guardado_por_nombre(recetario: Recetario, nombre: Any) -> tuple[str, int] |
 def _de_lo_guardado(recetario: Recetario, crudo: dict) -> dict:
     """R3: a food chosen by its id (`guardado: {tipo, id}`) or named as a saved one takes the name, kcal, origin and
     provisional of `Recetario.para_apuntar` (never the coach's kcal), as the app with a food chosen from the saved ones
-    (unit 019); any other one goes as it came (R-43, as before). ValueError, with why, if the saved one cannot be
+    (unit 019), and since unit 098 (R-271) its macros for that quantity (never the coach's either); any other one goes
+    as it came, with the macros the coach estimated (R-43, R-272). ValueError, with why, if the saved one cannot be
     worked out with that quantity and unit: nothing is logged with another number in silence."""
     nombre = crudo.get("nombre") if isinstance(crudo.get("nombre"), str) and crudo["nombre"].strip() else "lo elegido"
     sin = {k: v for k, v in crudo.items() if k != "guardado"}
@@ -468,8 +478,115 @@ def _de_lo_guardado(recetario: Recetario, crudo: dict) -> dict:
         raise ValueError(f"«{nombre}» ya no está guardado") from None
     except ValueError as exc:
         raise ValueError(f"«{nombre}»: {exc}") from None
-    return {**sin, **datos, "estimado": False, "dudoso": False, "supuestos": [], "proteina_g": None,
-            "hidratos_g": None, "grasa_g": None}
+    return {**sin, **datos, "estimado": False, "dudoso": False, "supuestos": []}
+
+
+# -- unit 098 (R-270, R3): the macros of what is saved, filled in once -----------------------------------------------
+
+PREGUNTA_MACROS = ("Enséñaselo a Andrés tal cual y pregúntale; solo con su «sí», llama a guardar_macros con estas "
+                   "mismas propuestas y esta huella (y en rechazar, las claves de las que diga que no: quedan sin "
+                   "macros).")
+
+
+def _g(x: Any) -> str:
+    return _coma(round(float(x), 1))
+
+
+def _recetas_macros(recetas: list[dict]) -> str:
+    """«Porridge» (queda con macros); «Tostada» (aún sin macros: faltan 1)."""
+    partes = []
+    for r in recetas:
+        como = "queda con macros" if r["con_macros"] else f"aún sin macros: faltan {r['sin_macros']}"
+        partes.append(f"«{r['nombre']}» ({como})")
+    return "; ".join(partes)
+
+
+def _recalculadas(recetas: list[dict]) -> str:
+    if not recetas:
+        return ""
+    return f"\nRecetas en uso que se recalculan (sus kcal no cambian): {_recetas_macros(recetas)}."
+
+
+def _tabla_macros(filas: list[dict]) -> str:
+    lineas = ["| clave | qué | base | kcal | proteína (g) | hidratos (g) | grasa (g) | aviso |",
+              "|---|---|---|---|---|---|---|---|"]
+    for f in filas:
+        lineas.append(f"| {f['clave']} | {f['nombre']} | {f['base']} | {_g(f['kcal'])} | {_g(f['proteina'])} | "
+                      f"{_g(f['hidratos'])} | {_g(f['grasa'])} | {f['aviso'] or ''} |")
+    return "\n".join(lineas)
+
+
+def _macros_propuestos(equipo: Equipo, propuestas: Any) -> tuple[dict, str] | str:
+    """(what would be saved, its fingerprint), or why it is refused (R3)."""
+    try:
+        visto = equipo.asistente.recetario.validar_macros(propuestas)
+    except ErrorDatos as exc:
+        return f"No se entiende la propuesta: {exc}. {NADA}"
+    except ValueError as exc:
+        return f"No se puede guardar así: {exc}. Corrígelo y vuelve a llamar a preparar_macros. {NADA}"
+    contenido = [{k: f.get(k) for k in ("clave", "nombre", "base", "kcal", "proteina", "hidratos", "grasa", "aviso")}
+                 for f in visto["filas"]]
+    firma = json.dumps({"filas": contenido, "recetas": visto["recetas"]}, ensure_ascii=False, sort_keys=True)
+    return visto, hashlib.sha256(firma.encode("utf-8")).hexdigest()[:12]
+
+
+def preparar_macros_desde_pc(equipo: Equipo, propuestas: Any = None) -> str:
+    """R2 (R-270): without `propuestas`, what has no macros yet, each with its clave; with them, the table that
+    `guardar_macros_desde_pc` would save (warning what does not match its kcal) and its fingerprint. Writes nothing."""
+    if propuestas in (None, [], ""):
+        falta = equipo.asistente.recetario.macros_que_faltan()
+        lineas = ["Lo que aún no tiene macros (estima proteína, hidratos y grasa en gramos para la base de cada uno: "
+                  "por 100 g o por unidad, como sus kcal; en una línea de receta, para esa cantidad):",
+                  "| clave | qué | base | kcal |", "|---|---|---|---|"]
+        lineas += [f"| {f['clave']} | {f['nombre']} | {f['base']} | {_g(f['kcal'])} |" for f in falta["filas"]]
+        if not falta["filas"]:
+            lineas = ["No falta ningún macro: todo lo guardado (con kcal) ya los tiene."]
+        if falta["sin_ingredientes"]:
+            lineas.append("Recetas sin ingredientes (sus macros salen de sus ingredientes: hasta que se los ponga en la "
+                          "pestaña Recetas no pueden tenerlos): " + ", ".join(f"«{n}»" for n in falta["sin_ingredientes"])
+                          + ".")
+        lineas.append("Luego llama a preparar_macros con propuestas: [{clave, proteina, hidratos, grasa}].")
+        return "\n".join(lineas)
+    hecho = _macros_propuestos(equipo, propuestas)
+    if isinstance(hecho, str):
+        return hecho
+    visto, la_huella = hecho
+    return (f"Esto es lo que se guardaría como «estimado» (aún no está guardado; lo ya apuntado no cambia):\n"
+            f"{_tabla_macros(visto['filas'])}{_recalculadas(visto['recetas'])}\n{PREGUNTA_MACROS}\n"
+            f"Huella: {la_huella}")
+
+
+def guardar_macros_desde_pc(equipo: Equipo, papel: str, propuestas: Any, huella_vista: str, rechazar: Any = None,
+                            texto: str = "") -> str:
+    """R2 (R-270, C-343): the rows preparar_macros showed, saved as «estimado» minus `rechazar`, only if they are still
+    the ones with `huella_vista`; the recipes in use recomputed; then the message of R-196. Otherwise nothing."""
+    if papel not in PAPELES_PC:
+        return papel_no_valido(papel)
+    hecho = _macros_propuestos(equipo, propuestas)
+    if isinstance(hecho, str):
+        return hecho
+    visto, la_huella = hecho
+    if la_huella != str(huella_vista).strip():
+        return (f"{CAMBIO_VISTO} {NADA} Lo que se guardaría ahora:\n{_tabla_macros(visto['filas'])}"
+                f"{_recalculadas(visto['recetas'])}\n{PREGUNTA_MACROS}\nHuella: {la_huella}")
+    try:
+        guardado = equipo.asistente.recetario.guardar_macros(propuestas, rechazar)
+    except ErrorDatos as exc:
+        return f"No se entiende: {exc}. {NADA}"
+    except (sqlite3.Error, ValueError) as exc:
+        log.warning("macros from the PC not saved (%s)", type(exc).__name__)
+        return f"No se han guardado los macros: {exc}. {NADA}"
+    log.info("macros saved from the PC (%d rows, %d refused, %d recipes)", len(guardado["filas"]),
+             guardado["rechazadas"], len(guardado["recetas"]))
+    nombres = ", ".join(f"«{f['nombre']}»" for f in guardado["filas"]) or "ninguno"
+    hecho_texto = f"Hecho: macros guardados como «estimado» en {len(guardado['filas'])} ({nombres})"
+    if guardado["rechazadas"]:
+        hecho_texto += f"; {guardado['rechazadas']} sin macros, como dijo Andrés"
+    if guardado["recetas"]:
+        hecho_texto += f"; recetas recalculadas: {_recetas_macros(guardado['recetas'])}"
+    hecho_texto += ". Lo ya apuntado no ha cambiado."
+    _apuntar(equipo, papel, texto, hecho_texto)
+    return hecho_texto
 
 
 # -- unit 081 · R1 (R-131, R-132): the plan's .md ordered by the coach -----------------------------------------------
@@ -810,6 +927,6 @@ def perfil_ruta_desde_pc(equipo: Equipo, garmin: Any = None, actividad: Any = No
 
 __all__ = ["NADA", "PAPELES_PC", "TITULO", "Equipo", "analiticas_pendientes", "apuntar_comida_desde_pc",
            "apuntar_peso_desde_pc", "apuntar_toma_desde_pc", "leche_cafes_desde_pc", "contexto", "conversacion_pc", "guardar_transcripcion_desde_pc", "hacer_desde_pc",
-           "huella", "importar_plan_desde_pc", "montar_equipo", "papel_no_valido", "perfil_ruta_desde_pc",
-           "preparar_desde_pc", "preparar_plan_desde_pc", "preparar_transcripcion_desde_pc", "recetario_texto",
+           "guardar_macros_desde_pc", "huella", "importar_plan_desde_pc", "montar_equipo", "papel_no_valido",
+           "perfil_ruta_desde_pc", "preparar_desde_pc", "preparar_macros_desde_pc", "preparar_plan_desde_pc", "preparar_transcripcion_desde_pc", "recetario_texto",
            "rutas_desde_pc", "texto_contexto", "texto_perfil"]

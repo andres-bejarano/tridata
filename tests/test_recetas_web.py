@@ -300,3 +300,38 @@ def test_importar_recetas_simular_formatos_de_deficit(carga, capsys):  # bug 012
         assert "(" not in nombre, nombre
     assert Recetario(carga["db"]).listado() == {"recetas": [], "fijos": [], "ollas": []}
     assert carga["copias"] == []
+
+
+# -- unit 098 · R7 (R-273, C-345): macros in the Recetas tab ---------------------------------------------------------
+
+def test_api_fijo_con_macros_y_su_origen(e):  # 098 R7
+    yogur = e.ok("/api/fijos", {"nombre": "Yougurt 0.0", "kcal": 50, "por": "100g"})["fijo"]
+    assert (yogur["proteina"], yogur["hidratos"], yogur["grasa"], yogur["macros_origen"]) == (None, None, None, None)
+    Recetario(e.db).guardar_macros([{"clave": f"fijo:{yogur['id']}", "proteina": 8, "hidratos": 4, "grasa": 0.1}])
+    listado = e.cliente.get("/api/recetas").json()
+    (visto,) = [f for f in listado["fijos"] if f["id"] == yogur["id"]]
+    assert (visto["proteina"], visto["macros_origen"]) == (8, "estimado")
+    cambiado = e.ok(f"/api/fijos/{yogur['id']}", {"nombre": "Yougurt 0.0", "kcal": 50, "por": "100g",
+                                                  "proteina": "10,2", "hidratos": 4, "grasa": 0.1})["fijo"]
+    assert (cambiado["proteina"], cambiado["macros_origen"]) == (10.2, "etiqueta")
+    malo = e.post(f"/api/fijos/{yogur['id']}", {"nombre": "Yougurt 0.0", "kcal": 50, "por": "100g",
+                                                "proteina": 60, "hidratos": 40, "grasa": 5})
+    assert malo.status_code == 422 and "100 g" in malo.json()["error"]
+
+
+def test_api_receta_ensena_macros_por_100g_y_cuantos_ingredientes_no_tienen(e):  # 098 R7
+    e.ok("/api/fijos", {"nombre": "garbanzo seco", "kcal": 350, "por": "100g", "proteina": 20, "hidratos": 55,
+                        "grasa": 5})
+    e.ok("/api/fijos", {"nombre": "aceite de oliva", "kcal": 900, "por": "100g", "proteina": 0, "hidratos": 0,
+                        "grasa": 100})
+    e.ok("/api/fijos", {"nombre": "cebolla", "kcal": 40, "por": "100g"})
+    lineas = [{"nombre": n, "cantidad": c, "unidad": "g", "kcal": 1, "guardado": n}
+              for n, c in (("garbanzo seco", 600), ("aceite de oliva", 50))]
+    completa = e.ok("/api/recetas", {"nombre": "garbanzos sin cebolla", "ingredientes": lineas,
+                                     "peso_neto_g": 2000})["receta"]["en_uso"]
+    assert completa["macros_100g"] == {"proteina_g": 6.0, "hidratos_g": 16.5, "grasa_g": 4.0}
+    assert completa["sin_macros"] == 0
+    con_cebolla = e.ok("/api/recetas", {"nombre": "garbanzos con cebolla", "peso_neto_g": 2000, "ingredientes": [
+        *lineas, {"nombre": "cebolla", "cantidad": 125, "unidad": "g", "kcal": 1, "guardado": "cebolla"}]})
+    v = con_cebolla["receta"]["en_uso"]
+    assert v["macros_100g"] is None and v["sin_macros"] == 1

@@ -47,7 +47,7 @@ from ..gasto import kcal_previstas
 from ..margen import NIVELES_POR_DEFECTO, PASOS_POR_DEFECTO, objetivo_del_dia
 from ..objetivo_dia import PREVISTOS_MAX, _porcentaje, niveles_validos, pasos_validos
 from ..recetas import normalizar
-from ..registro import SECCIONES, Alimento, RegistroComidas
+from ..registro import MACROS, SECCIONES, Alimento, RegistroComidas, macros_al_cambiar
 from ..suplementacion import Suplementacion, validar_hora
 from . import (
     Accion, Contexto, Peticion, TarjetaMal, buscar_apuntado, campo, corta, descripcion_alimento, elegir, fecha_de, no,
@@ -320,7 +320,7 @@ def _lo_nuevo(ctx: Contexto, fila: dict, nombre: str, cantidad: Any, unidad: str
             return None, str(exc)
         return {"nombre": calculado["nombre"], "cantidad": calculado["cantidad"], "unidad": calculado["unidad"],
                 "kcal": calculado["kcal"], "origen": calculado["origen"], "provisional": calculado["provisional"],
-                "estimado": False}, None
+                "estimado": False, **{k: calculado[k] for k in MACROS}}, None
     if (not sustituye and kcal_estimadas is None and fila["kcal"] is not None and fila["cantidad"]
             and cantidad is not None and unidad == fila["unidad"]):
         return {"nombre": fila["nombre"], "cantidad": cantidad, "unidad": unidad,
@@ -389,7 +389,8 @@ def _aplicar_cambiar(parametros: dict, ctx: Contexto) -> str:
     """ONE write (G-40): name, quantity, unit and kcal with their origin, checked as `RegistroComidas.cambiar` does.
 
     `RegistroComidas.cambiar` drops the origin of new kcal (unit 016, kcal by hand); here they come from what is
-    saved (or are Claude's estimate), so they keep it, in the same UPDATE."""
+    saved (or are Claude's estimate), so they keep it, in the same UPDATE. Unit 098 (R-271, R5): the macros as
+    `macros_al_cambiar` says (a saved one's; none for another food; the same food's scaled as its kcal)."""
     nuevo, ident = parametros["nuevo"], parametros["id"]
     with closing(sqlite3.connect(ctx.registro.db_path)) as conn:
         conn.row_factory = sqlite3.Row
@@ -399,14 +400,14 @@ def _aplicar_cambiar(parametros: dict, ctx: Contexto) -> str:
             if limpio.cantidad is not None and limpio.kcal is None:
                 raise ValueError(f"«{limpio.nombre}» tiene cantidad pero no kcal")
             otro = normalizar(limpio.nombre) != normalizar(fila["nombre"])
+            macros = macros_al_cambiar(fila, {k: nuevo.get(k) for k in MACROS}, limpio.kcal, otro)
             conn.execute(
                 "UPDATE alimento_apuntado SET nombre = ?, cantidad = ?, unidad = ?, kcal = ?, estimado = ?, "
                 "pendiente_cantidad = ?, origen = ?, provisional = ?, proteina_g = ?, hidratos_g = ?, grasa_g = ? "
                 "WHERE id = ?",
                 (limpio.nombre, limpio.cantidad, limpio.unidad, limpio.kcal, int(bool(nuevo["estimado"])),
                  int(limpio.pendiente_cantidad), nuevo["origen"], int(bool(nuevo["provisional"])),
-                 None if otro else fila["proteina_g"], None if otro else fila["hidratos_g"],
-                 None if otro else fila["grasa_g"], ident))
+                 *(macros[k] for k in MACROS), ident))
             guardado = RegistroComidas._fila(RegistroComidas._leer(conn, ident))  # noqa: SLF001
     return f"en el {corta(date.fromisoformat(guardado['dia']))} queda {_que(guardado)}"
 

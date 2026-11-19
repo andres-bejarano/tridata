@@ -43,6 +43,7 @@ HERRAMIENTAS = {
     "get_contexto", "preparar_cambio", "hacer_cambio", "apuntar_comida", "apuntar_peso", "apuntar_toma",
     "apuntar_leche_cafes", "preparar_plan", "importar_plan", "get_analiticas_pendientes", "preparar_transcripcion",
     "guardar_transcripcion", "get_recetas", "get_rutas", "get_perfil_ruta",
+    "preparar_macros", "guardar_macros",  # unit 098
 }
 
 # -- R1 (portante): nothing that stays needs the paid AI -------------------------------------------------------------

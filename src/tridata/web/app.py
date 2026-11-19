@@ -58,7 +58,10 @@
                                   Unit 090: `?dias=14|42|91|365` (42 by default; another value, 400) and `semanas`: the
                                   2, 6, 13 or 52 Monday-to-Sunday weeks by sport (hours, km, load, time by zone);
                                   unit 094: the zones second by second where there is detail, and each week's
-                                  `aproximado` (some session of it still by laps)
+                                  `aproximado` (some session of it still by laps). Unit 097: or
+                                  `?desde=AAAA-MM-DD&hasta=AAAA-MM-DD` (7 days to 2 years, «hasta» up to today; 400
+                                  saying why otherwise): the load cut to those dates and the weeks that touch them;
+                                  `periodo` and `comparacion` (this period against the one before, by sport)
     GET  /api/fitness/semana      unit 093 (REC-37): `?lunes=AAAA-MM-DD&deporte=todos|correr|bici|nadar|fuerza|otros`
                                   the activities of that week (newest first) with its hours, km, load and sessions
                                   next to the mean of the 4 weeks before (`fitness.actividades_semana`); a date that
@@ -208,9 +211,8 @@ from ..nutricion.objetivo_dia import PREVISTOS_MAX
 from ..nutricion.asistente import Contexto as ContextoAsistente
 from ..nutricion.recetas import ErrorDatos, _numero
 from ..nutricion.suplementacion import Suplementacion
-from ..fitness import (DIAS_POR_DEFECTO, RANGOS_DIAS, SEMANAS_DE, TODOS, actividades_semana, comprobar_semana,
-                       detalle_actividad, fitness, texto_pulso)
-from ..fitness import semanas as semanas_fitness
+from ..fitness import (DIAS_POR_DEFECTO, RANGOS_DIAS, TODOS, actividades_semana, comparar, comprobar_semana,
+                       detalle_actividad, fitness, periodo, semanas_periodo, texto_pulso)
 from ..hoy import como_llegas, entreno, texto_sync
 from ..umbral import DEPORTES as DEPORTES_ZONAS, Propuestas, para_ver
 from ..storage import DataStore
@@ -1023,25 +1025,39 @@ def crear_app(
         await run_in_threadpool(_al_dia)
         return JSONResponse(await run_in_threadpool(_hoy))
 
-    def _fitness(dias: int) -> dict:
+    def _fitness(dias: int | None, desde: date, hasta: date) -> dict:
         """Unit 031: the three blocks of Fitness; without Garmin data, an empty store's answer (nothing invented).
-        Unit 090: the load of `dias` days and the weeks of that range (at zero without Garmin)."""
+        Unit 090: the load of `dias` days and the weeks of that range (at zero without Garmin). Unit 097: or the
+        dates `desde`-`hasta` (`dias` None), already checked; and the comparison with the period before."""
         historial = ajustes.historial_fc()
         if store is None:
             falta = {"estado": "no_ha_llegado", "valor": None, "media_7d": None}
             return {"fecha": hoy().isoformat(), "ultima_actividad": None,
+                    "periodo": {"desde": desde.isoformat(), "hasta": hasta.isoformat(),
+                                "dias": (hasta - desde).days + 1, "atajo": dias},
                     "carga": {"hoy": None, "serie": [], "pulso": texto_pulso(historial.vigente(hoy()))},
                     "recuperacion": {"sueno": {"estado": "no_ha_llegado", "segundos": None, "puntuacion": None,
                                                "media_7d": None}, "pulso_reposo": falta, "hrv": dict(falta)},
-                    "semanas": semanas_fitness(None, historial, hoy(), SEMANAS_DE[dias])}
-        return fitness(store, historial, hoy(), dias)
+                    "semanas": semanas_periodo(None, historial, hoy(), dias, desde, hasta),
+                    "comparacion": comparar(None, desde, hasta)}
+        if dias is not None:
+            return fitness(store, historial, hoy(), dias)
+        return fitness(store, historial, hoy(), desde=desde, hasta=hasta)
 
     async def ver_fitness(request: Request) -> Response:
-        texto = request.query_params.get("dias", str(DIAS_POR_DEFECTO))
+        consulta = request.query_params
+        if "desde" in consulta or "hasta" in consulta:  # unit 097 (R-268): dates, or 400 saying why
+            try:
+                desde, hasta = periodo(hoy(), desde=consulta.get("desde"), hasta=consulta.get("hasta"))
+            except ValueError as exc:
+                return _error(str(exc), 400)
+            return JSONResponse(await run_in_threadpool(_fitness, None, desde, hasta))
+        texto = consulta.get("dias", str(DIAS_POR_DEFECTO))
         dias = int(texto) if texto.isdigit() else -1
         if dias not in RANGOS_DIAS:
             return _error("El rango de Fitness es de 14, 42, 91 o 365 días.", 400)
-        return JSONResponse(await run_in_threadpool(_fitness, dias))
+        desde, hasta = periodo(hoy(), dias=dias)
+        return JSONResponse(await run_in_threadpool(_fitness, dias, desde, hasta))
 
     async def ver_semana(request: Request) -> Response:
         try:

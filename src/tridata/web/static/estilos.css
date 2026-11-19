@@ -844,3 +844,20 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .bloque-deporte .que span { overflow-wrap: anywhere; }
 .bloque-deporte.estimadas .valor { color: var(--suave); }
 .zonas-de-sesion { margin: 0 0 8px; font-size: .88rem; }
+
+/* -- unit 097: Fitness — «Elegir fechas» and this period against the one before (fitness.js) -- */
+#fitness-rango { flex-wrap: wrap; }
+#fitness-rango button[data-dias="fechas"] { flex-basis: 100%; }
+.fechas-fitness { margin: 6px 0 4px; }
+.fechas-fitness .aviso { margin: 8px 0 0; }
+.periodos-comparar { margin: 2px 0 8px; font-size: .88rem; }
+.tabla-comparar table { width: 100%; border-collapse: collapse; font-size: .86rem; font-variant-numeric: tabular-nums; table-layout: fixed; }
+.tabla-comparar th, .tabla-comparar td { padding: 5px 4px; text-align: right; overflow-wrap: anywhere; }
+.tabla-comparar thead th { color: var(--suave); font-weight: 600; font-size: .78rem; border-bottom: 1px solid var(--borde); }
+.tabla-comparar th:first-child, .tabla-comparar td:first-child { text-align: left; width: 31%; }
+.tabla-comparar tbody th[colspan] { text-align: left; padding-top: 10px; font-size: .92rem; border-bottom: 1px solid var(--borde); }
+.tabla-comparar tbody td:first-child { color: var(--suave); }
+.tabla-comparar tbody[data-deporte="total"] th, .tabla-comparar tbody[data-deporte="total"] td { font-weight: 650; }
+.tabla-comparar .dif-mas { color: var(--acento); }
+.tabla-comparar .dif-menos { color: var(--objetivo-peso); }
+.tabla-comparar .pct { display: block; font-size: .78rem; opacity: .85; }

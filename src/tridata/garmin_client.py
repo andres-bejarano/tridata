@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,22 @@ def _pool_length_m(raw: dict) -> float | None:
     if length is None or not factor:
         return None
     return length / factor
+
+
+@dataclass
+class ActividadGarmin(Activity):
+    """Unit 096 (R-259): an `Activity` plus Garmin's race mark — `eventType.typeKey` of the list of activities
+    («race» for a competition; None when the list does not bring it). It goes into the stored payload (`to_dict`), so
+    only the sessions brought from now on have it. Here and not in `models.py`, which is not this unit's."""
+
+    event_type: str | None = None
+
+
+def _tipo_evento(raw: dict) -> str | None:
+    """`eventType.typeKey`, tolerant: absent, null or of another shape is None (not a race)."""
+    evento = raw.get("eventType")
+    clave = evento.get("typeKey") if isinstance(evento, dict) else None
+    return clave if isinstance(clave, str) and clave else None
 
 
 DEFAULT_TOKEN_DIR = Path.home() / ".tridata" / "tokens"
@@ -147,7 +164,7 @@ class GarminClient:
         activities: list[Activity] = []
         for raw in raw_activities:
             activities.append(
-                Activity(
+                ActividadGarmin(
                     activity_id=str(raw.get("activityId")),
                     activity_date=date.fromisoformat(raw["startTimeLocal"][:10]),
                     activity_type=raw.get("activityType", {}).get("typeKey", "unknown"),
@@ -176,6 +193,7 @@ class GarminClient:
                     moving_duration_seconds=raw.get("movingDuration"),
                     start_time_local=raw.get("startTimeLocal"),
                     raw=raw,
+                    event_type=_tipo_evento(raw),
                 )
             )
         return activities

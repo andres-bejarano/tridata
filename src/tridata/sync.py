@@ -7,6 +7,9 @@ Unit 061 («Garmin manda»): at the end of each sync (the routine of 08:00 and �
 `sync`), the workouts scheduled in Garmin from 3 days ago to the end of the plan in course reach the plan
 (`plan_desde_garmin`). In its own `try` (R6): a 429 or a failure there leaves the plan as it was, the rest of the sync
 ends the same and the next one tries again. Only counts are logged, never a text of the plan.
+
+Unit 096 (R-259): after saving the laps (`sync_laps`) or the detail (`sync_detalle`) of a session, `umbral.revisar_sesion`
+looks in it for an effort that proposes a new threshold. In its own `try`: a failure there never stops the sync.
 """
 from __future__ import annotations
 
@@ -334,6 +337,7 @@ class SyncService:
                 self._store.save_activity_laps(laps)
             self._store.mark_laps_synced(activity_id, len(laps))
             logger.info("Laps synced for activity %s (%d laps)", activity_id, len(laps))
+            self._buscar_umbral(activity_id)
 
         logger.info("Lap sync complete: %d/%d activities processed", total, len(candidate_ids))
         return total
@@ -396,8 +400,19 @@ class SyncService:
             else:
                 self._store.guardar_detalle(activity_id, detalle)
                 logger.info("Detail synced for activity %s (%d points)", activity_id, len(detalle["t"]))
+                self._buscar_umbral(activity_id)
         logger.info("Detail sync complete: %d activities processed", total)
         return total
+
+    def _buscar_umbral(self, activity_id: str) -> None:
+        """Unit 096 (R-259): the effort of a session just brought may propose a new threshold. Never stops the sync."""
+        from . import umbral  # here: `umbral` reads `fitness`, which reads this module
+
+        try:
+            if umbral.revisar_sesion(self._store, activity_id, date.today()) is not None:
+                logger.info("A new threshold was proposed from activity %s", activity_id)
+        except Exception as exc:  # noqa: BLE001 - R-259: looking for an effort never breaks the sync
+            logger.warning("Threshold not looked for in activity %s (%s)", activity_id, type(exc).__name__)
 
     def _copia_antes_del_relleno(self, fechas: list[str | None]) -> None:
         """R-249: once, before the first pass that asks for an old session, a verified copy of the database in

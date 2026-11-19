@@ -833,3 +833,14 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .vuelta.vuelta-tocable { cursor: pointer; }
 .vuelta.vuelta-marcada { background: var(--acento-suave); }
 .vuelta.vuelta-tocable:focus-visible { outline: 2px solid var(--acento); outline-offset: -2px; }
+
+/* unit 096 (REC-41): zones by sport and the proposals of a new threshold */
+.propuestas-umbral:empty { display: none; }
+.propuesta-umbral { display: grid; gap: 8px; border-color: var(--acento); }
+.propuesta-umbral p { margin: 0; overflow-wrap: break-word; }
+.propuesta-umbral .etiqueta-propuesta { color: var(--acento); }
+.propuesta-umbral .acciones button { min-height: 44px; }
+.grupo > .propuesta-umbral { margin: 0; border-width: 0 0 1px; border-radius: 0; box-shadow: none; padding: 12px 14px; }
+.bloque-deporte .que span { overflow-wrap: anywhere; }
+.bloque-deporte.estimadas .valor { color: var(--suave); }
+.zonas-de-sesion { margin: 0 0 8px; font-size: .88rem; }

@@ -18,6 +18,11 @@
 // in each zone counted second by second; tapping a lap of the list (or Enter on it) highlights its segment. Without
 // detail it says «sin curva de pulso para esta sesión». In «zonas», «aproximado por vueltas» only while a session of
 // the range is still by laps (each week's `aproximado`).
+// Unit 096 (REC-41): a session's laps, curve and time in zone come with the zones of ITS sport (the server says which,
+// and «zonas de bici estimadas desde carrera» when they are). Above the load, each pending proposal of a new threshold
+// (GET /api/umbral/propuestas): «tu umbral de carrera pasa de X a Y (…), ¿actualizo desde hoy?», the zones it would
+// give, and Sí / No (POST /api/umbral/propuestas/N). Only «Sí» changes the zones, from today. `avisoPropuesta` is
+// shared with Ajustes › Pulso y zonas.
 
 import { graficaCarga, graficaPulso, graficaSemanas, leyendaCarga, leyendaSemanas } from "./grafica.js";
 
@@ -79,6 +84,8 @@ function selector(id, clave, alElegir) {
 
 export function iniciarFitness(opciones) {
   ({ api } = opciones);
+  // unit 096: the proposals of a new threshold go above the load (a box of their own, created here)
+  $("fitness-carga").before(el("div", { id: "fitness-propuestas", className: "propuestas-umbral", ariaLive: "polite" }));
   $("fitness-ultima").addEventListener("click", alternarDetalle);
   selector("fitness-rango", "dias", (valor) => { dias = Number(valor); cargarFitness(); });
   selector("fitness-medida", "medida", (valor) => { medida = valor; pintarSemanas(semanasVistas); });
@@ -121,6 +128,44 @@ export async function cargarFitness() {
   pintarSemanas(datos.semanas ?? []);
   pintarUltima(datos.ultima_actividad);
   pintarRecuperacion(datos.recuperacion);
+  cargarPropuestas();
+}
+
+// -- unit 096: the proposals of a new threshold (R-260, R-261) -------------------------------------------------------
+
+const textoZona = (z, i) => (i === 4 ? `Z5 desde ${z[0]}` : `Z${i + 1} ${z[0]}–${z[1]}`);
+
+// One proposal: what it says, the zones it would give and Sí / No. `responder(id, respuesta)` answers it and returns
+// an error text, or null when it went well (the caller repaints).
+export function avisoPropuesta(p, responder) {
+  const si = el("button", { type: "button", className: "principal", textContent: "Sí" });
+  const no = el("button", { type: "button", textContent: "No" });
+  const error = el("p", { className: "aviso", hidden: true });
+  const pulsar = async (respuesta) => {
+    si.disabled = no.disabled = true;
+    const fallo = await responder(p.id, respuesta);
+    if (fallo) { error.textContent = fallo; error.hidden = false; si.disabled = no.disabled = false; }
+  };
+  si.addEventListener("click", () => pulsar("si"));
+  no.addEventListener("click", () => pulsar("no"));
+  return el("article", { className: "tarjeta propuesta-umbral" },
+    el("p", { className: "fuerte" }, el("span", { className: "etiqueta-propuesta", textContent: "Propuesta: " }), p.texto),
+    el("p", { className: "suave zonas-propuesta", textContent: `Zonas de ${p.nombre} que saldrían: ${p.zonas.map(textoZona).join(" · ")}` }),
+    error, el("div", { className: "acciones" }, si, no));
+}
+
+async function cargarPropuestas() {
+  const { ok, datos } = await api("/api/umbral/propuestas");
+  if (ok) pintarPropuestas(datos.propuestas ?? []);
+}
+
+function pintarPropuestas(lista) {
+  $("fitness-propuestas").replaceChildren(...lista.map((p) => avisoPropuesta(p, async (id, respuesta) => {
+    const { ok, datos } = await api(`/api/umbral/propuestas/${id}`, { respuesta });
+    if (!ok) return datos.error ?? "No se ha podido responder.";
+    pintarPropuestas(datos.propuestas ?? []);
+    return null;
+  })));
 }
 
 function pintarSemanas(semanas) {
@@ -406,6 +451,11 @@ function pintarDetalle(d, caja = $("fitness-detalle")) {
   const nodos = [d.curva ? curvaPulso(d.curva, caja.clientWidth - 30, lista)
     : el("p", { className: "suave sin-curva", textContent: "sin curva de pulso para esta sesión" })];
   nodos.push(el("h3", { textContent: `Vueltas de ${d.actividad.nombre}` }));
+  // unit 096 (C-329): which sport's zones colour this session, and whether they are estimated from the run
+  if (d.zonas && d.zonas_deporte) {
+    nodos.push(el("p", { className: `suave zonas-de-sesion${d.zonas_deporte.estimadas ? " estimadas" : ""}`,
+      textContent: `Con tus ${d.zonas_deporte.texto} (umbral ${d.zonas_deporte.umbral}).` }));
+  }
   if (lista) {
     if (!d.zonas) nodos.push(el("p", { className: "aviso", textContent: "Sin zonas confirmadas para ese día: confírmalas en Ajustes › Pulso y zonas." }));
     nodos.push(lista);

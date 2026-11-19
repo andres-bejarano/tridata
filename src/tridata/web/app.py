@@ -90,7 +90,14 @@
     GET  /api/ajustes             settings in force (?fecha=, default today), changes to come, races
     POST /api/ajustes             {"datos": {...}, "desde": "AAAA-MM-DD"} save one or more settings
                                   (`desde` defaults to today); says whether to ask for the limit. Unit 031: also
-                                  «Pulso y zonas» (`fc_max`, `fc_reposo`, `zonas_fc`, `fc_origen`), checked together
+                                  «Pulso y zonas» (`fc_max`, `fc_reposo`, `zonas_fc`, `fc_origen`), checked together.
+                                  Unit 096: also `zonas_fc_bici` and `zonas_fc_natacion`; GET answers `zonas_deporte`
+                                  (run, ride, swim: threshold, zones, whether estimated from the run) and `propuestas`
+    GET  /api/umbral/propuestas   unit 096 (REC-41, R-260): the pending proposals of a new threshold, each with
+                                  «tu umbral de <deporte> pasa de X a Y (<sesión, fecha>), ¿actualizo desde hoy?» and
+                                  the zones that would come out (`umbral.para_ver`)
+    POST /api/umbral/propuestas/N unit 096 (R-261, G-64): {"respuesta": "si"|"no"}; «si» saves the zones of that sport
+                                  from today, «no» never shows it again; 400 another answer, 404 not pending
     POST /api/carrera             add a race {"nombre", "fecha", "dias_mantenimiento"}
     POST /api/carrera/N           change a race (same body)
     POST /api/carrera/N/quitar    remove a race; only with {"confirmado": true}
@@ -205,6 +212,7 @@ from ..fitness import (DIAS_POR_DEFECTO, RANGOS_DIAS, SEMANAS_DE, TODOS, activid
                        detalle_actividad, fitness, texto_pulso)
 from ..fitness import semanas as semanas_fitness
 from ..hoy import como_llegas, entreno, texto_sync
+from ..umbral import DEPORTES as DEPORTES_ZONAS, Propuestas, para_ver
 from ..storage import DataStore
 from ..sync import MOTIVOS, SyncEnMarcha, aviso_sync, cerrojo_sync
 from ..conversaciones import Conversaciones
@@ -433,6 +441,23 @@ def crear_app(
             vista["volver_al_plan"] = any(f["dia"] in quedan and f.get("objetivo_origen") == "dia" for f in s["filas"])
         return vista
 
+    propuestas = Propuestas(store.db_path if store is not None else registro.db_path)  # unit 096: next to Garmin's
+
+    def _zonas_deporte(fecha: date) -> list[dict]:
+        """Unit 096 (R-255, R-256): the three blocks of «Pulso y zonas» in force on `fecha`."""
+        pulso = ajustes.historial_fc().vigente(fecha)
+        bloques = []
+        for deporte in DEPORTES_ZONAS:
+            zonas, estimadas = pulso.zonas_de(deporte) if pulso is not None else (None, False)
+            bloques.append({"deporte": deporte, "umbral": zonas[-1][0] if zonas else None,
+                            "zonas": [list(z) for z in zonas] if zonas else None, "estimadas": estimadas,
+                            "desde": (pulso.desde_zonas.get(deporte) or DESDE_SIEMPRE).isoformat()
+                            if pulso is not None and not estimadas and zonas else None})
+        return bloques
+
+    def _propuestas() -> list[dict]:
+        return para_ver(propuestas.pendientes(), ajustes.historial_fc(), hoy())
+
     def _vista_ajustes(fecha: date) -> dict:
         vigentes = ajustes.vigentes(fecha)
         return {
@@ -441,6 +466,8 @@ def crear_app(
             "futuros": ajustes.cambios_futuros(fecha),
             "carreras": [c.como_dict() for c in vigentes.carreras],
             "plan": plan_del_dia(vigentes),
+            "zonas_deporte": _zonas_deporte(fecha),  # unit 096
+            "propuestas": _propuestas(),
         }
 
     async def faltan_ajustes(request: Request, exc: Exception) -> Response:
@@ -471,6 +498,21 @@ def crear_app(
         except ValueError as exc:
             return _error(f"No se ha guardado nada: {exc}.", 400)
         return JSONResponse({**guardado, "ajustes": _vista_ajustes(hoy()), "dia": _dia(hoy())})
+
+    async def ver_propuestas(request: Request) -> Response:
+        """Unit 096 (R-260): the pending proposals of a new threshold."""
+        return JSONResponse({"propuestas": await run_in_threadpool(_propuestas)})
+
+    async def responder_propuesta(request: Request) -> Response:
+        """Unit 096 (R-261, G-64): only «si» saves the zones of that sport, from today."""
+        cuerpo = await _cuerpo(request) or {}
+        try:
+            propuesta = propuestas.responder(request.path_params["id"], cuerpo.get("respuesta"), ajustes, hoy())
+        except KeyError:
+            return _error("Esa propuesta ya no está pendiente.", 404)
+        except ValueError as exc:
+            return _error(f"No se ha cambiado nada: {exc}.", 400)
+        return JSONResponse({"propuesta": propuesta, "propuestas": _propuestas(), "ajustes": _vista_ajustes(hoy())})
 
     async def anadir_carrera(request: Request) -> Response:
         cuerpo = await _cuerpo(request) or {}
@@ -1054,6 +1096,8 @@ def crear_app(
         Route("/api/actividad/{id}", ver_actividad),
         Route("/api/ajustes", ver_ajustes),
         Route("/api/ajustes", guardar_ajustes, methods=["POST"]),
+        Route("/api/umbral/propuestas", ver_propuestas),
+        Route("/api/umbral/propuestas/{id:int}", responder_propuesta, methods=["POST"]),
         Route("/api/carrera", anadir_carrera, methods=["POST"]),
         Route("/api/carrera/{id:int}", cambiar_carrera, methods=["POST"]),
         Route("/api/carrera/{id:int}/quitar", quitar_carrera, methods=["POST"]),

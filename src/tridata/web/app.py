@@ -280,6 +280,7 @@ class NoSeGuarda(Exception):
 def _con_lo_guardado(recetario: Recetario, crudo: Any) -> Any:
     """Unit 019 (R-93, R-57): a food chosen from the saved ones with the server's kcal, origin and name.
 
+    Unit 098 (R-271): and its macros for that quantity (`para_apuntar`; none if what is saved has none).
     Anything without `guardado` as an object goes back as it came. Raises `NoSeGuarda`.
     """
     if not isinstance(crudo, dict) or not isinstance(crudo.get("guardado"), dict):
@@ -300,8 +301,7 @@ def _con_lo_guardado(recetario: Recetario, crudo: Any) -> Any:
         raise NoSeGuarda(f"{exc}: no se ha guardado nada.", 400) from None
     except ValueError as exc:
         raise NoSeGuarda(f"«{nombre}»: {exc}; no se ha guardado nada.", 422) from None
-    return {**crudo, **datos, "estimado": False, "dudoso": False, "supuestos": [], "proteina_g": None,
-            "hidratos_g": None, "grasa_g": None}
+    return {**crudo, **datos, "estimado": False, "dudoso": False, "supuestos": []}
 
 
 def _sin_estimacion_suelta(alimento: dict) -> dict:

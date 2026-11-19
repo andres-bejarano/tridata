@@ -70,7 +70,7 @@ def test_receta_pesada_por_fraccion(guardado, fraccion, kcal):  # R4 · R-57, R-
     rec, ids = guardado
     a = rec.para_apuntar("receta", ids["Lentejas de la abuela"], fraccion, "receta")
     assert a == {"nombre": "Lentejas de la abuela", "cantidad": fraccion, "unidad": "receta", "kcal": kcal,
-                 "origen": "de tu receta «Lentejas de la abuela»", "provisional": False}
+                 "origen": "de tu receta «Lentejas de la abuela»", "provisional": False, "proteina_g": None, "hidratos_g": None, "grasa_g": None}  # unit 098: saved without macros
 
 
 def test_un_tercio(guardado):  # R4: ⅓ goes as 1/3
@@ -126,7 +126,7 @@ def test_ingrediente_en_su_unidad(guardado):  # R2 · R-57
     rec, ids = guardado
     bote = rec.para_apuntar("fijo", ids["Lentejas cocidas bote"], 400, "g")
     assert bote == {"nombre": "Lentejas cocidas bote", "cantidad": 400, "unidad": "g", "kcal": 360,
-                    "origen": "de tu ingrediente «Lentejas cocidas bote»", "provisional": False}
+                    "origen": "de tu ingrediente «Lentejas cocidas bote»", "provisional": False, "proteina_g": None, "hidratos_g": None, "grasa_g": None}  # unit 098: saved without macros
     gel = rec.para_apuntar("fijo", ids["gel de prueba"], 2, "unidad")
     assert (gel["kcal"], gel["unidad"]) == (180, "unidad")
     assert rec.para_apuntar("fijo", ids["gel de prueba"], 2) == gel

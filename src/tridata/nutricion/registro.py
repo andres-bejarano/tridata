@@ -8,8 +8,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 from ..storage import DEFAULT_DB_PATH
+from .recetas import normalizar
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS interpretacion (
@@ -72,6 +74,25 @@ def _numero(datos: dict, clave: str) -> float | None:
         return float(str(valor).replace(",", ".")) if isinstance(valor, str) else float(valor)
     except (TypeError, ValueError):
         raise ValueError(f"{clave}: {valor!r} no es un número") from None
+
+
+MACROS = ("proteina_g", "hidratos_g", "grasa_g")
+
+
+def macros_al_cambiar(antes: Any, nuevos: dict[str, float | None], kcal_nueva: float | None, otro: bool) -> dict:
+    """Unit 098 (R-271, R5): the macros of a logged food after a change.
+
+    `nuevos` with any value (a saved one chosen, or sent): those. Another food without them: none (never the old
+    food's). The same food: the old ones scaled as its kcal (kcal_nueva / kcal_vieja); without old kcal, none.
+    """
+    if any(nuevos.get(k) is not None for k in MACROS):
+        return {k: nuevos.get(k) for k in MACROS}
+    if otro:
+        return dict.fromkeys(MACROS)
+    kcal_vieja = antes["kcal"]
+    if not kcal_vieja or kcal_nueva is None:
+        return dict.fromkeys(MACROS)
+    return {k: None if antes[k] is None else round(antes[k] * kcal_nueva / kcal_vieja + 0.0, 1) for k in MACROS}
 
 
 @dataclass
@@ -214,8 +235,9 @@ class RegistroComidas:
         a day, or with the same one, day and state stay as they were. New kcal stop being
         `estimado`, and lose `origen` and `provisional` (unit 016). KeyError if the id does not exist, ValueError if invalid.
         Unit 074 (R-213): `de_lo_guardado` is a saved recipe or ingredient chosen on the change card, already worked
-        out by the server: its `origen` and `provisional` are kept and the macros of the food it was are dropped. The
-        section never changes here.
+        out by the server: its `origen` and `provisional` are kept. The section never changes here.
+        Unit 098 (R-271, R5): the macros follow `macros_al_cambiar`: the saved one's (or the ones sent), none for
+        another food, and the same food's scaled as its kcal.
         """
         with self._connect() as conn:
             fila = self._leer(conn, alimento_id)
@@ -235,8 +257,10 @@ class RegistroComidas:
             provisional = bool(fila["provisional"]) and mismas_kcal
             if de_lo_guardado:
                 estimado, origen, provisional = False, nuevo.origen, nuevo.provisional
-                conn.execute("UPDATE alimento_apuntado SET proteina_g = NULL, hidratos_g = NULL, grasa_g = NULL "
-                             "WHERE id = ?", (alimento_id,))
+            otro = normalizar(nuevo.nombre) != normalizar(fila["nombre"])
+            macros = macros_al_cambiar(fila, {k: getattr(nuevo, k) for k in MACROS}, nuevo.kcal, otro)
+            conn.execute("UPDATE alimento_apuntado SET proteina_g = ?, hidratos_g = ?, grasa_g = ? WHERE id = ?",
+                         (*(macros[k] for k in MACROS), alimento_id))
             conn.execute(
                 "UPDATE alimento_apuntado SET nombre = ?, cantidad = ?, unidad = ?, kcal = ?, estimado = ?, "
                 "pendiente_cantidad = ?, dia = ?, estado = ?, origen = ?, provisional = ? WHERE id = ?",

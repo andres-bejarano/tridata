@@ -55,7 +55,7 @@ def test_cuenta_para_apuntar_receta_pesada(recetario):  # R1 · R-57, C-67
     rec, ids = recetario
     a = rec.para_apuntar("receta", ids["garbanzos de la abuela"], 250)
     assert a == {"nombre": "garbanzos de la abuela", "cantidad": 250, "unidad": "g", "kcal": 325,
-                 "origen": "de tu receta «garbanzos de la abuela»", "provisional": False}
+                 "origen": "de tu receta «garbanzos de la abuela»", "provisional": False, "proteina_g": None, "hidratos_g": None, "grasa_g": None}  # unit 098: saved without macros
 
 
 def test_cuenta_para_apuntar_fijos(recetario):  # R1 · R-57, C-68

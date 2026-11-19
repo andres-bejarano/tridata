@@ -23,6 +23,9 @@ save write their message in «Desde el PC» too. None of them calls a paid AI; o
 Unit 082 (REC-34): `apuntar_toma` (coffees and B12 with their hour and mg, apart from the foods, without kcal) and
 `apuntar_leche_cafes` (the milk of the coffees of a day, once, spread among them), with the same «sí» and «Hecho» as
 `apuntar_comida`, which takes the `hora` of its section too.
+Unit 098 (REC-43, R-269..R-273): `preparar_macros` (read-only: what has no macros, and the table and fingerprint of the
+team's values) and `guardar_macros` (with Andrés's «sí» and that fingerprint, as «estimado»); `get_recetas` shows the
+macros of what is saved, and `apuntar_comida` asks the team to estimate those of anything not saved.
 
 Run it with `tridata-mcp` (stdio transport) and register that command in
 your MCP client, e.g. for Claude Code:
@@ -434,12 +437,14 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         "it. FIRST show him each food with its quantity and kcal (and the section, if any) and ask; only with his "
         "«sí» call this. If one food does not pass the checks, none is logged and the answer says why.\n"
         f"{papeles} dia: YYYY-MM-DD. alimentos: a list of objects with nombre, cantidad (> 0), unidad "
-        "(g, ml or unidad), kcal (>= 0; required with a quantity), and optionally proteina_g, hidratos_g, grasa_g "
-        "and estimado (true if you estimated it). A food that is one of his saved recipes or fixed foods (by its "
-        "name or an alias, see get_recetas), or with guardado: {tipo: receta or fijo, id}, takes its kcal and its "
-        "origin from what is saved (your kcal are ignored): show him those, worked out from get_recetas. Anything "
-        "else is logged as you give it (estimado true if you estimated it); if it only looks like a saved one, ask "
-        "him first. texto (optional): what he said, in Spanish.\n"
+        "(g, ml or unidad), kcal (>= 0; required with a quantity), proteina_g, hidratos_g, grasa_g (grams for that "
+        "quantity) and estimado (true if you estimated it). A food that is one of his saved recipes or fixed foods (by "
+        "its name or an alias, see get_recetas), or with guardado: {tipo: receta or fijo, id}, takes its kcal, its "
+        "macros and its origin from what is saved (yours are ignored): show him those, worked out from get_recetas "
+        "(macros_100g of a recipe, the macros of a fixed food), as its kcal. For anything else, estimate its protein, "
+        "carbs and fat (proteina_g, hidratos_g, grasa_g) together with its kcal and show them to Andrés in the same "
+        "confirmation, before his «sí»; it is logged as you give it, as estimated (estimado true). If it only looks "
+        "like a saved one, ask him first. texto (optional): what he said, in Spanish.\n"
         f"seccion (optional): use it when Andrés says which meal it goes in («en el desayuno», «un gel en la "
         f"carrera»), and all the foods go into that section of the day: one of {', '.join(SECCIONES)} "
         "(media_manana is «media mañana», carrera is «Nutrición en carrera», for gels and drinks of a race or a long "
@@ -512,8 +517,9 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
 
 def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -> None:
     """Unit 081 (P-20261105-cf32bea5): the plan .md, the medical PDF, the recipes and the routes, by the coach."""
-    from .conversaciones.desde_pc import (analiticas_pendientes, guardar_transcripcion_desde_pc,
-                                          importar_plan_desde_pc, perfil_ruta_desde_pc, preparar_plan_desde_pc,
+    from .conversaciones.desde_pc import (analiticas_pendientes, guardar_macros_desde_pc,
+                                          guardar_transcripcion_desde_pc, importar_plan_desde_pc,
+                                          perfil_ruta_desde_pc, preparar_macros_desde_pc, preparar_plan_desde_pc,
                                           preparar_transcripcion_desde_pc, recetario_texto, rutas_desde_pc)
 
     lee = ToolAnnotations(read_only_hint=True, open_world_hint=False)
@@ -595,9 +601,36 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
         "(or kcal_100g_aprox when not weighed) and kcal_receta (the whole recipe, for a fraction of it); a fixed food "
         "with its kcal per 100g or per unidad (comun: of the list of common foods). When he names one of them (or an "
         "alias) with a quantity, its kcal are these: a recipe by grams (unidad g) or by fraction (unidad receta, "
-        "cantidad 0.5 for half), a fixed food in its own unit. Read-only."))
+        "cantidad 0.5 for half), a fixed food in its own unit. Macros (protein, carbs, fat in grams): a fixed food "
+        "with proteina, hidratos, grasa on the base of its kcal and macros_origen (estimado or etiqueta); a recipe "
+        "with macros_100g and macros_receta (the whole recipe), or sin_macros (how many ingredients have none: then "
+        "it has no macros). A portion carries them in proportion to its kcal. Missing ones: preparar_macros. "
+        "Read-only."))
     def get_recetas_tool() -> str:
         return recetario_texto(equipo)
+
+    @server.tool(name="preparar_macros", annotations=lee, structured_output=False, description=(
+        "Fill in, once, the protein, carbs and fat (macros) of Andrés's saved ingredients and recipes that have none. "
+        "Without propuestas: what has no macros yet (his ingredients, the common ones, and the estimated lines of his "
+        "recipes in use), each with its clave, its base and its kcal. With propuestas: [{clave, proteina, hidratos, "
+        "grasa}] (grams for its base: per 100 g or per unit as its kcal; for a recipe line, for that quantity), "
+        "the table that would be saved as «estimado», warning a row whose 4·P + 4·H + 9·G is far from its kcal, the "
+        "recipes in use that are recomputed, and its fingerprint (`Huella`). Impossible values (negative, or more "
+        "than 100 g per 100 g) are refused with the reason. It saves NOTHING: show Andrés the table and ask; only "
+        "after his «sí» call guardar_macros with the same propuestas and that huella."))
+    def preparar_macros_tool(propuestas: list[dict[str, Any]] | None = None) -> str:
+        return preparar_macros_desde_pc(equipo, propuestas)
+
+    @server.tool(name="guardar_macros", annotations=guarda, structured_output=False, description=(
+        "Save the macros preparar_macros already showed and Andrés answered «sí» to, as «estimado», and recompute "
+        "his recipes in use (their kcal and what was already logged do not change). NEVER call it without his «sí». "
+        "rechazar (optional): the claves he said no to; they stay without macros. If anything changed since it was "
+        f"prepared nothing is saved and the new version comes back: show it to him again.\n{papeles} propuestas: the "
+        "same given to preparar_macros. huella: the `Huella` it returned. texto (optional): a short line for Andrés, "
+        f"in Spanish.\n{registro}"))
+    def guardar_macros_tool(papel: str, propuestas: list[dict[str, Any]], huella: str,
+                            rechazar: list[str] | None = None, texto: str = "") -> str:
+        return guardar_macros_desde_pc(equipo, papel, propuestas, huella, rechazar, texto)
 
     garmin_lee = ToolAnnotations(read_only_hint=True, open_world_hint=True)
 

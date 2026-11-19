@@ -178,7 +178,7 @@ def _segundos_por_zona(detalle: dict[str, list[float | None]],
     t, hr = detalle["t"], detalle["pulso"]
     segundos = _ceros()
     clave_de: dict[float, str] = {}
-    for i, (ti, p) in enumerate(zip(t, hr)):
+    for i, (ti, p) in enumerate(zip(t, hr, strict=True)):
         if ti is None:
             continue
         siguiente = t[i + 1] if i + 1 < len(t) else None
@@ -196,7 +196,7 @@ def _segundos_por_zona(detalle: dict[str, list[float | None]],
 def _reducir(t: list[float | None], hr: list[float | None], maximo: int) -> tuple[list[float], list[float | None]]:
     """At most `maximo` points to draw: the mean of each bucket of consecutive points (HR without its gaps; a bucket
     without any HR is a gap of the line)."""
-    puntos = [(ti, p) for ti, p in zip(t, hr) if ti is not None]
+    puntos = [(ti, p) for ti, p in zip(t, hr, strict=True) if ti is not None]
     cubo = max(1, -(-len(puntos) // maximo))
     ts: list[float] = []
     ps: list[float | None] = []

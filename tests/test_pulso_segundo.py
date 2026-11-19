@@ -98,7 +98,7 @@ def test_pide_un_punto_por_segundo_y_sin_coordenadas():  # R1 · C-309 (with max
     client = _cliente_con(json.loads(FIXTURE.read_text()))
     client.get_activity_detail("900000001", 4499.4)
     llamada = client._api.get_activity_details.call_args
-    args = dict(zip(("activity_id", "maxchart", "maxpoly"), llamada.args)) | llamada.kwargs
+    args = dict(zip(("activity_id", "maxchart", "maxpoly"), llamada.args, strict=False)) | llamada.kwargs
     assert args["maxchart"] >= 4500 and args["maxpoly"] == 0
 
 

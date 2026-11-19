@@ -19,7 +19,8 @@
 - Unit 094 (REC-40): `detalle_actividad` also carries `curva`, the HR second by second of the session (reduced to
   draw, with the real seconds in each zone and the segment of each lap), and `semanas` counts the zones second by
   second where the session has its detail (S-85), by laps where not; each week says `aproximado` while one of its
-  sessions is still by laps (R-253).
+  sessions is still by laps (R-253). Unit 095 (C-319): only the sessions whose detail can still be brought count for
+  it — a type of `DETALLE_TYPES` not asked yet; pool, strength and the ones Garmin answered without detail do not.
 
 Every Garmin datum carries its state, as in `hoy.py` (G-47, never an invented 0): `ok`, `no_ha_llegado` (not given
 yet) or `incompleto` (given half-done: a resting HR of a day whose totals Garmin cached before finishing it, or a
@@ -35,7 +36,7 @@ from .hoy import INCOMPLETO, NO_HA_LLEGADO, OK, _deporte, _hrv, _por_dia, dia_a_
 from .metrics import compute_pmc, daily_tss, pmc_hasta, trimp_for_activity
 from .nutricion.ajustes import DESDE_SIEMPRE, HistorialFC, PulsoVigente
 from .storage import DataStore
-from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES
+from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, DETALLE_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES
 
 RANGOS_DIAS = (14, 42, 91, 365)  # unit 090 (R-232): 14 days · 6 weeks · 3 months · 1 year
 DIAS_POR_DEFECTO = 42
@@ -323,23 +324,26 @@ def semanas(store: DataStore | None, historial: HistorialFC | None, hoy: date, n
     actividades: list[dict] = []
     vueltas_de: Callable[[str], list[dict]] = lambda _id: []  # noqa: E731
     detalle_de: Callable[[str], dict | None] = lambda _id: None  # noqa: E731
+    sin_pedir: Callable[[dict], bool] = lambda _a: False  # noqa: E731
     if store is not None:
         hasta = min(hoy, ultimo + timedelta(days=6))
         actividades, vueltas_de = store.activities_between(primer_lunes, hasta), store.get_laps
         detalle_de = store.leer_detalle
+        sin_pedir = lambda a: (a.get("activity_type") in DETALLE_TYPES  # noqa: E731
+                               and store.estado_detalle(a["activity_id"]) is None)
     grupos = por_semana(actividades, primer_lunes, n, deporte_semana)
     resultado = []
     for lunes, por_deporte in grupos.items():
         deportes = {nombre: _vacio(nombre != "fuerza") for nombre, _ in DEPORTES_SEMANA}
         deportes[OTROS] = _vacio()
         total = _vacio()
-        aproximado = False  # unit 094 (R-253): some session of the week still by laps
+        aproximado = False  # units 094-095 (R-253, C-319): some session whose detail can still be brought
         for nombre, lista in por_deporte.items():
             t = deportes[nombre]
             for a in lista:
                 laps = vueltas_de(a["activity_id"])
                 detalle = detalle_de(a["activity_id"])
-                aproximado = aproximado or detalle is None
+                aproximado = aproximado or (detalle is None and sin_pedir(a))
                 dia = date.fromisoformat(a["activity_date"])
                 pulso = historial.vigente(dia) if historial is not None else None
                 horas = float(a.get("duration_seconds") or 0) / 3600

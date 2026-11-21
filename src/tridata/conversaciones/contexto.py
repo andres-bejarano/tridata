@@ -33,6 +33,10 @@ the milk, the caffeine of the day, the last dose with caffeine and the milk of t
 hour of each section with food that day, «~08:00» when it is the typical one), next to its sleep. Read without
 creating anything (`nutricion.suplementacion.leer_todo`).
 
+Unit 099 (R-279): each day with eaten foods that carry their three macros has `macros` (the grams eaten of protein,
+carbohydrates and fat and the share of its kcal they cover), and the block `macros` is the card of Hoy
+(`nutricion.macros.vista`: today with its objective and a `texto`, yesterday with its verdict, the 8 weeks).
+
 None of it carries the hour: with the same data it is the same text byte to byte. It changes only when a datum
 changes (a food, a weight, a sync) or the day does. Read only: nothing here writes.
 """
@@ -52,9 +56,11 @@ from ..hoy import _deporte
 from ..metrics import compute_pmc, daily_tss, pmc_hasta
 from ..nutricion.ajustes import DESDE_SIEMPRE, Ajustes
 from ..nutricion.asistente import texto_acciones
+from ..nutricion.macros import texto as texto_macros
+from ..nutricion.macros import vista as vista_macros
 from ..nutricion.objetivo_dia import ObjetivosDia
 from ..nutricion.peso import RegistroPeso
-from ..nutricion.registro import SECCIONES, RegistroComidas
+from ..nutricion.registro import MACROS, SECCIONES, RegistroComidas
 from ..nutricion.suplementacion import horas_de_secciones, leer_todo, resumen_dia
 from ..plan import ABIERTA, Planes
 from ..plan import semanas as semanas_del_plan
@@ -96,7 +102,13 @@ con lo previsto en segundos, su fase si la tiene y lo hecho según Garmin, sus f
 cuenta antes de proponerle cualquier sesión; las cerradas de su plan en curso, con su lección; cada una con sus \
 visitas al fisio o al médico (fecha, quién y qué le dijo); las que no dicen estado vienen de su .md; \
 "entrenos_previstos", los entrenos previstos que tiene apuntados (con «entreno previsto») de hoy a 14 días, \
-cada día con su nombre, sus minutos y sus kcal; "google_calendar", si su Google Calendar está conectado y qué lleva su calendario «TriData». Tú no puedes poner ni \
+cada día con su nombre, sus minutos y sus kcal; "macros", sus proteínas, hidratos y grasa: "hoy" con lo que \
+lleva comido, su objetivo según su último peso y sus \
+horas de entreno (las hechas o las del plan, las que sean más) y "texto", lo mismo en una línea; "ayer" con su \
+veredicto por macro; y "semanas", sus últimas semanas de lunes a domingo con la media al día y los días en rango; un \
+día sin veredicto es «aproximado» (poco de lo comido lleva macros) o «sin macros», y cada día de "dias" con macros \
+lleva los suyos ("macros", sus gramos comidos y "pct_kcal", qué parte de sus kcal los lleva); \
+"google_calendar", si su Google Calendar está conectado y qué lleva su calendario «TriData». Tú no puedes poner ni \
 quitar nada allí: lo pone la app sola. Si te pregunta si algo está en el calendario, contesta con lo que dice \
 "google_calendar" y nunca que «debería aparecer»; si algo falta, puede tocar «Sincronizar ahora» en Ajustes › \
 Google Calendar.
@@ -155,6 +167,30 @@ def _comidas(registro: RegistroComidas) -> dict[str, list[dict[str, Any]]]:
         por_dia[f["dia"]].append(_limpio({"nombre": f["nombre"], "cantidad": _r(f["cantidad"]), "unidad": f["unidad"],
                                           "kcal": _r(f["kcal"], 0), "estado": f["estado"]}))
     return por_dia
+
+
+def _macros(registro: RegistroComidas) -> dict[str, dict[str, Any]]:
+    """Unit 099 (R-279): by day, the grams of each macro eaten with its three macros and the share of the kcal eaten
+    they cover; only the days where some eaten food carries them."""
+    conn = sqlite3.connect(registro.db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        filas = conn.execute(f"SELECT dia, kcal, {', '.join(MACROS)} FROM alimento_apuntado "  # noqa: S608
+                             "WHERE estado = 'comido' ORDER BY dia, id").fetchall()
+    finally:
+        conn.close()
+    total: dict[str, float] = defaultdict(float)
+    con: dict[str, dict[str, float]] = {}
+    for f in filas:
+        total[f["dia"]] += f["kcal"] or 0
+        if f["kcal"] is not None and all(f[k] is not None for k in MACROS):
+            dia = con.setdefault(f["dia"], {"kcal": 0.0, **dict.fromkeys(MACROS, 0.0)})
+            dia["kcal"] += f["kcal"]
+            for k in MACROS:
+                dia[k] += f[k]
+    return {d: {**{k: _r(v[k]) for k in MACROS},
+                "pct_kcal": _r(v["kcal"] / total[d] * 100, 0) if total[d] > 0 else None}
+            for d, v in con.items() if v["kcal"] > 0}
 
 
 def _secciones_con_comida(registro: RegistroComidas) -> dict[str, set[str]]:
@@ -290,6 +326,7 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     plan in course and its incidents (`planes`); unit 054: whether Google Calendar is connected and what it carries."""
     desde = hoy - timedelta(days=DIAS_DIA_A_DIA - 1)
     comidas = _comidas(registro)
+    macros_de = _macros(registro)  # unit 099
     secciones = _secciones_con_comida(registro)
     tomas_de, horas_de, leche_de = leer_todo(registro.db_path)  # unit 082: read only, nothing created
     peso_de = {p["dia"]: p for p in pesos.entre(DESDE_SIEMPRE, hoy)}
@@ -328,6 +365,7 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
             "hrv": _r(h.get("last_night_avg"), 0), "entrenos": entrenos.get(dia, []), "carga": carga.get(dia),
             "suplementacion": _suplementacion(tomas_de.get(dia, []), leche_de.get(dia)),
             "horas_comidas": _horas_comidas(horas_de.get(dia, {}), secciones.get(dia, set())),
+            "macros": macros_de.get(dia),  # unit 099 (R-279)
         }
 
     dias = []
@@ -382,6 +420,9 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
         "google_calendar": {"conectado": calendario_conectado,
                             "lleva": CALENDARIO_CONECTADO if calendario_conectado else CALENDARIO_SIN_CONECTAR},
     }
+    macros = vista_macros(registro=registro, pesos=pesos, store=store, planes=planes, hoy=hoy)  # unit 099 (R-279)
+    macros["hoy"] = {**macros["hoy"], "texto": texto_macros(macros["hoy"])}  # a copy: `vista` is built per call
+    datos_json["macros"] = macros
     previstos = _entrenos_previstos(ObjetivosDia(registro.db_path), hoy)  # unit 071: the same SQLite
     if previstos:
         datos_json["entrenos_previstos"] = previstos

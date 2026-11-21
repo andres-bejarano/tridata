@@ -38,6 +38,16 @@
         <div class="grande-hoy num"><span class="cifra">—</span><small id="hoy-queda-texto">kcal te quedan</small></div>
         <p id="hoy-comida-detalle" class="suave"></p>
       </article>
+      <!-- unit 099 (REC-43): the macros of today against their objective, yesterday's verdict; tapping it opens and
+           closes its 8 weeks in place (it does not navigate: not a `.tarjeta-hoy`) -->
+      <article id="hoy-macros" class="tarjeta tarjeta-macros" role="button" tabindex="0" aria-expanded="false"
+               aria-controls="hoy-macros-semanas">
+        <div class="cab-hoy"><h2>🥗 Macros</h2><span class="suave ver-semanas">8 semanas</span></div>
+        <p id="hoy-macros-aviso" class="aviso-macros" hidden></p>
+        <ul id="hoy-macros-barras" class="macros-barras"></ul>
+        <p id="hoy-macros-ayer" class="suave"></p>
+        <div id="hoy-macros-semanas" class="macros-semanas" hidden></div>
+      </article>
       <article id="hoy-entreno" class="tarjeta tarjeta-hoy" data-ir="fitness">
         <div class="cab-hoy"><h2>🏃 Entreno</h2><a class="ver-mas" href="#fitness">Ver Fitness ›</a></div>
         <div id="hoy-actividades" class="actividades-hoy"></div>

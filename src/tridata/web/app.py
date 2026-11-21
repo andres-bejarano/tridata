@@ -48,6 +48,8 @@
                                   activities), `como_llegas` (sleep, resting HR, HRV and its 7-day mean, TSB, each
                                   with its `estado`, `hoy.py`), `garmin_sync` (/api/dia's plus `texto_hora` and the
                                   routine's `motivos`). Unit 080: without the card of the Asistente. Writes nothing new.
+                                  Unit 099 (REC-43): `macros` = {hoy, ayer, semanas} of `nutricion.macros.vista` (what
+                                  is eaten against the objective of its weight and its hours, and the 8 weeks)
                                   Unit 030 (G-48): «Actualizar Garmin» also takes the routine's lock (`sync.lock`
                                   next to the database): with `tridata sync` running it is the same 409 «en_marcha»,
                                   and it brings at least yesterday and today
@@ -206,6 +208,7 @@ from ..nutricion.balance import (
     texto_reparto,
 )
 from ..nutricion.dia import FaltanAjustes, plan_del_dia, resumen_completo
+from ..nutricion.macros import vista as vista_macros
 from ..nutricion.margen import cabe_de_receta
 from ..nutricion.objetivo_dia import PREVISTOS_MAX
 from ..nutricion.asistente import Contexto as ContextoAsistente
@@ -1019,7 +1022,9 @@ def crear_app(
                 # unit 031 (R8): the TSB with the HR of each day in Ajustes, the same as Fitness
                 "como_llegas": (como_llegas(store, dia_hoy, limites=ajustes.historial_fc().limites)
                                 if store is not None else sin_garmin),
-                "garmin_sync": garmin_sync}  # unit 080 (S-27): no card of the Asistente
+                "garmin_sync": garmin_sync,  # unit 080 (S-27): no card of the Asistente
+                # unit 099 (R-276..R-278): the card «Macros», below Comida, and its 8 weeks
+                "macros": vista_macros(registro=registro, pesos=pesos, store=store, planes=planes, hoy=dia_hoy)}
 
     async def ver_hoy(request: Request) -> Response:
         await run_in_threadpool(_al_dia)

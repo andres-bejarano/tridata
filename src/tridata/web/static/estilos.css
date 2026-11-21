@@ -575,6 +575,26 @@ button.anadir-linea { margin-top: 0; }
 #hoy-actualizar:disabled { opacity: .75; }
 #hoy-garmin-error { margin: 6px 0 0; }
 
+/* -- unit 099: the card «Macros» of Hoy and its 8 weeks (hoy.js), light and dark with the tokens ------------------ */
+.tarjeta-macros { display: block; padding: 14px 16px; cursor: pointer; }
+.tarjeta-macros .ver-semanas { font-weight: 600; color: var(--acento); }
+.tarjeta-macros .ver-semanas::after { content: " ›"; }
+.tarjeta-macros[aria-expanded="true"] .ver-semanas::after { content: " ⌄"; }
+.aviso-macros { color: var(--alerta); background: var(--alerta-fondo); padding: 8px 12px; border-radius: 12px;
+  margin: 8px 0 0; font-size: .92rem; }
+.macros-barras { list-style: none; margin: 8px 0 6px; padding: 0; display: grid; gap: 10px; }
+.macro-fila { display: grid; gap: 4px; }
+.macro-texto { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px; font-size: .95rem; }
+.macro-texto .objetivo-macro { color: var(--suave); }
+.barra-macro { position: relative; height: 10px; border-radius: 999px; background: var(--pista); overflow: hidden; }
+.barra-macro .rango-macro { position: absolute; top: 0; bottom: 0; background: var(--acento-suave);
+  border-left: 2px solid var(--acento); border-right: 2px solid var(--acento); }
+.barra-macro .lleno-macro { position: absolute; left: 0; top: 3px; bottom: 3px; border-radius: 999px; background: var(--acento); }
+.macros-semanas { margin-top: 8px; border-top: 1px solid var(--borde); padding-top: 8px; display: grid; gap: 8px; }
+.macro-semana { display: grid; gap: 2px; font-size: .92rem; }
+.macro-semana strong { font-size: .95rem; }
+.macro-semana span { color: var(--suave); overflow-wrap: anywhere; }
+
 /* Unit 021: the cards «Voy a …»; since unit 080 only the one of the watch in Fitness › Plan (light and dark) */
 .tarjeta-cambio { border-color: var(--acento); }
 .tarjeta-cambio.con-error, .tarjeta-no { border-color: var(--alerta); }

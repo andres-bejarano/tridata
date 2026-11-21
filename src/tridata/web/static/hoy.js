@@ -7,6 +7,8 @@
 // says so (Q-13); a failure says why with the words of the routine's warning and leaves data and hour as they were.
 // Unit 099 (REC-43): below Comida, the card «Macros» (`macros` of /api/hoy): today's protein, carbohydrates and fat
 // with «llevas», their objective and a bar; yesterday's verdict; tapping it opens and closes its 8 weeks in place.
+// Unit 101 (REC-45, R-277): below 80 % of the kcal eaten with macros, only the warning (the share and how many foods
+// have none) and the objective of the day, without bars.
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -102,13 +104,35 @@ function barra(llevas, desde, hasta) {
 function filaMacro(nombre, llevas, objetivo, laBarra) {
   const fila = nodo("li", "macro-fila");
   const texto = nodo("div", "macro-texto num");
-  texto.append(nodo("strong", "", `${nombre}: ${llevas}`), nodo("span", "objetivo-macro", objetivo));
-  fila.append(texto, laBarra);
+  texto.append(nodo("strong", "", llevas === null ? nombre : `${nombre}: ${llevas}`),
+    nodo("span", "objetivo-macro", objetivo));
+  fila.append(texto);
+  if (laBarra) fila.append(laBarra);
   return fila;
+}
+
+// Unit 101 (R-277, C-341): below 80 % of what is eaten with macros, only its objective: no bars, no grams eaten, no
+// % of fat, no verdict (the warning above says the share and how many foods to ask the team for).
+function soloObjetivo(d) {
+  const filas = MACROS.map(([clave, , titulo]) => {
+    const x = d[clave];
+    const [a, b] = x.objetivo_g ?? x.objetivo_g_kg;
+    const rango = x.objetivo_g ? `${a}-${b} g` : `${decimal.format(a)}-${decimal.format(b)} g/kg`;
+    return filaMacro(titulo, null, `objetivo ${rango}`, null);
+  });
+  filas.push(filaMacro("Grasa", null, `objetivo ≥ ${d.grasa.objetivo_pct_min} %`, null));
+  return filas;
 }
 
 function pintarMacros(m) {
   const d = m.hoy;
+  if (d.estado !== "completo") {
+    $("hoy-macros-barras").replaceChildren(...soloObjetivo(d));
+    pintarAvisos(d);
+    $("hoy-macros-ayer").textContent = `Ayer: ${textoVeredicto(m.ayer)}`;
+    pintarSemanas(m.semanas);
+    return;
+  }
   const filas = MACROS.map(([clave, , titulo]) => {
     const x = d[clave];
     if (x.objetivo_g) {
@@ -124,12 +148,15 @@ function pintarMacros(m) {
   filas.push(filaMacro("Grasa", pct, `≥ ${g.objetivo_pct_min} %`,
     barra(g.pct_kcal ?? 0, g.objetivo_pct_min, g.objetivo_pct_min * 2)));
   $("hoy-macros-barras").replaceChildren(...filas);
+  pintarAvisos(d);
+  $("hoy-macros-ayer").textContent = `Ayer: ${textoVeredicto(m.ayer)}`;
+  pintarSemanas(m.semanas);
+}
 
+function pintarAvisos(d) {
   const avisos = [d.estado === "completo" ? null : d.aviso, d.aviso_peso].filter(Boolean);
   $("hoy-macros-aviso").textContent = avisos.join(" · ");
   $("hoy-macros-aviso").hidden = !avisos.length;
-  $("hoy-macros-ayer").textContent = `Ayer: ${textoVeredicto(m.ayer)}`;
-  pintarSemanas(m.semanas);
 }
 
 // «proteína alto · hidratos bajo · grasa bien»; a day without verdict says why (R-276, R-277).

@@ -99,7 +99,8 @@ def test_menos_del_80_por_ciento_es_aproximado_y_sin_veredicto():  # R5 · C-341
     assert d["kcal_comidas"] == 2000 and d["kcal_con_macros"] == 1300
     assert d["pct_kcal_con_macros"] == 65
     assert d["estado"] == "aproximado"
-    assert d["aviso"] == "aproximado: macros del 65 % de las kcal"
+    assert d["aviso"] == "Macros de solo el 65 % de lo comido · 1 alimento sin macros: pídeselos al equipo"  # 101 R5
+    assert d["alimentos_sin_macros"] == 1  # the planned one does not count
     assert all(d[m]["veredicto"] is None for m in ("proteina", "hidratos", "grasa"))
     assert d["proteina"]["g"] == 150  # only what is eaten: the planned 30 g do not add
 
@@ -116,12 +117,37 @@ def test_un_alimento_con_solo_un_macro_no_cuenta_como_con_macros():  # R5: «con
     assert d["proteina"]["g"] == 80
 
 
-def test_sin_nada_con_macros_dice_sin_macros():  # R5
+def test_sin_nada_con_macros_dice_sin_macros():  # R5; unit 101 R5 (R-277): with something eaten, how many are missing
     d = del_dia([_comido(1800)], 70, 0, es_hoy=False)
-    assert d["estado"] == "sin_macros" and d["aviso"] == "sin macros"
+    assert d["estado"] == "sin_macros"
+    assert d["aviso"] == "Macros de solo el 0 % de lo comido · 1 alimento sin macros: pídeselos al equipo"
     assert all(d[m]["veredicto"] is None for m in ("proteina", "hidratos", "grasa"))
     nada = del_dia([], 70, 0, es_hoy=True)
     assert nada["estado"] == "sin_macros" and nada["aviso"] == "sin macros"
+
+
+# -- unit 101 R5 · R-277 (changed in mapa v44), C-341, C-362: the warning says the share and how many are missing ----
+
+def test_al_24_por_ciento_dice_el_porcentaje_y_cuantos_faltan():  # 101 R5 · C-341
+    apuntes = [_comido(480, 40, 50, 13)] + [_comido(1520 / 12) for _ in range(12)]  # 2000 kcal, 480 with macros
+    apuntes.append(_comido(0))  # water: no kcal, nothing to ask for
+    d = del_dia(apuntes, 70, 1.5, es_hoy=True)
+    assert d["estado"] == "aproximado" and d["pct_kcal_con_macros"] == 24
+    assert d["aviso"] == "Macros de solo el 24 % de lo comido · 12 alimentos sin macros: pídeselos al equipo"
+    assert d["alimentos_sin_macros"] == 12
+    assert d["proteina"]["objetivo_g"] == [112, 140]  # its objective of the day is still there (S-95)
+
+
+def test_al_85_por_ciento_la_de_siempre():  # 101 R5 · C-362
+    d = del_dia([_comido(1700, 150, 380, 1700 * 0.25 / 9), _comido(300)], 70, 1.5, es_hoy=False)
+    assert d["pct_kcal_con_macros"] == 85 and d["estado"] == "completo" and d["aviso"] is None
+    assert d["alimentos_sin_macros"] == 1
+    assert d["proteina"]["veredicto"] == "alto"
+
+
+def test_casi_el_80_no_dice_80():  # 101 R5: 79.6 % is below the threshold, and it does not say «80 %»
+    d = del_dia([_comido(796, 60, 80, 25), _comido(204)], 70, 1.5, es_hoy=False)
+    assert d["estado"] == "aproximado" and d["aviso"].startswith("Macros de solo el 79 % de lo comido")
 
 
 # -- R3 · R-275, C-340: the hours, Garmin or the plan, the larger ---------------------------------------------------

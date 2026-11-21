@@ -40,6 +40,10 @@ lists what has no macros and, with the coach's values, the table and its fingerp
 `guardar_macros_desde_pc` saves them as «estimado» only with Andrés's «sí» and that fingerprint (minus what he says no
 to). Logging from a saved thing takes its macros (`_de_lo_guardado`); anything else, the ones the coach estimated.
 
+Unit 101 (REC-45, R-284): the same pair also fills in what was logged without macros in the last 14 days
+(`apuntado:<id>`): worked out from what is saved when it comes from it, estimated by the coach otherwise, and saved
+only with Andrés's «sí» («de etiqueta» if he corrected them); no kcal changes.
+
 Unit 100 (REC-44 of `preguntar-equipo`, R-281, C-353, C-354): `comidas_desde_pc`, the foods of the days the context
 no longer details (older than 14 days), by dates and at most `MAX_DIAS_COMIDAS` days each time, with the same detail
 as the recent ones (`contexto.detalle_dias`). Read only.
@@ -527,6 +531,7 @@ def _de_lo_guardado(recetario: Recetario, crudo: dict) -> dict:
 PREGUNTA_MACROS = ("Enséñaselo a Andrés tal cual y pregúntale; solo con su «sí», llama a guardar_macros con estas "
                    "mismas propuestas y esta huella (y en rechazar, las claves de las que diga que no: quedan sin "
                    "macros).")
+MARCA = {"estimado": "estimado", "etiqueta": "de etiqueta"}  # unit 101: how a row is saved
 
 
 def _g(x: Any) -> str:
@@ -549,23 +554,48 @@ def _recalculadas(recetas: list[dict]) -> str:
 
 
 def _tabla_macros(filas: list[dict]) -> str:
-    lineas = ["| clave | qué | base | kcal | proteína (g) | hidratos (g) | grasa (g) | aviso |",
-              "|---|---|---|---|---|---|---|---|"]
+    lineas = ["| clave | qué | base | kcal | proteína (g) | hidratos (g) | grasa (g) | se guarda como | aviso |",
+              "|---|---|---|---|---|---|---|---|---|"]
     for f in filas:
         lineas.append(f"| {f['clave']} | {f['nombre']} | {f['base']} | {_g(f['kcal'])} | {_g(f['proteina'])} | "
-                      f"{_g(f['hidratos'])} | {_g(f['grasa'])} | {f['aviso'] or ''} |")
+                      f"{_g(f['hidratos'])} | {_g(f['grasa'])} | {MARCA[f.get('marca') or 'estimado']} | "
+                      f"{f['aviso'] or ''} |")
     return "\n".join(lineas)
 
 
+def _tabla_apuntados(filas: list[dict]) -> list[str]:
+    """Unit 101 (R-284, C-358): what was logged without macros in the last 14 days, with its day, quantity and kcal;
+    worked out from what is saved («calculado de …») or «a estimar»."""
+    lineas = ["Lo apuntado sin macros de los últimos 14 días (comido y planeado; sus kcal no cambian). Lo «calculado» "
+              "sale de lo guardado por su cantidad (basta su clave); lo «a estimar», estímalo en gramos para esa "
+              "cantidad:",
+              "| clave | qué | día | cantidad | kcal | proteína (g) | hidratos (g) | grasa (g) | de dónde |",
+              "|---|---|---|---|---|---|---|---|---|"]
+    for f in filas:
+        c = f["calculado"]
+        macros = (" | ".join(_g(c[k]) for k in ("proteina", "hidratos", "grasa")) if c else " |  | ")
+        de = f"calculado {f['de']}" if c else "a estimar"
+        estado = " (planeado)" if f["estado"] == "planeado" else ""
+        lineas.append(f"| {f['clave']} | {f['nombre']}{estado} | {f['dia']} ({_dia(f['dia'])}) | {f['cuanto']} | "
+                      f"{_g(f['kcal'])} | {macros} | {de} |")
+    return lineas
+
+
+def _dia(fecha: str) -> str:
+    return ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")[date.fromisoformat(fecha).weekday()]
+
+
 def _macros_propuestos(equipo: Equipo, propuestas: Any) -> tuple[dict, str] | str:
-    """(what would be saved, its fingerprint), or why it is refused (R3)."""
+    """(what would be saved, its fingerprint), or why it is refused (R3). Unit 101: with today's date, so the logged
+    foods of the last 14 days count too."""
     try:
-        visto = equipo.asistente.recetario.validar_macros(propuestas)
+        visto = equipo.asistente.recetario.validar_macros(propuestas, hoy=equipo.asistente.hoy())
     except ErrorDatos as exc:
         return f"No se entiende la propuesta: {exc}. {NADA}"
     except ValueError as exc:
         return f"No se puede guardar así: {exc}. Corrígelo y vuelve a llamar a preparar_macros. {NADA}"
-    contenido = [{k: f.get(k) for k in ("clave", "nombre", "base", "kcal", "proteina", "hidratos", "grasa", "aviso")}
+    contenido = [{k: f.get(k) for k in ("clave", "nombre", "base", "kcal", "proteina", "hidratos", "grasa", "aviso",
+                                        "marca")}
                  for f in visto["filas"]]
     firma = json.dumps({"filas": contenido, "recetas": visto["recetas"]}, ensure_ascii=False, sort_keys=True)
     return visto, hashlib.sha256(firma.encode("utf-8")).hexdigest()[:12]
@@ -575,23 +605,37 @@ def preparar_macros_desde_pc(equipo: Equipo, propuestas: Any = None) -> str:
     """R2 (R-270): without `propuestas`, what has no macros yet, each with its clave; with them, the table that
     `guardar_macros_desde_pc` would save (warning what does not match its kcal) and its fingerprint. Writes nothing."""
     if propuestas in (None, [], ""):
-        falta = equipo.asistente.recetario.macros_que_faltan()
+        falta = equipo.asistente.recetario.macros_que_faltan(hoy=equipo.asistente.hoy())
+        guardado = [f for f in falta["filas"] if f["tipo"] != "apuntado"]
+        apuntado = [f for f in falta["filas"] if f["tipo"] == "apuntado"]  # unit 101 (R-284)
         lineas = ["Lo que aún no tiene macros (estima proteína, hidratos y grasa en gramos para la base de cada uno: "
                   "por 100 g o por unidad, como sus kcal; en una línea de receta, para esa cantidad):",
                   "| clave | qué | base | kcal |", "|---|---|---|---|"]
-        lineas += [f"| {f['clave']} | {f['nombre']} | {f['base']} | {_g(f['kcal'])} |" for f in falta["filas"]]
-        if not falta["filas"]:
-            lineas = ["No falta ningún macro: todo lo guardado (con kcal) ya los tiene."]
+        lineas += [f"| {f['clave']} | {f['nombre']} | {f['base']} | {_g(f['kcal'])} |" for f in guardado]
+        if not guardado:
+            lineas = ["No falta ningún macro en lo guardado: todo (con kcal) ya los tiene."]
         if falta["sin_ingredientes"]:
             lineas.append("Recetas sin ingredientes (sus macros salen de sus ingredientes: hasta que se los ponga en la "
                           "pestaña Recetas no pueden tenerlos): " + ", ".join(f"«{n}»" for n in falta["sin_ingredientes"])
                           + ".")
-        lineas.append("Luego llama a preparar_macros con propuestas: [{clave, proteina, hidratos, grasa}].")
+        if apuntado:
+            lineas += _tabla_apuntados(apuntado)
+        else:
+            lineas.append("Nada de lo apuntado en los últimos 14 días está sin macros.")
+        if not guardado and not apuntado:
+            return "\n".join(lineas)
+        lineas.append("Luego llama a preparar_macros con propuestas: [{clave, proteina, hidratos, grasa}] (de lo "
+                      "apuntado ya calculado, basta {clave}; si Andrés corrige los de algo apuntado, añade "
+                      "corregido: true y se guardan «de etiqueta»).")
         return "\n".join(lineas)
     hecho = _macros_propuestos(equipo, propuestas)
     if isinstance(hecho, str):
         return hecho
     visto, la_huella = hecho
+    if any(f["tipo"] == "apuntado" for f in visto["filas"]):  # unit 101: logged foods take macros, never other kcal
+        return (f"Esto es lo que se guardaría (aún no está guardado; ninguna kcal cambia):\n"
+                f"{_tabla_macros(visto['filas'])}{_recalculadas(visto['recetas'])}\n{PREGUNTA_MACROS}\n"
+                f"Huella: {la_huella}")
     return (f"Esto es lo que se guardaría como «estimado» (aún no está guardado; lo ya apuntado no cambia):\n"
             f"{_tabla_macros(visto['filas'])}{_recalculadas(visto['recetas'])}\n{PREGUNTA_MACROS}\n"
             f"Huella: {la_huella}")
@@ -611,7 +655,7 @@ def guardar_macros_desde_pc(equipo: Equipo, papel: str, propuestas: Any, huella_
         return (f"{CAMBIO_VISTO} {NADA} Lo que se guardaría ahora:\n{_tabla_macros(visto['filas'])}"
                 f"{_recalculadas(visto['recetas'])}\n{PREGUNTA_MACROS}\nHuella: {la_huella}")
     try:
-        guardado = equipo.asistente.recetario.guardar_macros(propuestas, rechazar)
+        guardado = equipo.asistente.recetario.guardar_macros(propuestas, rechazar, hoy=equipo.asistente.hoy())
     except ErrorDatos as exc:
         return f"No se entiende: {exc}. {NADA}"
     except (sqlite3.Error, ValueError) as exc:
@@ -619,13 +663,21 @@ def guardar_macros_desde_pc(equipo: Equipo, papel: str, propuestas: Any, huella_
         return f"No se han guardado los macros: {exc}. {NADA}"
     log.info("macros saved from the PC (%d rows, %d refused, %d recipes)", len(guardado["filas"]),
              guardado["rechazadas"], len(guardado["recetas"]))
-    nombres = ", ".join(f"«{f['nombre']}»" for f in guardado["filas"]) or "ninguno"
-    hecho_texto = f"Hecho: macros guardados como «estimado» en {len(guardado['filas'])} ({nombres})"
+    estimados = [f for f in guardado["filas"] if f.get("marca") != "etiqueta"]
+    de_etiqueta = [f for f in guardado["filas"] if f.get("marca") == "etiqueta"]  # unit 101: corrected by Andrés
+    nombres = ", ".join(f"«{f['nombre']}»" for f in estimados) or "ninguno"
+    hecho_texto = f"Hecho: macros guardados como «estimado» en {len(estimados)} ({nombres})"
+    if de_etiqueta:
+        hecho_texto += (f"; «de etiqueta» en {len(de_etiqueta)} ("
+                        + ", ".join(f"«{f['nombre']}»" for f in de_etiqueta) + ")")
     if guardado["rechazadas"]:
         hecho_texto += f"; {guardado['rechazadas']} sin macros, como dijo Andrés"
     if guardado["recetas"]:
         hecho_texto += f"; recetas recalculadas: {_recetas_macros(guardado['recetas'])}"
-    hecho_texto += ". Lo ya apuntado no ha cambiado."
+    if any(f["tipo"] == "apuntado" for f in guardado["filas"]):
+        hecho_texto += ". Ninguna kcal ha cambiado."
+    else:
+        hecho_texto += ". Lo ya apuntado no ha cambiado."
     _apuntar(equipo, papel, texto, hecho_texto)
     return hecho_texto
 

@@ -229,3 +229,74 @@ def test_el_huevo_va_por_unidad(e):  # R3 with the only one per unit
 def test_lo_tuyo_sigue_diciendo_tu_ingrediente(e):  # NO debe haber cambiado
     a = e.ok(f"/api/fijos/{e.manzana['id']}/apuntar", {"cantidad": 100})["alimento"]
     assert (a["kcal"], a["origen"]) == (52, "de tu ingrediente «Manzana»")
+
+
+# -- unit 101 (REC-45 of `consultar-margen`: R-283 · C-356, C-357): the common foods bring their macros ----------
+
+MACROS_FIJO = ("proteina", "hidratos", "grasa")
+
+
+def test_cada_comun_trae_sus_macros_coherentes_con_sus_kcal():  # 101 R1 · R-283
+    for c in COMUNES:
+        assert all(isinstance(c.get(k), (int, float)) and c[k] >= 0 for k in MACROS_FIJO), c["nombre"]
+        if c["por"] == "100g":
+            assert sum(c[k] for k in MACROS_FIJO) <= 100, c["nombre"]
+        salen = 4 * c["proteina"] + 4 * c["hidratos"] + 9 * c["grasa"]
+        assert abs(salen - c["kcal"]) / c["kcal"] < 0.15 or c.get("aviso"), (c["nombre"], salen, c["kcal"])
+    valores = {normalizar(c["nombre"]): c for c in COMUNES}
+    assert valores["huevo"]["por"] == "unidad" and 5 <= valores["huevo"]["proteina"] <= 8  # one egg, not 100 g
+    assert valores["aceite de oliva"]["grasa"] > 99 and valores["pechuga de pollo cruda"]["proteina"] > 20
+    assert [n for n, c in valores.items() if c.get("aviso")] == ["cerveza", "vino tinto"]  # the alcohol
+
+
+def test_los_comunes_nuevos_se_cargan_con_sus_macros_estimados(tmp_path):  # 101 R1 · R-283
+    rec = Recetario(tmp_path / "data.sqlite3")
+    cargar_comunes(rec)
+    assert all(f["macros_origen"] == "estimado" and f["proteina"] is not None for f in _comunes(rec))
+    arroz = _por_nombre(rec)["arroz cocido"]
+    de_la_lista = next(c for c in COMUNES if c["nombre"] == "Arroz cocido")
+    assert {k: arroz[k] for k in MACROS_FIJO} == {k: de_la_lista[k] for k in MACROS_FIJO}
+
+
+def _sin_macros_como_antes(db: Path, nombre: str) -> None:
+    """A common food loaded before unit 101: without macros."""
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE alimento_fijo SET proteina = NULL, hidratos = NULL, grasa = NULL, macros_origen = NULL "
+                     "WHERE nombre = ?", (nombre,))
+
+
+def test_al_arrancar_rellena_solo_los_comunes_sin_macros_que_no_ha_tocado(tmp_path):  # 101 R1, R2 · C-356, C-357
+    db = tmp_path / "data.sqlite3"
+    rec = Recetario(db)
+    cargar_comunes(rec)
+    for nombre in ("Arroz cocido", "Atún al natural", "Pera", "Queso fresco", "Miel"):
+        _sin_macros_como_antes(db, nombre)
+    fijos = _por_nombre(rec)
+    # C-357: he put the label's to the tuna (it becomes his, «de etiqueta»)
+    rec.cambiar_fijo(fijos["atun al natural"]["id"], {"nombre": "Atún al natural", "kcal": 110, "por": "100g",
+                                                     "proteina": 26, "hidratos": 0, "grasa": 0.8})
+    rec.cambiar_fijo(fijos["pera"]["id"], {"nombre": "Pera", "kcal": 52, "por": "100g"})  # corrected: his
+    rec.borrar_fijo(fijos["queso fresco"]["id"], confirmado=True)  # removed
+    with sqlite3.connect(db) as conn:  # the team already estimated the honey's: they stay
+        conn.execute("UPDATE alimento_fijo SET proteina = 0.3, hidratos = 75, grasa = 0, macros_origen = 'estimado' "
+                     "WHERE nombre = 'Miel'")
+    registro = RegistroComidas(db)
+    ayer = registro.anadir(Alimento(**{k: v for k, v in rec.para_apuntar("fijo", fijos["arroz cocido"]["id"], 150)
+                                       .items() if k not in ("provisional",)}, dia=HOY), HOY)
+    antes = _por_nombre(rec)
+    cargar_comunes(Recetario(db))  # the next start
+    despues = _por_nombre(rec)
+    arroz = despues["arroz cocido"]
+    assert (arroz["proteina"], arroz["hidratos"], arroz["grasa"], arroz["macros_origen"]) == (2.7, 28.0, 0.3,
+                                                                                              "estimado")
+    assert despues["atun al natural"] == antes["atun al natural"]  # «de etiqueta», his
+    assert despues["atun al natural"]["macros_origen"] == "etiqueta"
+    assert despues["pera"] == antes["pera"] and despues["pera"]["proteina"] is None
+    assert "queso fresco" not in despues
+    assert despues["miel"] == antes["miel"]
+    assert {n: f for n, f in despues.items() if n != "arroz cocido"} == {n: f for n, f in antes.items()
+                                                                         if n != "arroz cocido"}
+    assert registro.alimento(ayer["id"]) == ayer  # what was logged before does not change (C-356)
+    assert ayer["proteina_g"] is None
+    hoy = rec.para_apuntar("fijo", arroz["id"], 150)  # and what is logged now carries them
+    assert (hoy["proteina_g"], hoy["hidratos_g"], hoy["grasa_g"]) == (4.1, 42.0, 0.4)

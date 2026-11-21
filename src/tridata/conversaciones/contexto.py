@@ -36,6 +36,7 @@ creating anything (`nutricion.suplementacion.leer_todo`).
 Unit 099 (R-279): each day with eaten foods that carry their three macros has `macros` (the grams eaten of protein,
 carbohydrates and fat and the share of its kcal they cover), and the block `macros` is the card of Hoy
 (`nutricion.macros.vista`: today with its objective and a `texto`, yesterday with its verdict, the 8 weeks).
+Unit 101 (R-285): `alimentos_sin_macros` says how many foods of the last 14 days have none, only when some.
 
 Unit 100 (R-280..R-282): only the last `DIAS_CON_ALIMENTOS` days (today and the 13 before) carry their foods
 (`comidas`), their `horas_comidas` and their whole `suplementacion`; the earlier days of the 8 weeks carry everything
@@ -65,7 +66,7 @@ from ..nutricion.macros import texto as texto_macros
 from ..nutricion.macros import vista as vista_macros
 from ..nutricion.objetivo_dia import ObjetivosDia
 from ..nutricion.peso import RegistroPeso
-from ..nutricion.registro import MACROS, SECCIONES, RegistroComidas
+from ..nutricion.registro import DIAS_MACROS, MACROS, SECCIONES, RegistroComidas, sin_macros_desde
 from ..nutricion.suplementacion import horas_de_secciones, leer_todo, resumen_dia
 from ..plan import ABIERTA, Planes
 from ..plan import semanas as semanas_del_plan
@@ -119,6 +120,9 @@ horas de entreno (las hechas o las del plan, las que sean más) y "texto", lo mi
 veredicto por macro; y "semanas", sus últimas semanas de lunes a domingo con la media al día y los días en rango; un \
 día sin veredicto es «aproximado» (poco de lo comido lleva macros) o «sin macros», y cada día de "dias" con macros \
 lleva los suyos ("macros", sus gramos comidos y "pct_kcal", qué parte de sus kcal los lleva); \
+"alimentos_sin_macros", cuántos alimentos de los últimos catorce días (comidos o planeados) no llevan macros: si \
+está, ofrécele que el nutricionista se los estime con preparar_macros, que los calcula solos si salen de algo \
+guardado; \
 "google_calendar", si su Google Calendar está conectado y qué lleva su calendario «TriData». Tú no puedes poner ni \
 quitar nada allí: lo pone la app sola. Si te pregunta si algo está en el calendario, contesta con lo que dice \
 "google_calendar" y nunca que «debería aparecer»; si algo falta, puede tocar «Sincronizar ahora» en Ajustes › \
@@ -202,6 +206,19 @@ def _macros(registro: RegistroComidas) -> dict[str, dict[str, Any]]:
     return {d: {**{k: _r(v[k]) for k in MACROS},
                 "pct_kcal": _r(v["kcal"] / total[d] * 100, 0) if total[d] > 0 else None}
             for d, v in con.items() if v["kcal"] > 0}
+
+
+def _sin_macros(registro: RegistroComidas, hoy: date) -> str | None:
+    """Unit 101 (R-285, C-361): «9 alimentos de los últimos 14 días sin macros» — the same foods `preparar_macros`
+    lists (`registro.sin_macros_desde`, eaten and planned) — or None when none is missing."""
+    conn = sqlite3.connect(registro.db_path)
+    try:
+        n = len(sin_macros_desde(conn, hoy - timedelta(days=DIAS_MACROS - 1)))
+    finally:
+        conn.close()
+    if not n:
+        return None
+    return f"{n} {'alimento' if n == 1 else 'alimentos'} de los últimos {DIAS_MACROS} días sin macros"
 
 
 def _secciones_con_comida(registro: RegistroComidas) -> dict[str, set[str]]:
@@ -468,6 +485,9 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     macros = vista_macros(registro=registro, pesos=pesos, store=store, planes=planes, hoy=hoy)  # unit 099 (R-279)
     macros["hoy"] = {**macros["hoy"], "texto": texto_macros(macros["hoy"])}  # a copy: `vista` is built per call
     datos_json["macros"] = macros
+    sin_macros = _sin_macros(registro, hoy)  # unit 101 (R-285)
+    if sin_macros:
+        datos_json["alimentos_sin_macros"] = sin_macros
     previstos = _entrenos_previstos(ObjetivosDia(registro.db_path), hoy)  # unit 071: the same SQLite
     if previstos:
         datos_json["entrenos_previstos"] = previstos

@@ -26,6 +26,7 @@ Unit 082 (REC-34): `apuntar_toma` (coffees and B12 with their hour and mg, apart
 Unit 098 (REC-43, R-269..R-273): `preparar_macros` (read-only: what has no macros, and the table and fingerprint of the
 team's values) and `guardar_macros` (with Andrés's «sí» and that fingerprint, as «estimado»); `get_recetas` shows the
 macros of what is saved, and `apuntar_comida` asks the team to estimate those of anything not saved.
+Unit 101 (REC-45, R-284): the same pair fills in what was logged without macros in the last 14 days (`apuntado:<id>`).
 
 Run it with `tridata-mcp` (stdio transport) and register that command in
 your MCP client, e.g. for Claude Code:
@@ -627,20 +628,27 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
         return comidas_desde_pc(equipo, desde, hasta)
 
     @server.tool(name="preparar_macros", annotations=lee, structured_output=False, description=(
-        "Fill in, once, the protein, carbs and fat (macros) of Andrés's saved ingredients and recipes that have none. "
+        "Fill in, once, the protein, carbs and fat (macros) of Andrés's saved ingredients and recipes that have none, "
+        "and of the foods he logged without them in the last 14 days (today and the 13 before, eaten and planned). "
         "Without propuestas: what has no macros yet (his ingredients, the common ones, and the estimated lines of his "
-        "recipes in use), each with its clave, its base and its kcal. With propuestas: [{clave, proteina, hidratos, "
-        "grasa}] (grams for its base: per 100 g or per unit as its kcal; for a recipe line, for that quantity), "
-        "the table that would be saved as «estimado», warning a row whose 4·P + 4·H + 9·G is far from its kcal, the "
-        "recipes in use that are recomputed, and its fingerprint (`Huella`). Impossible values (negative, or more "
-        "than 100 g per 100 g) are refused with the reason. It saves NOTHING: show Andrés the table and ask; only "
-        "after his «sí» call guardar_macros with the same propuestas and that huella."))
+        "recipes in use), each with its clave, its base and its kcal; then what he logged without macros, each with "
+        "its clave apuntado:<id>, its day, quantity and kcal: «calculado de …» (it comes from a saved ingredient, "
+        "recipe or common food that has macros: the app already worked them out for its quantity) or «a estimar». "
+        "When get_contexto says alimentos_sin_macros, offer him to review them. With propuestas: [{clave, proteina, "
+        "hidratos, grasa}] (grams for its base: per 100 g or per unit as its kcal; for a recipe line or a logged "
+        "food, for that quantity; a logged food already calculated goes with its clave alone; if Andrés corrects the "
+        "macros of a logged food, add corregido: true and they are saved «de etiqueta»), the table that would be "
+        "saved, warning a row whose 4·P + 4·H + 9·G is far from its kcal, the recipes in use that are recomputed, "
+        "and its fingerprint (`Huella`). No kcal ever changes. Impossible values (negative, or more than 100 g per "
+        "100 g) are refused with the reason. It saves NOTHING: show Andrés the table and ask; only after his «sí» "
+        "call guardar_macros with the same propuestas and that huella."))
     def preparar_macros_tool(propuestas: list[dict[str, Any]] | None = None) -> str:
         return preparar_macros_desde_pc(equipo, propuestas)
 
     @server.tool(name="guardar_macros", annotations=guarda, structured_output=False, description=(
-        "Save the macros preparar_macros already showed and Andrés answered «sí» to, as «estimado», and recompute "
-        "his recipes in use (their kcal and what was already logged do not change). NEVER call it without his «sí». "
+        "Save the macros preparar_macros already showed and Andrés answered «sí» to, as «estimado» (a logged food "
+        "with corregido: true, «de etiqueta»), and recompute his recipes in use (no kcal changes; what was logged "
+        "changes only in the macros of the apuntado:<id> rows). NEVER call it without his «sí». "
         "rechazar (optional): the claves he said no to; they stay without macros. If anything changed since it was "
         f"prepared nothing is saved and the new version comes back: show it to him again.\n{papeles} propuestas: the "
         "same given to preparar_macros. huella: the `Huella` it returned. texto (optional): a short line for Andrés, "

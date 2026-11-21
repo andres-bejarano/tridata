@@ -10,8 +10,11 @@ carry their three macros (protein, carbohydrates and fat, unit 098) and their kc
 - **Hours (R-275):** the larger of the activities of Garmin that day and the sessions of that day in the plan in
   course, each one lasting what `calendario.sincronizar.duracion` reads (one it cannot read is one hour, C-270).
 - **Verdict (R-276, R-277):** only for a past day, and only if the kcal eaten with their three macros are at least
-  80 % of the kcal eaten; below that it is «aproximado: macros del N % de las kcal», and with none «sin macros».
-  Protein and carbohydrates «bajo», «en_rango» or «alto»; fat «bajo» or «bien».
+  80 % of the kcal eaten. Protein and carbohydrates «bajo», «en_rango» or «alto»; fat «bajo» or «bien».
+- **Below 80 % (unit 101, R-277 changed in mapa v44, C-341):** `aviso` is «Macros de solo el N % de lo comido · M
+  alimentos sin macros: pídeselos al equipo» (N rounded, but 79.6 % never says 80 %; M the eaten foods
+  `registro.falta_macros`, also in `alimentos_sin_macros`), and the card shows only that and the objective; with
+  nothing eaten, «sin macros».
 - **Weeks (R-278):** the last 8 Monday-to-Sunday weeks (this one included): per macro the mean a day (g/kg; fat in
   % of kcal) and in how many days it fell in range, over the past days with a verdict.
 
@@ -28,7 +31,7 @@ from ..calendario.sincronizar import duracion
 from ..plan import Planes
 from ..storage import DataStore
 from .peso import RegistroPeso
-from .registro import MACROS, RegistroComidas
+from .registro import MACROS, RegistroComidas, falta_macros
 
 PROTEINA_G_KG = (1.6, 2.0)
 GRASA_PCT_MIN = 20
@@ -81,7 +84,8 @@ def _con_macros(a: dict) -> bool:
 def del_dia(apuntes: Iterable[dict], kg: float | None, horas: float, *, es_hoy: bool) -> dict[str, Any]:
     """The macros of one day from its logged foods (`RegistroComidas.apuntes_del_dia`), its weight and its hours.
 
-    `estado` is `completo`, `aproximado` (less than 80 % of the kcal eaten have macros) or `sin_macros`; the
+    `estado` is `completo`, `aproximado` (less than 80 % of the kcal eaten have macros) or `sin_macros` (unit 101:
+    `aviso` then says the share and `alimentos_sin_macros`, how many eaten foods have none); the
     `veredicto` of each macro is None today («llevas»), when it is not `completo` and, for protein and carbohydrates,
     without a weight."""
     comido = [a for a in apuntes if a.get("estado") == "comido"]
@@ -90,12 +94,20 @@ def del_dia(apuntes: Iterable[dict], kg: float | None, horas: float, *, es_hoy: 
     kcal_con = sum(a["kcal"] for a in con)
     gramos = {k: sum(a[k] for a in con) for k in MACROS}
     pct = kcal_con / kcal_comidas * 100 if kcal_comidas > 0 else None
+    faltan = sum(1 for a in comido if falta_macros(a))  # unit 101 (R-277): how many to ask the team for
     if not con or kcal_con <= 0:
-        estado, aviso = SIN, SIN_MACROS
+        estado = SIN
     elif pct is not None and pct < UMBRAL_PCT:
-        estado, aviso = APROXIMADO, f"aproximado: macros del {round(pct)} % de las kcal"
+        estado = APROXIMADO
     else:
-        estado, aviso = COMPLETO, None
+        estado = COMPLETO
+    if estado == COMPLETO:
+        aviso = None
+    elif pct is None or not faltan:
+        aviso = SIN_MACROS
+    else:
+        aviso = (f"Macros de solo el {min(round(pct), UMBRAL_PCT - 1)} % de lo comido · {faltan} "
+                 f"{'alimento' if faltan == 1 else 'alimentos'} sin macros: pídeselos al equipo")
     juzga = estado == COMPLETO and not es_hoy
     o = objetivo(kg, horas)
 
@@ -110,6 +122,7 @@ def del_dia(apuntes: Iterable[dict], kg: float | None, horas: float, *, es_hoy: 
     return {
         "kg": kg, "horas": round(horas, 2), "kcal_comidas": round(kcal_comidas), "kcal_con_macros": round(kcal_con),
         "pct_kcal_con_macros": None if pct is None else round(pct), "estado": estado, "aviso": aviso,
+        "alimentos_sin_macros": faltan,
         "aviso_peso": AVISO_SIN_PESO if kg is None else None,
         "proteina": macro("proteina_g", "proteina", PROTEINA_G_KG),
         "hidratos": macro("hidratos_g", "hidratos", franja_hidratos(horas)),

@@ -48,7 +48,10 @@ _COLUMNAS = (
 # added to an existing store with ALTER TABLE, saved on confirming and never recomputed.
 # unit 035 (R-121, R-126, G-51): the meal of the day a food belongs to, chosen by Andrés by dragging it;
 # NULL («Sin sección») for everything logged and for what was already in the store.
-_COLUMNAS_NUEVAS = (("origen", "TEXT"), ("provisional", "INTEGER NOT NULL DEFAULT 0"), ("seccion", "TEXT"))
+# unit 101 (R-284): `macros_origen`, «estimado» or «etiqueta» when the team filled in the macros of a logged food with
+# Andrés's «sí» (`poner_macros`); NULL otherwise. Not in `_COLUMNAS`: what the day shows does not change.
+_COLUMNAS_NUEVAS = (("origen", "TEXT"), ("provisional", "INTEGER NOT NULL DEFAULT 0"), ("seccion", "TEXT"),
+                    ("macros_origen", "TEXT"))
 # unit 074 (R-212, S-71): «Nutrición en carrera» (`carrera`), the sixth one, after dinner
 SECCIONES = ("desayuno", "media_manana", "comida", "merienda", "cena", "carrera")
 
@@ -77,6 +80,38 @@ def _numero(datos: dict, clave: str) -> float | None:
 
 
 MACROS = ("proteina_g", "hidratos_g", "grasa_g")
+DIAS_MACROS = 14  # unit 101 (R-284, S-93): what was logged without macros is asked for from today and the 13 before
+
+
+def falta_macros(a: Any) -> bool:
+    """Unit 101 (R-277, R-284, R-285): a logged food «sin macros» has kcal and lacks any of the three (one of 0 kcal,
+    or without kcal, has nothing to ask for). The one rule of the card, `preparar_macros` and the context."""
+    return bool(a["kcal"]) and a["kcal"] > 0 and any(a[k] is None for k in MACROS)
+
+
+_SIN_MACROS_SQL = "kcal > 0 AND (proteina_g IS NULL OR hidratos_g IS NULL OR grasa_g IS NULL)"  # `falta_macros`
+
+
+def sin_macros_desde(conn: sqlite3.Connection, desde: date) -> list[dict]:
+    """Unit 101 (R-284): the logged foods without macros (`falta_macros`) from `desde` on, eaten and planned, by day
+    and in the order they were logged; read only, and nothing if the table does not exist yet."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'alimento_apuntado'").fetchone() is None:
+        return []
+    columnas = {f[1] for f in conn.execute("PRAGMA table_info(alimento_apuntado)")}
+    origen = "origen" if "origen" in columnas else "NULL AS origen"
+    filas = conn.execute(f"SELECT id, dia, nombre, cantidad, unidad, kcal, estado, {origen} FROM alimento_apuntado "  # noqa: S608
+                         f"WHERE dia >= ? AND {_SIN_MACROS_SQL} ORDER BY dia, id", (desde.isoformat(),)).fetchall()
+    return [dict(zip(("id", "dia", "nombre", "cantidad", "unidad", "kcal", "estado", "origen"), f, strict=True))
+            for f in filas]
+
+
+def poner_macros(conn: sqlite3.Connection, alimento_id: int, macros: dict[str, float], origen: str) -> None:
+    """Unit 101 (R-284, C-358): write ONLY the three macros of a logged food and their mark, in the caller's
+    transaction; its kcal, quantity and the rest stay as they were."""
+    if "macros_origen" not in {f[1] for f in conn.execute("PRAGMA table_info(alimento_apuntado)")}:
+        conn.execute("ALTER TABLE alimento_apuntado ADD COLUMN macros_origen TEXT")
+    conn.execute("UPDATE alimento_apuntado SET proteina_g = ?, hidratos_g = ?, grasa_g = ?, macros_origen = ? "
+                 "WHERE id = ?", (*(macros[k] for k in MACROS), origen, alimento_id))
 
 
 def macros_al_cambiar(antes: Any, nuevos: dict[str, float | None], kcal_nueva: float | None, otro: bool) -> dict:
@@ -261,6 +296,8 @@ class RegistroComidas:
             macros = macros_al_cambiar(fila, {k: getattr(nuevo, k) for k in MACROS}, nuevo.kcal, otro)
             conn.execute("UPDATE alimento_apuntado SET proteina_g = ?, hidratos_g = ?, grasa_g = ? WHERE id = ?",
                          (*(macros[k] for k in MACROS), alimento_id))
+            if otro or all(macros[k] is None for k in MACROS):  # unit 101: another food (or none): not the team's
+                conn.execute("UPDATE alimento_apuntado SET macros_origen = NULL WHERE id = ?", (alimento_id,))
             conn.execute(
                 "UPDATE alimento_apuntado SET nombre = ?, cantidad = ?, unidad = ?, kcal = ?, estimado = ?, "
                 "pendiente_cantidad = ?, dia = ?, estado = ?, origen = ?, provisional = ? WHERE id = ?",

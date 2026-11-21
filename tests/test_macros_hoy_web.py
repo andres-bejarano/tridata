@@ -91,7 +91,9 @@ def test_api_hoy_aproximado_sin_veredicto(tmp_path):  # R5 · C-341
     e.comer(HOY, 1300, 100, 150, 40)
     e.comer(HOY, 700)
     m = e.cliente.get("/api/hoy").json()["macros"]
-    assert m["hoy"]["estado"] == "aproximado" and m["hoy"]["aviso"] == "aproximado: macros del 65 % de las kcal"
+    assert m["hoy"]["estado"] == "aproximado"
+    assert m["hoy"]["aviso"] == "Macros de solo el 65 % de lo comido · 1 alimento sin macros: pídeselos al equipo"
+    assert m["hoy"]["alimentos_sin_macros"] == 1  # unit 101 R5 (R-277)
     assert m["ayer"]["estado"] == "aproximado"
     assert all(m["ayer"][x]["veredicto"] is None for x in ("proteina", "hidratos", "grasa"))
     assert m["semanas"][-1]["sin_macros"] is True  # no day with a verdict this week

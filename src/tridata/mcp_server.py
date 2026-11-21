@@ -101,7 +101,8 @@ metrics, sleep, HRV, training load) of one triathlete.
   was finalized; don't treat them as real totals.
 - get_contexto (when present) gives the same context the team of the app
   sees: foods, weight, objective, trainings, sleep, HR, HRV, the plan in
-  course, races and incidents. To change anything: show Andrés what
+  course, races and incidents; each food only for the last 14 days
+  (older days: get_comidas, by dates). To change anything: show Andrés what
   preparar_cambio returns (or the estimated meal, or the weight) and wait
   for his «sí» before hacer_cambio, apuntar_comida or apuntar_peso; say it
   is done only when the tool says «Hecho».
@@ -386,12 +387,14 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
                  structured_output=False)
     def get_contexto_tool() -> str:
         """Everything the team of the app sees today, in one text: its instructions and the catalogue of changes,
-        the medical transcriptions already made, and the data in JSON (the last 8 weeks day by day with foods and
-        their kcal, weight, steps, resting HR, sleep, HRV and trainings; earlier weeks summed up; the settings and
+        the medical transcriptions already made, and the data in JSON (the last 8 weeks day by day with their kcal,
+        weight, steps, resting HR, sleep, HRV and trainings, and each food only for the last 14 days: the foods of
+        earlier days are asked with get_comidas by dates; earlier weeks summed up; the settings and
         objective of today; races; HR zones; the plan in course with its sessions and incidents). Unit 082: each day
         also carries `suplementacion` (coffees and B12 with their hour and mg, the caffeine of the day, the last dose
         and the milk of the coffees) and `horas_comidas` (the hour of each section with food, «~» if typical), next to
-        its sleep, to relate them. Read-only."""
+        its sleep, to relate them; unit 100: only the last 14 days carry them, the earlier ones only the caffeine of
+        the day. Read-only."""
         return texto_contexto(equipo)
 
     papeles = f"papel: who you are, one of {', '.join(PAPELES_PC)}."
@@ -521,6 +524,7 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
                                           guardar_transcripcion_desde_pc, importar_plan_desde_pc,
                                           perfil_ruta_desde_pc, preparar_macros_desde_pc, preparar_plan_desde_pc,
                                           preparar_transcripcion_desde_pc, recetario_texto, rutas_desde_pc)
+    from .conversaciones.desde_pc import MAX_DIAS_COMIDAS, comidas_desde_pc
 
     lee = ToolAnnotations(read_only_hint=True, open_world_hint=False)
     guarda = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
@@ -608,6 +612,19 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
         "Read-only."))
     def get_recetas_tool() -> str:
         return recetario_texto(equipo)
+
+    @server.tool(name="get_comidas", annotations=lee, structured_output=False, description=(
+        "What Andrés ate on the days you ask for, by dates: get_contexto carries each food only for the last 14 days "
+        "(today and the 13 before); the earlier days come there with their totals but without their foods. desde, "
+        f"hasta: dates AAAA-MM-DD, both included, at most {MAX_DIAS_COMIDAS} days each time (ask in several pieces "
+        "for more). In JSON, each day with its fecha and dia (weekday), and the same detail as the recent days of "
+        "get_contexto: comidas (each food with its quantity, kcal and estado comido or planeado), horas_comidas (the "
+        "hour of each meal, «~» if it is the typical one) and suplementacion (coffees and B12 with their hour and mg, "
+        "the caffeine of the day, the last dose and the milk of the coffees). A day with nothing logged comes with "
+        "only its date. A range that is too long, backwards or with a date not understood says what to fix and gives "
+        "no data. Read-only."))
+    def get_comidas_tool(desde: str, hasta: str) -> str:
+        return comidas_desde_pc(equipo, desde, hasta)
 
     @server.tool(name="preparar_macros", annotations=lee, structured_output=False, description=(
         "Fill in, once, the protein, carbs and fat (macros) of Andrés's saved ingredients and recipes that have none. "

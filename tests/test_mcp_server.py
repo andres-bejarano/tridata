@@ -131,6 +131,7 @@ def test_server_with_the_team_adds_its_tools(tmp_path, store):  # unit 065 R-186
         "guardar_transcripcion", "get_recetas", "get_rutas", "get_perfil_ruta",
         "apuntar_toma", "apuntar_leche_cafes",  # unit 082: coffees and B12 with their hour, and the milk of the coffees
         "preparar_macros", "guardar_macros",  # unit 098: the macros of what is saved, filled in once
+        "get_comidas",  # unit 100: the foods of older days, by dates (R-281)
     }  # `proponer_cambio` (065) is gone: no card is left anywhere
     escriben = {"hacer_cambio", "apuntar_comida", "apuntar_peso", "importar_plan", "guardar_transcripcion",
                 "apuntar_toma", "apuntar_leche_cafes", "guardar_macros"}

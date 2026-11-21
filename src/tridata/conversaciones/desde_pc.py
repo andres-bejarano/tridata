@@ -40,6 +40,10 @@ lists what has no macros and, with the coach's values, the table and its fingerp
 `guardar_macros_desde_pc` saves them as «estimado» only with Andrés's «sí» and that fingerprint (minus what he says no
 to). Logging from a saved thing takes its macros (`_de_lo_guardado`); anything else, the ones the coach estimated.
 
+Unit 100 (REC-44 of `preguntar-equipo`, R-281, C-353, C-354): `comidas_desde_pc`, the foods of the days the context
+no longer details (older than 14 days), by dates and at most `MAX_DIAS_COMIDAS` days each time, with the same detail
+as the recent ones (`contexto.detalle_dias`). Read only.
+
 Each save leaves its message in «Desde el PC» (R-196). Nothing here calls a paid AI.
 
 What a tool answers never carries a value of Andrés beyond what the card says; the logs carry ids and counts only.
@@ -76,7 +80,7 @@ from ..web.app import DIAS_RECIENTES
 from ..web.calendario import Sincronizacion
 from . import Conversaciones
 from .cambios import CambioInterpretado, cambio_no_entendido
-from .contexto import Contexto, montar
+from .contexto import Contexto, detalle_dias, montar
 from .medicos import FueraDeLaCarpeta, Medicos, TranscripcionMedica
 
 log = logging.getLogger(__name__)
@@ -410,6 +414,43 @@ def leche_cafes_desde_pc(equipo: Equipo, papel: str, dia: Any, ml: Any, kcal: An
              f"{numero(leche.get('ml'))} ml, {numero(leche.get('kcal'))} kcal, {reparto}.")
     _apuntar(equipo, papel, texto, hecho)
     return hecho
+
+
+# -- unit 100 · R2, R3 (R-281, C-353, C-354): the foods of any day, by dates ----------------------------------------
+
+MAX_DIAS_COMIDAS = 31  # the longest range `get_comidas` gives at once (a month)
+SIN_DATOS = "No se dan datos."
+
+
+def _fecha_pedida(valor: Any, nombre: str) -> date | str:
+    try:
+        if not isinstance(valor, str):
+            raise ValueError(valor)
+        return date.fromisoformat(valor.strip())
+    except ValueError:
+        return (f"«{nombre}» no se entiende ({valor!r}): escribe la fecha AAAA-MM-DD, por ejemplo 2026-10-01. "
+                f"{SIN_DATOS}")
+
+
+def comidas_desde_pc(equipo: Equipo, desde: Any, hasta: Any) -> str:
+    """R2 (R-281, C-353): each day from `desde` to `hasta` (both included) with its foods, the hours of its meals and
+    its supplementation, in JSON, as the recent days of the context; a day with nothing logged comes empty. R3
+    (C-354): a range of more than `MAX_DIAS_COMIDAS` days, backwards or with a date not understood says what to fix
+    and gives no data. Read only."""
+    inicio, fin = _fecha_pedida(desde, "desde"), _fecha_pedida(hasta, "hasta")
+    if isinstance(inicio, str):
+        return inicio
+    if isinstance(fin, str):
+        return fin
+    if inicio > fin:
+        return (f"El rango está al revés ({inicio.isoformat()} es después de {fin.isoformat()}): tiene que ir desde "
+                f"antes que hasta. {SIN_DATOS}")
+    dias = (fin - inicio).days + 1
+    if dias > MAX_DIAS_COMIDAS:
+        return (f"Son {dias} días: como mucho {MAX_DIAS_COMIDAS} días cada vez; pídelo en varios trozos. {SIN_DATOS}")
+    return json.dumps({"desde": inicio.isoformat(), "hasta": fin.isoformat(),
+                       "dias": detalle_dias(equipo.asistente.registro, inicio, fin)},
+                      ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 # -- unit 081 · R3 (S-72, R-42, R-43): the recipes and fixed foods ----------------------------------------------------
@@ -925,7 +966,7 @@ def perfil_ruta_desde_pc(equipo: Equipo, garmin: Any = None, actividad: Any = No
     return texto_perfil(p)
 
 
-__all__ = ["NADA", "PAPELES_PC", "TITULO", "Equipo", "analiticas_pendientes", "apuntar_comida_desde_pc",
+__all__ = ["MAX_DIAS_COMIDAS", "comidas_desde_pc", "NADA", "PAPELES_PC", "TITULO", "Equipo", "analiticas_pendientes", "apuntar_comida_desde_pc",
            "apuntar_peso_desde_pc", "apuntar_toma_desde_pc", "leche_cafes_desde_pc", "contexto", "conversacion_pc", "guardar_transcripcion_desde_pc", "hacer_desde_pc",
            "guardar_macros_desde_pc", "huella", "importar_plan_desde_pc", "montar_equipo", "papel_no_valido",
            "perfil_ruta_desde_pc", "preparar_desde_pc", "preparar_macros_desde_pc", "preparar_plan_desde_pc", "preparar_transcripcion_desde_pc", "recetario_texto",

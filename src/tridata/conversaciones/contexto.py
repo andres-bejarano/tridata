@@ -37,6 +37,11 @@ Unit 099 (R-279): each day with eaten foods that carry their three macros has `m
 carbohydrates and fat and the share of its kcal they cover), and the block `macros` is the card of Hoy
 (`nutricion.macros.vista`: today with its objective and a `texto`, yesterday with its verdict, the 8 weeks).
 
+Unit 100 (R-280..R-282): only the last `DIAS_CON_ALIMENTOS` days (today and the 13 before) carry their foods
+(`comidas`), their `horas_comidas` and their whole `suplementacion`; the earlier days of the 8 weeks carry everything
+else but, of the supplementation, only the caffeine of the day. Their detail is asked by dates (`detalle_dias`, the
+tool `get_comidas` of the MCP), built by the same `_detalle` as the recent days.
+
 None of it carries the hour: with the same data it is the same text byte to byte. It changes only when a datum
 changes (a food, a weight, a sync) or the day does. Read only: nothing here writes.
 """
@@ -68,6 +73,7 @@ from ..storage import DataStore
 from ..sync import ALL_SPORT_TYPES, CYCLING_TYPES, RUNNING_TYPES, SWIMMING_TYPES
 
 DIAS_DIA_A_DIA = 56  # the last 8 weeks day by day; the earlier ones by week (S-39)
+DIAS_CON_ALIMENTOS = 14  # unit 100 (R-280): today and the 13 before carry each food; the earlier ones, by dates
 VE_SIEMPRE = ("comidas", "peso", "entrenos", "sueño", "pulso", "HRV")
 _DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 # unit 054 (R7): what «TriData» of Google Calendar carries, so the team does not promise what does not happen
@@ -93,7 +99,12 @@ fechas de esta semana y de la siguiente con su día; cada fecha lleva su día de
 "hasta_dia"): léelo de ahí y no lo calcules nunca; "dias", las últimas 8 semanas día a día (comidas con sus \
 kcal, peso, pasos, pulso en reposo, sueño, HRV, entrenos con su id y carga; "suplementacion", sus cafés y su B12 con \
 la hora, los mg de cafeína, el total del día, la última toma y la leche de los cafés repartida; "horas_comidas", la \
-hora de cada comida del día, con «~» si es la típica y no la dijo); "semanas", lo anterior resumido por \
+hora de cada comida del día, con «~» si es la típica y no la dijo). Solo los últimos 14 días (hoy y \
+los 13 anteriores) llevan sus alimentos ("comidas"), sus "horas_comidas" y su "suplementacion" entera; los días \
+anteriores de esas 8 semanas llevan todo lo demás (sus kcal, macros, peso, sueño, entrenos…) pero sin sus alimentos ni \
+sus horas de comida, y de su suplementación solo la cafeína del día. Si necesitas saber qué comió un día de esos, \
+pídelo por fechas con la herramienta get_comidas (desde y hasta, como mucho 31 días cada vez): te los da con el mismo \
+detalle. "semanas", lo anterior resumido por \
 semanas; "ajustes", sus objetivos de hoy; "carreras", sus carreras; "pulso", su frecuencia cardiaca máxima, de reposo \
 y sus zonas, y de dónde salen; "plan", su plan de entrenamiento en curso (sus carreras con su objetivo, su resultado —"a mano" si lo escribió él, \
 "garmin" si sale de su actividad de ese día— y la estrategia por tramos que guardó, tal cual; sus semanas \
@@ -228,6 +239,40 @@ def _horas_comidas(puestas: dict[str, str], con_comida: set[str]) -> dict[str, s
     return salida or None
 
 
+def _detalle(dia: str, comidas: dict[str, list[dict[str, Any]]], secciones: dict[str, set[str]],
+             tomas_de: dict[str, list[dict]], horas_de: dict[str, dict[str, str]],
+             leche_de: dict[str, dict]) -> dict[str, Any]:
+    """Unit 100 (R-280, R-281): what only the recent days carry, and `get_comidas` gives of any day: its foods, the
+    hours of its meals and its whole supplementation (the same for both, so they never drift apart)."""
+    return {"comidas": comidas.get(dia, []),
+            "suplementacion": _suplementacion(tomas_de.get(dia, []), leche_de.get(dia)),
+            "horas_comidas": _horas_comidas(horas_de.get(dia, {}), secciones.get(dia, set()))}
+
+
+def _sin_alimentos(fila: dict[str, Any]) -> dict[str, Any]:
+    """Unit 100 (R-280, C-352): a day older than `DIAS_CON_ALIMENTOS` without its foods and the hours of its meals,
+    and of its supplementation only the caffeine of the day (if it has any)."""
+    resto = {k: v for k, v in fila.items() if k not in ("comidas", "horas_comidas", "suplementacion")}
+    cafeina = (fila.get("suplementacion") or {}).get("cafeina_mg")
+    if cafeina:
+        resto["suplementacion"] = {"cafeina_mg": cafeina}
+    return resto
+
+
+def detalle_dias(registro: RegistroComidas, desde: date, hasta: date) -> list[dict[str, Any]]:
+    """Unit 100 (R-281, C-353): each day from `desde` to `hasta` with its date, its weekday and the same detail the
+    recent days carry in the context (`_detalle`); a day with nothing logged, only its date. Read only."""
+    comidas = _comidas(registro)
+    secciones = _secciones_con_comida(registro)
+    tomas_de, horas_de, leche_de = leer_todo(registro.db_path)  # nothing created
+    salida = []
+    for i in range((hasta - desde).days + 1):
+        dia = (desde + timedelta(days=i)).isoformat()
+        salida.append(_limpio({"fecha": dia, "dia": _dia(dia),
+                               **_detalle(dia, comidas, secciones, tomas_de, horas_de, leche_de)}))
+    return salida
+
+
 def _entreno(store: DataStore, a: dict[str, Any]) -> dict[str, Any]:
     segundos = float(a.get("duration_seconds") or 0)
     distancia = float(a.get("distance_meters") or 0)
@@ -355,7 +400,7 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
         planeado = [c for c in comidas.get(dia, []) if c.get("estado") == "planeado"]
         sueno = n.get("total_sleep_seconds")
         return {
-            "comidas": comidas.get(dia, []),
+            **_detalle(dia, comidas, secciones, tomas_de, horas_de, leche_de),
             "kcal_comidas": _r(sum(c.get("kcal") or 0 for c in comido), 0) if comido else None,
             "kcal_planeadas": _r(sum(c.get("kcal") or 0 for c in planeado), 0) if planeado else None,
             "peso": _r(peso_de[dia]["kg"], 2) if dia in peso_de else None,
@@ -363,15 +408,15 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
             "pasos": s.get("steps"), "kcal_garmin": s.get("total_calories"), "pulso_reposo": s.get("resting_hr"),
             "sueno_h": _r(sueno / 3600, 2) if sueno else None, "sueno_puntos": n.get("sleep_score"),
             "hrv": _r(h.get("last_night_avg"), 0), "entrenos": entrenos.get(dia, []), "carga": carga.get(dia),
-            "suplementacion": _suplementacion(tomas_de.get(dia, []), leche_de.get(dia)),
-            "horas_comidas": _horas_comidas(horas_de.get(dia, {}), secciones.get(dia, set())),
             "macros": macros_de.get(dia),  # unit 099 (R-279)
         }
 
+    con_alimentos = (hoy - timedelta(days=DIAS_CON_ALIMENTOS - 1)).isoformat()  # unit 100 (R-280)
     dias = []
     for i in range(DIAS_DIA_A_DIA):
         dia = (desde + timedelta(days=i)).isoformat()
-        dias.append(_limpio({"fecha": dia, "dia": _dia(dia), **del_dia(dia)}))
+        fila = {"fecha": dia, "dia": _dia(dia), **del_dia(dia)}
+        dias.append(_limpio(fila if dia >= con_alimentos else _sin_alimentos(fila)))
 
     # -- before the 8 weeks: by week (Monday), only sums and means ---------------------------------------------------
     antes = sorted({d for d in (*comidas, *peso_de, *stats, *noches, *hrv, *entrenos, *carga) if d < desde.isoformat()})
@@ -451,4 +496,5 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
         plan=plan["nombre"] if plan else None, incidencias=len(incidencias))
 
 
-__all__ = ["DIAS_DIA_A_DIA", "INSTRUCCIONES", "Contexto", "montar", "plan_en_curso"]
+__all__ = ["DIAS_CON_ALIMENTOS", "DIAS_DIA_A_DIA", "INSTRUCCIONES", "Contexto", "detalle_dias", "montar",
+           "plan_en_curso"]

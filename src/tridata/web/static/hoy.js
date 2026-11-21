@@ -5,6 +5,8 @@
 // A Garmin datum that has not arrived says «aún no ha llegado» and one Garmin gave half-done «⚠ incompleto»: never
 // a 0 (G-47). Tapping a card goes to its place. The button reuses POST /api/garmin/actualizar: while it runs it
 // says so (Q-13); a failure says why with the words of the routine's warning and leaves data and hour as they were.
+// Unit 099 (REC-43): below Comida, the card «Macros» (`macros` of /api/hoy): today's protein, carbohydrates and fat
+// with «llevas», their objective and a bar; yesterday's verdict; tapping it opens and closes its 8 weeks in place.
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -12,6 +14,10 @@ const fechaLarga = new Intl.DateTimeFormat("es-ES", { weekday: "long", day: "num
 const kcal = (n) => `${enteras.format(Math.round(Math.abs(n)))} kcal`;
 const conSigno = (n) => { const r = Math.round(n); return (r > 0 ? "+" : r < 0 ? "−" : "") + enteras.format(Math.abs(r)); };
 const NO_HA_LLEGADO = "aún no ha llegado";
+const decimal = new Intl.NumberFormat("es-ES", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const VEREDICTO = { bajo: "bajo", en_rango: "en rango", alto: "alto", bien: "bien" };
+const MACROS = [["proteina", "proteína", "Proteína"], ["hidratos", "hidratos", "Hidratos"]];
+const fechaCorta = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short" });
 
 let api = null; // app.js's `api` (it keeps the «sin conexión» notice)
 let alActualizarDia = () => {}; // app.js repaints Nutrición › Día with the day the button brings back
@@ -22,6 +28,11 @@ let peticion = 0; // drops a late answer
 export function iniciarHoy(opciones) {
   ({ api, alActualizarDia } = opciones);
   $("hoy-actualizar").addEventListener("click", actualizarGarmin);
+  const macros = $("hoy-macros"); // unit 099: it opens its weeks, it does not navigate
+  macros.addEventListener("click", alternarSemanas);
+  macros.addEventListener("keydown", (evento) => {
+    if (evento.key === "Enter" || evento.key === " ") { evento.preventDefault(); alternarSemanas(); }
+  });
   for (const tarjeta of document.querySelectorAll("#hoy .tarjeta-hoy")) {
     tarjeta.addEventListener("click", (evento) => {
       if (evento.target.closest("a, button")) return; // its link and the Garmin button do their own thing
@@ -44,6 +55,7 @@ export async function cargarHoy() {
 function pintarHoy(h) {
   $("hoy-fecha").textContent = fechaLarga.format(new Date(`${h.fecha}T12:00:00`)).replace(",", "");
   pintarComida(h.comida);
+  if (h.macros) pintarMacros(h.macros);
   pintarEntreno(h.entreno);
   pintarComoLlegas(h.como_llegas);
   motivos = h.garmin_sync.motivos ?? {};
@@ -59,6 +71,98 @@ function pintarComida(c) {
   const partes = [`${kcal(c.total_kcal)} comidas`, nivel];
   if (c.planeado_kcal > 0) partes.push(`${kcal(c.planeado_kcal)} planeadas`);
   $("hoy-comida-detalle").textContent = partes.join(" · ");
+}
+
+// -- unit 099: the card «Macros» ------------------------------------------------------------------------------------
+
+function nodo(etiqueta, clase, texto) {
+  const n = document.createElement(etiqueta);
+  if (clase) n.className = clase;
+  if (texto !== undefined) n.textContent = texto;
+  return n;
+}
+
+// A bar from 0 to 120 % of the top of the range, with the range shaded and what is eaten filled.
+function barra(llevas, desde, hasta) {
+  const b = nodo("div", "barra-macro");
+  const escala = hasta * 1.2;
+  const pct = (v) => `${Math.max(0, Math.min(100, (v / escala) * 100))}%`;
+  if (desde !== null) {
+    const rango = nodo("span", "rango-macro");
+    rango.style.left = pct(desde);
+    rango.style.width = hasta === null ? "0" : `calc(${pct(hasta)} - ${pct(desde)})`;
+    b.append(rango);
+  }
+  const lleno = nodo("span", "lleno-macro");
+  lleno.style.width = pct(llevas);
+  b.append(lleno);
+  return b;
+}
+
+function filaMacro(nombre, llevas, objetivo, laBarra) {
+  const fila = nodo("li", "macro-fila");
+  const texto = nodo("div", "macro-texto num");
+  texto.append(nodo("strong", "", `${nombre}: ${llevas}`), nodo("span", "objetivo-macro", objetivo));
+  fila.append(texto, laBarra);
+  return fila;
+}
+
+function pintarMacros(m) {
+  const d = m.hoy;
+  const filas = MACROS.map(([clave, , titulo]) => {
+    const x = d[clave];
+    if (x.objetivo_g) {
+      return filaMacro(titulo, `llevas ${enteras.format(Math.round(x.g))} g`,
+        `de ${x.objetivo_g[0]}-${x.objetivo_g[1]} g`, barra(x.g, x.objetivo_g[0], x.objetivo_g[1]));
+    }
+    const [a, b] = x.objetivo_g_kg; // without a weight: only g/kg (R-274, C-347)
+    return filaMacro(titulo, `llevas ${enteras.format(Math.round(x.g))} g`,
+      `de ${decimal.format(a)}-${decimal.format(b)} g/kg`, barra(0, null, 1));
+  });
+  const g = d.grasa;
+  const pct = g.pct_kcal === null ? "—" : `${g.pct_kcal} % de las kcal`;
+  filas.push(filaMacro("Grasa", pct, `≥ ${g.objetivo_pct_min} %`,
+    barra(g.pct_kcal ?? 0, g.objetivo_pct_min, g.objetivo_pct_min * 2)));
+  $("hoy-macros-barras").replaceChildren(...filas);
+
+  const avisos = [d.estado === "completo" ? null : d.aviso, d.aviso_peso].filter(Boolean);
+  $("hoy-macros-aviso").textContent = avisos.join(" · ");
+  $("hoy-macros-aviso").hidden = !avisos.length;
+  $("hoy-macros-ayer").textContent = `Ayer: ${textoVeredicto(m.ayer)}`;
+  pintarSemanas(m.semanas);
+}
+
+// «proteína alto · hidratos bajo · grasa bien»; a day without verdict says why (R-276, R-277).
+function textoVeredicto(d) {
+  if (d.estado !== "completo") return d.aviso;
+  const partes = [...MACROS.map(([clave, nombre]) => [nombre, d[clave].veredicto]), ["grasa", d.grasa.veredicto]]
+    .filter(([, v]) => v).map(([nombre, v]) => `${nombre} ${VEREDICTO[v]}`);
+  if (d.aviso_peso) partes.push("sin peso: sin veredicto de proteína ni hidratos");
+  return partes.join(" · ");
+}
+
+function pintarSemanas(semanas) {
+  const filas = [...semanas].reverse().map((s) => { // the current week first
+    const fila = nodo("div", "macro-semana");
+    fila.append(nodo("strong", "", `Semana del ${fechaCorta.format(new Date(`${s.lunes}T12:00:00`))}`));
+    if (s.sin_macros) {
+      fila.append(nodo("span", "", "sin macros"));
+      return fila;
+    }
+    const partes = MACROS.filter(([clave]) => s[clave])
+      .map(([clave, nombre]) => `${nombre} ${decimal.format(s[clave].media_g_kg)} g/kg · ${s[clave].en_rango} de ${s[clave].dias} días`);
+    if (s.grasa) partes.push(`grasa ${s.grasa.media_pct} % · ${s.grasa.en_rango} de ${s.grasa.dias} días`);
+    for (const p of partes) fila.append(nodo("span", "", p));
+    return fila;
+  });
+  $("hoy-macros-semanas").replaceChildren(...filas);
+}
+
+function alternarSemanas() {
+  const tarjeta = $("hoy-macros");
+  const abrir = tarjeta.getAttribute("aria-expanded") !== "true";
+  tarjeta.setAttribute("aria-expanded", String(abrir));
+  $("hoy-macros-semanas").hidden = !abrir;
 }
 
 function pintarEntreno(actividades) {

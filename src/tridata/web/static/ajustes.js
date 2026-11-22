@@ -11,6 +11,9 @@
 // zones; ride and swim say «estimado desde carrera» while they have none of their own (the run's minus 7). The run's
 // opens the same card as the HR (its zones are `zonas_fc`); ride and swim open a card of their five zones, saved from a
 // date. Above them, the pending proposals of a new threshold with Sí / No (`avisoPropuesta`, shared with Fitness).
+// Unit 102 (REC-46, S-96): «Strava» says «Sin conectar» or «Conectado · última lectura …» and why the last read failed;
+// «Conectar Strava» opens Strava's permission in the browser of the PC and reads the shoes at once. Without
+// TRIDATA_STRAVA_CLIENTE in .env it says what is missing.
 
 import { avisoPropuesta } from "./fitness.js";
 
@@ -465,7 +468,47 @@ async function cargar() {
   hoyISO = datos.fecha;
   pintar();
   cargarCalendario(); // unit 043
+  cargarStrava(); // unit 102
   cargarCoach(); // unit 080
+}
+
+// -- unit 102 (REC-46, S-96): Ajustes › Strava ------------------------------------------------------------------------
+
+let strava = null; // last /api/strava answer
+let stravaOcupado = false;
+
+function pintarStrava(nuevo) {
+  if (nuevo) strava = nuevo;
+  if (!strava) return;
+  const s = strava;
+  const filas = [el("div", { id: "strava-estado", className: "ajuste estado" },
+    el("span", { className: "que", textContent: s.texto.charAt(0).toUpperCase() + s.texto.slice(1) }))];
+  if (s.error) filas.push(el("p", { id: "strava-error", className: "aviso", role: "alert", textContent: s.error }));
+  if (s.falta) filas.push(el("p", { className: "suave nota-grupo", textContent: s.falta }));
+  if (!s.conectado || (s.error && s.error.includes("vuelve a conectar"))) {
+    const texto = s.conectado ? "Volver a conectar" : "Conectar Strava";
+    const boton = el("button", { type: "button", className: "ajuste accion" },
+      el("span", { className: "que", textContent: stravaOcupado ? "Di que sí en Strava, en el navegador del PC…" : texto }));
+    boton.disabled = stravaOcupado || !s.configurado;
+    boton.addEventListener("click", async () => {
+      stravaOcupado = true;
+      mensaje("");
+      pintarStrava(null);
+      const { ok, datos } = await api("/api/strava/conectar", {});
+      stravaOcupado = false;
+      if (!ok) mensaje(datos.error ?? "No se ha podido hablar con Strava.", "error");
+      else if (datos.error) mensaje(`Conectado, pero no se pudieron leer tus zapatillas: ${datos.error}.`, "error");
+      else mensaje("Conectado: tus zapatillas ya están en Fitness.", "bien");
+      cargarStrava();
+    });
+    filas.push(boton);
+  }
+  $("strava").replaceChildren(...filas);
+}
+
+async function cargarStrava() {
+  const { ok, datos } = await api("/api/strava");
+  if (ok) pintarStrava(datos);
 }
 
 // -- unit 043: Ajustes › Google Calendar (R1, R4, R6); unit 062: «Desconectar» ---------------------------------

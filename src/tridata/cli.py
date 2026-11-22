@@ -49,6 +49,10 @@ Examples:
     # Unit 031: how many times the stress-test values saved in Ajustes appear in the repo and the logs (never which);
     # unit 032: also the values of the blood test and stress test transcribed for the Asistente
     tridata comprobar-privados --registros ~/.tridata /path/to/sync.log
+
+    # Unit 102: one read of the shoes in use in Strava (only read; the daily routine's step). Without
+    # TRIDATA_STRAVA_CLIENTE or without connecting Strava in Ajustes it says so in one line and exits 0
+    tridata strava
 """
 from __future__ import annotations
 
@@ -84,6 +88,7 @@ from .sync import (
 )
 
 DEFAULT_BACKUP_DIR = DEFAULT_DB_PATH.parent / "backups"
+STRAVA_TOKEN = DEFAULT_DB_PATH.parent / "strava-token.json"  # unit 102: next to the database, 600
 PRIVADOS_ACEPTADOS = DEFAULT_DB_PATH.parent / "privados-aceptados"  # bug 037: leaks the user accepted, local
 
 EXPORTERS = {
@@ -309,7 +314,36 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Log files, or folders whose *.log are read (default: ~/.tridata).",
     )
 
+    sub.add_parser(
+        "strava",
+        help="Read once the shoes in use and their km from Strava (only read; the daily routine's step)",
+    )
+
     return parser
+
+
+def _cmd_strava(db_path: Path, token: Path, cliente: str | None, *, transporte: Any = None,
+                reloj: Callable[[], float] | None = None) -> int:
+    """Unit 102 (R-286, R-290): one read of Strava into the shoes. Without the client or the token: one line, exit 0
+    (the routine skips it). A failure: one line with the fixed reason (never a token), its attempt written down and
+    exit 1; no km is touched."""
+    import time
+
+    from .strava import ErrorStrava, Strava
+    from .zapatillas import Zapatillas, leer_de_strava
+
+    strava = Strava(token, cliente, transporte=transporte, reloj=reloj or time.time)
+    if not strava.configurado or not strava.conectado:
+        falta = "TRIDATA_STRAVA_CLIENTE en .env" if not strava.configurado else "conectar Strava en Ajustes"
+        print(f"strava: sin conectar (falta {falta}), se salta")
+        return 0
+    try:
+        resultado = leer_de_strava(strava, Zapatillas(db_path), _ahora())
+    except ErrorStrava as exc:
+        print(f"strava FAILED: {exc}", file=sys.stderr)
+        return 1
+    print(f"strava OK: {resultado['activas']} zapatillas en activo")
+    return 0
 
 
 def _cmd_comprobar_privados(repo: Path, registros: list[Path] | None) -> int:
@@ -348,6 +382,9 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_export_nutricion(args.out)
     if args.command == "comprobar-privados":
         return _cmd_comprobar_privados(args.repo, args.registros)
+    if args.command == "strava":  # unit 102: needs neither Garmin nor the store of Garmin
+        cliente = os.environ.get("TRIDATA_STRAVA_CLIENTE", "").strip()
+        return _cmd_strava(DEFAULT_DB_PATH, STRAVA_TOKEN, str(Path(cliente).expanduser()) if cliente else None)
 
     store = DataStore()
 

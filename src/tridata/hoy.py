@@ -6,6 +6,8 @@ Read only: nothing here writes. Every Garmin datum of «Cómo llegas» carries i
 - `no_ha_llegado`: Garmin has not given it yet (no row, or a row without that value);
 - `incompleto`: today's daily totals were cached by Garmin half-done (the rule of `exporters.py`: the day's steps
   or calories are lower than what its activities alone add up), so the resting HR of that day is not final.
+
+Unit 102 (REC-46, R-289): `zapatillas`, the shoes Hoy warns of (50 km or less to their cap, or past it); none, none.
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ from .exporters import MarkdownExporter
 from .metrics import LimitesDelDia, compute_pmc, daily_tss, pmc_hasta
 from .storage import DataStore
 from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, _cuando
+from .zapatillas import Zapatillas, aviso_hoy
 
 OK, NO_HA_LLEGADO, INCOMPLETO = "ok", "no_ha_llegado", "incompleto"
 NOCHES_MEDIA_HRV = 7
@@ -112,3 +115,9 @@ def texto_sync(ok_en: str | None, ahora: datetime) -> str:
         return f"Garmin: sincronizado a las {hora}"
     dia = _cuando(momento, ahora).rsplit(" a las ", 1)[0]
     return f"Garmin: sincronizado {dia} a las {hora}"
+
+
+def zapatillas(repo: Zapatillas, dia: date) -> list[dict[str, Any]]:
+    """Unit 102 (R-289, C-366, C-367): «Meta Speed Sky Tokyo 350 de 400 km, toca cambiarla pronto» for each shoe with
+    50 km or less to its cap (or past it); [] when none, and Hoy shows nothing of shoes."""
+    return aviso_hoy(repo.lista(dia))

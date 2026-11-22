@@ -132,9 +132,10 @@ def test_server_with_the_team_adds_its_tools(tmp_path, store):  # unit 065 R-186
         "apuntar_toma", "apuntar_leche_cafes",  # unit 082: coffees and B12 with their hour, and the milk of the coffees
         "preparar_macros", "guardar_macros",  # unit 098: the macros of what is saved, filled in once
         "get_comidas",  # unit 100: the foods of older days, by dates (R-281)
+        "preparar_zapatilla", "apuntar_zapatilla",  # unit 102: the km of a shoe said by Andrés (R-291)
     }  # `proponer_cambio` (065) is gone: no card is left anywhere
     escriben = {"hacer_cambio", "apuntar_comida", "apuntar_peso", "importar_plan", "guardar_transcripcion",
-                "apuntar_toma", "apuntar_leche_cafes", "guardar_macros"}
+                "apuntar_toma", "apuntar_leche_cafes", "guardar_macros", "apuntar_zapatilla"}
     assert {n for n, t in tools.items() if not t.annotations.read_only_hint} == escriben
     preparar = tools["preparar_cambio"]
     assert texto_acciones() in preparar.description  # the same catalogue the team of the app sees
@@ -142,6 +143,9 @@ def test_server_with_the_team_adds_its_tools(tmp_path, store):  # unit 065 R-186
     assert set(tools["hacer_cambio"].input_schema["required"]) == {"papel", "cambio", "huella"}
     assert set(tools["apuntar_comida"].input_schema["required"]) == {"papel", "dia", "alimentos"}
     assert set(tools["apuntar_peso"].input_schema["required"]) == {"papel", "kg", "dia"}
+    assert set(tools["preparar_zapatilla"].input_schema["required"]) == {"zapatilla", "km"}  # unit 102
+    assert set(tools["apuntar_zapatilla"].input_schema["required"]) == {"papel", "zapatilla", "km", "huella"}
+    assert "apuntar_zapatilla" in tools["preparar_zapatilla"].description
     for nombre in escriben:  # each one says: show it to Andrés and wait for his «sí»
         descripcion = tools[nombre].description
         assert "«sí»" in descripcion and "Andrés" in descripcion, nombre

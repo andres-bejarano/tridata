@@ -9,6 +9,9 @@
 // with «llevas», their objective and a bar; yesterday's verdict; tapping it opens and closes its 8 weeks in place.
 // Unit 101 (REC-45, R-277): below 80 % of the kcal eaten with macros, only the warning (the share and how many foods
 // have none) and the objective of the day, without bars.
+// Unit 102 (REC-46, R-289): above the cards, «👟 Zapatillas» only while a shoe has 50 km or less to its cap or is past
+// it (`zapatillas` of /api/hoy): «Meta Speed Sky Tokyo 350 de 400 km, toca cambiarla pronto». Without any, nothing of
+// shoes is in Hoy: the box is emptied and hidden. It is not a `.tarjeta-hoy`; its link goes to Fitness.
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -60,8 +63,23 @@ function pintarHoy(h) {
   if (h.macros) pintarMacros(h.macros);
   pintarEntreno(h.entreno);
   pintarComoLlegas(h.como_llegas);
+  pintarZapatillas(h.zapatillas ?? []);
   motivos = h.garmin_sync.motivos ?? {};
   $("hoy-garmin-hora").textContent = h.garmin_sync.texto_hora;
+}
+
+// unit 102: nothing at all without a shoe to change (C-367), not even an empty card
+function pintarZapatillas(lista) {
+  const caja = $("hoy-zapatillas");
+  if (!lista.length) { caja.replaceChildren(); caja.hidden = true; return; }
+  const cabeza = nodo("div", "cab-hoy");
+  const ir = nodo("a", "ver-mas", "Ver Fitness ›");
+  ir.href = "#fitness";
+  cabeza.append(nodo("h2", "", "👟 Zapatillas"), ir);
+  const lineas = nodo("ul", "lineas-zapatillas");
+  lineas.append(...lista.map((z) => nodo("li", `zapatilla-hoy ${z.estado}`, z.texto)));
+  caja.replaceChildren(cabeza, lineas);
+  caja.hidden = false;
 }
 
 function pintarComida(c) {

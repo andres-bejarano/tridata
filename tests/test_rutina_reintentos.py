@@ -22,6 +22,10 @@ SCRIPT = REPO / "daily_update.sh"
 
 FALSO = """#!/usr/bin/env bash
 echo "$*" >> "$LLAMADAS"
+if [ "$1" = "strava" ] && [ "${STRAVA_CODIGO:-0}" != "0" ]; then
+    echo "strava FAILED: Strava no responde"
+    exit "$STRAVA_CODIGO"
+fi
 if [ "$1" = "sync" ] && [ "${2:-}" != "--laps" ] && [ "${2:-}" != "--weather" ] && [ -s "$SYNC_CODIGOS" ]; then
     c=$(head -n 1 "$SYNC_CODIGOS")
     tail -n +2 "$SYNC_CODIGOS" > "$SYNC_CODIGOS.resto"
@@ -69,6 +73,7 @@ class Rutina:
             "WIDE_MARKER": str(self.wide), "ROUTINE_MARKER": str(self.marca), "RETRY_DELAY_SECONDS": "60",
             "RATE_LIMIT_DELAY_SECONDS": "300", "LLAMADAS": str(self.llamadas), "ESPERAS": str(self.esperas),
             "SYNC_CODIGOS": str(self.codigos),
+            "STRAVA_CODIGO": "0",  # unit 102: what the fake `tridata strava` answers
         }
 
     def correr(self, *codigos: int, args: tuple[str, ...] = ()) -> int:
@@ -218,3 +223,25 @@ def test_rutas_por_defecto_de_lo_nuevo():  # R4: derived from $HOME, the tests s
     texto = SCRIPT.read_text(encoding="utf-8")
     assert 'ROUTINE_MARKER="${ROUTINE_MARKER:-$HOME/.tridata/last_routine}"' in texto
     assert 'RATE_LIMIT_DELAY_SECONDS="${RATE_LIMIT_DELAY_SECONDS:-300}"' in texto
+
+
+# -- unit 102 (REC-46, R-290 · C-368): the shoes of Strava, a step that never stops the routine -------------------------
+
+def test_el_paso_de_strava_va_tras_el_sync_de_garmin(rutina):  # R5 (102)
+    assert rutina.correr() == 0
+    ordenes = [o.split()[0] if o.split()[0] != "sync" else o for o in rutina.ordenes()]
+    assert ordenes.count("strava") == 1
+    assert ordenes.index("sync --weather") < ordenes.index("strava") < ordenes.index("export-metrics")
+    assert "strava OK" in rutina.texto_log()
+
+
+def test_strava_que_falla_no_corta_la_rutina(rutina):  # R5 (102) · R-290: the rest of the routine goes on
+    rutina.entorno["STRAVA_CODIGO"] = "1"
+    assert rutina.correr() == 0
+    ordenes = [o.split()[0] for o in rutina.ordenes()]
+    assert ordenes.count("strava") == 3  # tried like any step, then left for tomorrow
+    assert ordenes.index("strava") < ordenes.index("export-pmc") and ordenes[-1] == "export-nutricion"
+    log = rutina.texto_log()
+    assert "strava FAILED tras 3 intentos — se sigue con la rutina" in log
+    assert log.rstrip().endswith("Done.")
+    assert rutina.texto_marca() == f"{HOY_ISO()} hecha"

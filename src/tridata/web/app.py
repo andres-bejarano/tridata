@@ -91,6 +91,11 @@
                                   «TriData»); the pass also runs at start and every 10 minutes, in its own thread,
                                   and (unit 062) right after a good answer of what changes the plan or «Actualizar
                                   Garmin»; POST /api/calendario/desconectar withdraws the permission
+    GET  /api/zapatillas*         unit 102 (REC-46 of `ver-fitness`): Fitness › Zapatillas, the routes of
+    GET  /api/strava*             `web/zapatillas.py`: each shoe in use with its km, cap and what is left (from Strava
+                                  or said by Andrés, with its date), changing its km or its cap, and Ajustes › Strava
+                                  (connect once: then the daily routine reads it, `tridata strava`). /api/hoy also
+                                  brings `zapatillas`: the shoes with 50 km or less to their cap, [] when none
     GET  /ajustes                 the settings page
     GET  /api/ajustes             settings in force (?fecha=, default today), changes to come, races
     POST /api/ajustes             {"datos": {...}, "desde": "AAAA-MM-DD"} save one or more settings
@@ -216,7 +221,7 @@ from ..nutricion.recetas import ErrorDatos, _numero
 from ..nutricion.suplementacion import Suplementacion
 from ..fitness import (DIAS_POR_DEFECTO, RANGOS_DIAS, TODOS, actividades_semana, comparar, comprobar_semana,
                        detalle_actividad, fitness, periodo, semanas_periodo, texto_pulso)
-from ..hoy import como_llegas, entreno, texto_sync
+from ..hoy import como_llegas, entreno, texto_sync, zapatillas as zapatillas_hoy
 from ..umbral import DEPORTES as DEPORTES_ZONAS, Propuestas, para_ver
 from ..storage import DataStore
 from ..sync import MOTIVOS, SyncEnMarcha, aviso_sync, cerrojo_sync
@@ -228,6 +233,9 @@ from ..plan import Planes
 from ..calendario import Calendario
 from .calendario import Despertar, Sincronizacion, rutas as rutas_calendario
 from .origen import Origen
+from ..strava import Strava
+from ..zapatillas import Zapatillas
+from .zapatillas import rutas as rutas_zapatillas
 
 log = logging.getLogger(__name__)
 
@@ -327,6 +335,7 @@ def crear_app(
     recetario: Recetario | None = None, cierres: Cierres | None = None,
     ahora: Callable[[], datetime] = datetime.now, conversador: Any = None,
     ordenador_plan: Any = None, calendario: Calendario | None = None,
+    strava: Strava | None = None, zapatillas: Zapatillas | None = None,
 ) -> Starlette:
     """Unit 080 (R6): the app calls no AI. Unit 083: `interprete` (positional), `conversador` and `ordenador_plan` are
     IGNORED and only still accepted because tests outside that unit pass them (see its `hallazgos.md`); there is no
@@ -343,6 +352,9 @@ def crear_app(
     Unit 040: the plans live in the same SQLite (`plan.Planes`) and their routes are `web/plan.py`.
     Unit 043: `calendario` is Google Calendar (by default the token next to the database, `google-token.json`, and the
     client's JSON where TRIDATA_GOOGLE_CLIENTE says); without a token nothing talks to Google.
+    Unit 102: `strava` is Strava (the token next to the database, `strava-token.json`, and the client's JSON where
+    TRIDATA_STRAVA_CLIENTE says), only for «Conectar Strava» and its first read; `zapatillas` the shoes, in the same
+    SQLite by default (its tables created here, at start).
     """
     recetario = recetario or Recetario(registro.db_path)
     pesos = pesos or RegistroPeso(registro.db_path)
@@ -367,6 +379,12 @@ def crear_app(
         calendario = Calendario(registro.db_path, carpeta_datos / "google-token.json",
                                 str(Path(cliente).expanduser()) if cliente else None)
     sincronizacion = Sincronizacion(calendario, planes, hoy, ahora, store)
+    # unit 102: the shoes and Strava; Strava is only read when connecting (the routine reads it every day)
+    zapatillas = zapatillas or Zapatillas(registro.db_path)
+    if strava is None:
+        cliente_strava = os.environ.get("TRIDATA_STRAVA_CLIENTE", "").strip()
+        strava = Strava(carpeta_datos / "strava-token.json",
+                        str(Path(cliente_strava).expanduser()) if cliente_strava else None)
     asistente = ContextoAsistente(registro=registro, objetivos=objetivos, ajustes=ajustes, pesos=pesos,
                                   recetario=recetario, hoy=hoy, store=store, cierres=cierres, recientes=_recientes,
                                   planes=planes)
@@ -1024,7 +1042,9 @@ def crear_app(
                                 if store is not None else sin_garmin),
                 "garmin_sync": garmin_sync,  # unit 080 (S-27): no card of the Asistente
                 # unit 099 (R-276..R-278): the card «Macros», below Comida, and its 8 weeks
-                "macros": vista_macros(registro=registro, pesos=pesos, store=store, planes=planes, hoy=dia_hoy)}
+                "macros": vista_macros(registro=registro, pesos=pesos, store=store, planes=planes, hoy=dia_hoy),
+                # unit 102 (R-289): the shoes with 50 km or less to their cap; [] and Hoy shows nothing of them
+                "zapatillas": zapatillas_hoy(zapatillas, dia_hoy)}
 
     async def ver_hoy(request: Request) -> Response:
         await run_in_threadpool(_al_dia)
@@ -1135,5 +1155,6 @@ def crear_app(
         *rutas_coach(conversaciones),
         *rutas_plan(planes, store, ajustes, asistente, hoy, ahora),
         *rutas_calendario(sincronizacion),
+        *rutas_zapatillas(zapatillas, strava, hoy, ahora),
         Mount("/static", StaticFiles(directory=ESTATICOS), name="static"),
     ])

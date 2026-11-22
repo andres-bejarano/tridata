@@ -27,6 +27,9 @@ Unit 098 (REC-43, R-269..R-273): `preparar_macros` (read-only: what has no macro
 team's values) and `guardar_macros` (with Andrés's «sí» and that fingerprint, as «estimado»); `get_recetas` shows the
 macros of what is saved, and `apuntar_comida` asks the team to estimate those of anything not saved.
 Unit 101 (REC-45, R-284): the same pair fills in what was logged without macros in the last 14 days (`apuntado:<id>`).
+Unit 102 (REC-46, R-291): `preparar_zapatilla` (read-only: what the km Andrés says of a shoe would leave, and its
+fingerprint) and `apuntar_zapatilla` (with his «sí» and that fingerprint, «dicho por ti»); `get_contexto` carries the
+shoes in use with their km, cap and mark.
 
 Run it with `tridata-mcp` (stdio transport) and register that command in
 your MCP client, e.g. for Claude Code:
@@ -656,6 +659,30 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
     def guardar_macros_tool(papel: str, propuestas: list[dict[str, Any]], huella: str,
                             rechazar: list[str] | None = None, texto: str = "") -> str:
         return guardar_macros_desde_pc(equipo, papel, propuestas, huella, rechazar, texto)
+
+    from .conversaciones.desde_pc import apuntar_zapatilla_desde_pc, preparar_zapatilla_desde_pc
+
+    zapatilla_forma = ("zapatilla: its name as get_contexto says it (or part of it, e.g. «Nimbus»). km: the km Andrés "
+                       "says it has in total (a number, a decimal allowed).")
+
+    @server.tool(name="preparar_zapatilla", annotations=lee, structured_output=False, description=(
+        "Say what saving the km Andrés says one of his running shoes in use has would leave (unit 102): its km now and "
+        "where they come from (Strava, once a day, or said by him), and how it would stay («dicho por ti», with "
+        "today's date, until Strava gives a newer number equal or higher), with its fingerprint (`Huella`). It saves "
+        "NOTHING. Show Andrés the result and ask; only after his «sí» call apuntar_zapatilla with the same "
+        f"zapatilla, km and that huella. If the name fits more than one, or none, it says which there are.\n"
+        f"{zapatilla_forma}"))
+    def preparar_zapatilla_tool(zapatilla: str, km: float) -> str:
+        return preparar_zapatilla_desde_pc(equipo, zapatilla, km)
+
+    @server.tool(name="apuntar_zapatilla", annotations=guarda, structured_output=False, description=(
+        "Save the km of a shoe preparar_zapatilla already showed and Andrés answered «sí» to, «dicho por ti». NEVER "
+        "call it without his «sí». If the shoe changed since it was prepared (e.g. Strava gave new km) nothing is "
+        f"saved and the new version comes back: show it to him again.\n{papeles} {zapatilla_forma} The same given to "
+        "preparar_zapatilla. huella: the `Huella` it returned. texto (optional): a short line for Andrés, in "
+        f"Spanish.\n{registro}"))
+    def apuntar_zapatilla_tool(papel: str, zapatilla: str, km: float, huella: str, texto: str = "") -> str:
+        return apuntar_zapatilla_desde_pc(equipo, papel, zapatilla, km, huella, texto)
 
     garmin_lee = ToolAnnotations(read_only_hint=True, open_world_hint=True)
 

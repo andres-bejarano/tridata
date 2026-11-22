@@ -881,3 +881,26 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .tabla-comparar .dif-mas { color: var(--acento); }
 .tabla-comparar .dif-menos { color: var(--objetivo-peso); }
 .tabla-comparar .pct { display: block; font-size: .78rem; opacity: .85; }
+
+/* -- unit 102 (REC-46): the shoes — Fitness › Zapatillas (fitness.js) and their warning in Hoy (hoy.js) -- */
+.lista-zapatillas { list-style: none; margin: 0; padding: 0; display: grid; }
+.lista-zapatillas .zapatilla { display: grid; gap: 4px; padding: 10px 0; border-bottom: 1px solid var(--borde); }
+.lista-zapatillas .zapatilla:first-child { padding-top: 2px; }
+.lista-zapatillas .zapatilla:last-child { border-bottom: 0; padding-bottom: 2px; }
+.cab-zapatilla { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.cab-zapatilla strong { overflow-wrap: anywhere; }
+.cifras-zapatilla { margin: 0; font-weight: 600; }
+.fuente-zapatilla { margin: 0; font-size: .88rem; }
+.marca-zapatilla { padding: 1px 8px; border-radius: 999px; font-size: .78rem; font-weight: 650;
+  color: var(--alerta); background: var(--alerta-fondo); border: 1px solid var(--alerta); }
+.marca-zapatilla.pasada { color: var(--peligro); border-color: var(--peligro); }
+.acciones-zapatilla { flex-wrap: wrap; margin-top: 4px; }
+.acciones-zapatilla button, .editar-zapatilla button { flex: 1 1 8rem; min-height: 44px; }
+.editar-zapatilla { display: grid; gap: 6px; margin-top: 4px; }
+.editar-zapatilla label { font-size: .85rem; color: var(--suave); }
+.editar-zapatilla .acciones { flex-wrap: wrap; }
+.aviso-zapatillas { border-color: var(--alerta); background: var(--alerta-fondo); padding: 12px 14px; }
+.aviso-zapatillas h2 { margin: 0; }
+.lineas-zapatillas { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.lineas-zapatillas li { overflow-wrap: anywhere; font-weight: 600; color: var(--alerta); }
+.lineas-zapatillas li.pasada { color: var(--peligro); }

@@ -33,6 +33,9 @@
         <h1 class="titulo-pantalla">Hoy</h1>
         <p id="hoy-fecha" class="suave"></p>
       </div>
+      <!-- unit 102 (REC-46, R-289): only with a shoe at 50 km or less from its cap (or past it), filled by hoy.js; it
+           is not a `.tarjeta-hoy` (those are the three cards of always and they navigate) -->
+      <article id="hoy-zapatillas" class="tarjeta aviso-zapatillas" role="status" aria-live="polite" hidden></article>
       <article id="hoy-comida" class="tarjeta tarjeta-hoy" data-ir="dia">
         <div class="cab-hoy"><h2>🍽️ Comida</h2><a class="ver-mas" href="#dia">Ver Nutrición ›</a></div>
         <div class="grande-hoy num"><span class="cifra">—</span><small id="hoy-queda-texto">kcal te quedan</small></div>
@@ -158,6 +161,14 @@
       <article id="fitness-detalle" class="tarjeta detalle-fitness" aria-label="Detalle de la actividad" hidden></article>
       <h2 class="titulo-bloque">Recuperación</h2>
       <div id="fitness-recuperacion" class="datos recuperacion"></div>
+      <!-- unit 102 (REC-46, R-287..R-291): the shoes in use with their km (from Strava, or said by Andrés), their cap
+           and what is left; fitness.js paints it from GET /api/zapatillas and changes km and cap -->
+      <h2 id="t-zapatillas" class="titulo-bloque">Zapatillas</h2>
+      <article id="fitness-zapatillas" class="tarjeta bloque-fitness zapatillas-fitness" aria-labelledby="t-zapatillas">
+        <p id="fitness-zapatillas-aviso" class="aviso" role="status" hidden></p>
+        <ul id="fitness-zapatillas-lista" class="lista-zapatillas"></ul>
+        <p id="fitness-zapatillas-vacio" class="suave" hidden></p>
+      </article>
       </div>
       <div id="fitness-plan" class="plan" hidden>
         <p id="plan-aviso" role="status" aria-live="polite" hidden></p>

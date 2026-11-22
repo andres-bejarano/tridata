@@ -48,6 +48,10 @@ Unit 100 (REC-44 of `preguntar-equipo`, R-281, C-353, C-354): `comidas_desde_pc`
 no longer details (older than 14 days), by dates and at most `MAX_DIAS_COMIDAS` days each time, with the same detail
 as the recent ones (`contexto.detalle_dias`). Read only.
 
+Unit 102 (REC-46 of `ver-fitness`, R-291, C-369): `preparar_zapatilla_desde_pc` says what the km Andrés says of a shoe
+in use would leave (before and after, «dicho por ti» with its date) and its fingerprint, and writes nothing;
+`apuntar_zapatilla_desde_pc` saves them with that fingerprint (`zapatillas.Zapatillas.poner_km`).
+
 Each save leaves its message in «Desde el PC» (R-196). Nothing here calls a paid AI.
 
 What a tool answers never carries a value of Andrés beyond what the card says; the logs carry ids and counts only.
@@ -82,6 +86,7 @@ from ..storage import DataStore
 from ..sync import RUNNING_TYPES
 from ..web.app import DIAS_RECIENTES
 from ..web.calendario import Sincronizacion
+from ..zapatillas import ErrorZapatilla, Zapatillas, validar_km, vista as vista_zapatilla
 from . import Conversaciones
 from .cambios import CambioInterpretado, cambio_no_entendido
 from .contexto import Contexto, detalle_dias, montar
@@ -108,6 +113,7 @@ class Equipo:
     medicos: Medicos
     calendario: Calendario
     ahora: Callable[[], datetime] = datetime.now
+    zapatillas: Zapatillas | None = None  # unit 102: the shoes and their km
 
 
 def montar_equipo(db_path: Path | str, *, store: DataStore | None, medicos_dir: Path | str | None = None,
@@ -134,9 +140,10 @@ def montar_equipo(db_path: Path | str, *, store: DataStore | None, medicos_dir: 
         recientes=recientes, planes=planes)
     token = Path(token) if token is not None else Path(db_path).parent / "google-token.json"
     Suplementacion(db_path)  # unit 082: its tables, as the app makes them at start (what fails leaves no trace)
+    zapatillas = Zapatillas(db_path)  # unit 102: its tables too, at start (trap of the 082)
     return Equipo(conversaciones=Conversaciones(db_path), asistente=asistente,
                   medicos=Medicos(db_path, medicos_dir),
-                  calendario=Calendario(db_path, token, None), ahora=ahora)
+                  calendario=Calendario(db_path, token, None), ahora=ahora, zapatillas=zapatillas)
 
 
 def contexto(equipo: Equipo) -> Contexto:
@@ -682,6 +689,77 @@ def guardar_macros_desde_pc(equipo: Equipo, papel: str, propuestas: Any, huella_
     return hecho_texto
 
 
+# -- unit 102 (R-291, C-369): the km of a shoe, said by Andrés to the coach ------------------------------------------
+
+PREGUNTA_ZAPATILLA = ("Enséñaselo a Andrés tal cual y pregúntale; solo con su «sí», llama a apuntar_zapatilla con esta "
+                      "misma zapatilla, estos km y esta huella.")
+
+
+def _zapatillas(equipo: Equipo) -> Zapatillas:
+    return equipo.zapatillas or Zapatillas(equipo.asistente.registro.db_path)
+
+
+def _zapatilla_propuesta(equipo: Equipo, zapatilla: Any, km: Any) -> tuple[dict, float, str, str] | str:
+    """(the shoe as it is now, the km said, what would be saved in words, its fingerprint), or why not."""
+    repo = _zapatillas(equipo)
+    try:
+        nuevos = validar_km(km)
+    except ErrorZapatilla as exc:
+        return f"No se puede: {exc} {NADA}"
+    halladas = repo.buscar(str(zapatilla or ""))
+    activas = repo.activas()
+    nombres = ", ".join(f"«{z['nombre']}»" for z in activas) or "ninguna (¿ha conectado Strava en Ajustes?)"
+    if not halladas:
+        return f"No hay ninguna zapatilla en activo que sea «{zapatilla}»: las que tiene son {nombres}. {NADA}"
+    if len(halladas) > 1:
+        return (f"Hay más de una que encaja con «{zapatilla}»: " + ", ".join(f"«{z['nombre']}»" for z in halladas)
+                + f". Pregunta a Andrés cuál es y prepáralo otra vez con su nombre. {NADA}")
+    (fila,) = halladas
+    hoy = equipo.asistente.hoy()
+    antes = vista_zapatilla(fila, hoy)
+    despues = vista_zapatilla({**fila, "km": nuevos, "fuente": "andres",
+                               "fecha_km": equipo.ahora().isoformat(timespec="minutes")}, hoy)
+    texto = (f"{fila['nombre']}: ahora {antes['texto'].split(' · ', 1)[1]}\n"
+             f"Quedaría: {despues['texto'].split(' · ', 1)[1]} (hasta que Strava dé un número más nuevo e igual o "
+             "mayor)")
+    firma = json.dumps({"id": fila["id"], "km": fila["km"], "fuente": fila["fuente"], "fecha_km": fila["fecha_km"],
+                        "nuevos": nuevos, "dia": hoy.isoformat()}, sort_keys=True)
+    return fila, nuevos, texto, hashlib.sha256(firma.encode("utf-8")).hexdigest()[:12]
+
+
+def preparar_zapatilla_desde_pc(equipo: Equipo, zapatilla: Any, km: Any) -> str:
+    """R-291: what `apuntar_zapatilla_desde_pc` would save and its fingerprint. Writes nothing."""
+    hecho = _zapatilla_propuesta(equipo, zapatilla, km)
+    if isinstance(hecho, str):
+        return hecho
+    _, _, texto, la_huella = hecho
+    return f"Esto es lo que se guardaría (aún no está guardado):\n{texto}\n{PREGUNTA_ZAPATILLA}\nHuella: {la_huella}"
+
+
+def apuntar_zapatilla_desde_pc(equipo: Equipo, papel: str, zapatilla: Any, km: Any, huella_vista: str,
+                               texto: str = "") -> str:
+    """R-291 (C-369): the km said, «dicho por ti», only if it is still what was shown (`huella_vista`); then the message
+    of R-196. Otherwise nothing."""
+    if papel not in PAPELES_PC:
+        return papel_no_valido(papel)
+    hecho = _zapatilla_propuesta(equipo, zapatilla, km)
+    if isinstance(hecho, str):
+        return hecho
+    fila, nuevos, visto, la_huella = hecho
+    if la_huella != str(huella_vista).strip():
+        return f"{CAMBIO_VISTO} {NADA} Lo que se guardaría ahora:\n{visto}\n{PREGUNTA_ZAPATILLA}\nHuella: {la_huella}"
+    try:
+        guardada = _zapatillas(equipo).poner_km(fila["id"], nuevos, equipo.ahora())
+    except (KeyError, ErrorZapatilla, sqlite3.Error) as exc:
+        log.warning("shoe km from the PC not saved (%s)", type(exc).__name__)
+        return f"No se han guardado los km. {NADA}"
+    log.info("shoe km saved from the PC")
+    ahora = vista_zapatilla(guardada, equipo.asistente.hoy())
+    hecho_texto = f"Hecho: {ahora['texto']}."
+    _apuntar(equipo, papel, texto, hecho_texto)
+    return hecho_texto
+
+
 # -- unit 081 · R1 (R-131, R-132): the plan's .md ordered by the coach -----------------------------------------------
 
 PREGUNTA_PLAN = ("Enséñaselo a Andrés tal cual y pregúntale; solo con su «sí», llama a importar_plan con este mismo "
@@ -1022,4 +1100,5 @@ __all__ = ["MAX_DIAS_COMIDAS", "comidas_desde_pc", "NADA", "PAPELES_PC", "TITULO
            "apuntar_peso_desde_pc", "apuntar_toma_desde_pc", "leche_cafes_desde_pc", "contexto", "conversacion_pc", "guardar_transcripcion_desde_pc", "hacer_desde_pc",
            "guardar_macros_desde_pc", "huella", "importar_plan_desde_pc", "montar_equipo", "papel_no_valido",
            "perfil_ruta_desde_pc", "preparar_desde_pc", "preparar_macros_desde_pc", "preparar_plan_desde_pc", "preparar_transcripcion_desde_pc", "recetario_texto",
-           "rutas_desde_pc", "texto_contexto", "texto_perfil"]
+           "rutas_desde_pc", "texto_contexto", "texto_perfil", "preparar_zapatilla_desde_pc",
+           "apuntar_zapatilla_desde_pc"]

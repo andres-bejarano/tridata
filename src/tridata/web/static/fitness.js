@@ -27,6 +27,10 @@
 // (/api/fitness?desde=&hasta=): the chart and «Tus semanas» of that period. Dates that are not valid show the
 // server's reason and nothing is repainted. Under «Tus semanas», the table of this period against the one before of
 // the same days (the `comparacion` of the answer): every sport and the total, whatever sport is chosen above.
+// Unit 102 (REC-46): under «Recuperación», «Zapatillas» (GET /api/zapatillas): each shoe in use with its km, its cap,
+// what is left (or gone over), «toca cambiarla pronto» / «pasada» and where the km come from with its date («de Strava,
+// el 21/11» · «dicho por ti, hoy»), and why the last read of Strava failed if it did. «Cambiar km» and «Cambiar tope»
+// open a small form in its row (POST /api/zapatillas/ID): the server checks it and says why when it does not go.
 
 import { graficaCarga, graficaPulso, graficaSemanas, leyendaCarga, leyendaSemanas } from "./grafica.js";
 
@@ -53,6 +57,9 @@ let peticionSemana = 0; // drops a late answer of the week
 let sesionAbierta = null; // id of the activity of the week whose session is open
 let fechas = null; // unit 097: {desde, hasta} of the period chosen with dates on screen; null with a shortcut
 let periodoVisto = null; // unit 097: the `periodo` of the last answer (to fill «desde» and «hasta»)
+let zapatillasVistas = null; // unit 102: the last /api/zapatillas answer
+let zapatillaAbierta = null; // unit 102: {id, que: "km" | "tope"} of the form open
+let peticionZapatillas = 0; // unit 102: drops a late answer
 const PERIODOS = { 14: "últimos 14 días", 42: "últimas 6 semanas", 91: "últimos 3 meses", 365: "último año" };
 const ETIQUETAS = { 14: "de los últimos 14 días", 42: "de las últimas 6 semanas", 91: "de los últimos 3 meses", 365: "del último año" };
 
@@ -190,6 +197,80 @@ export async function cargarFitness(candidatas = null) {
   pintarUltima(datos.ultima_actividad);
   pintarRecuperacion(datos.recuperacion);
   cargarPropuestas();
+  cargarZapatillas();
+}
+
+// -- unit 102 (REC-46): the shoes in use (R-287..R-291) --------------------------------------------------------------
+
+async function cargarZapatillas() {
+  const mia = ++peticionZapatillas;
+  const { ok, datos } = await api("/api/zapatillas");
+  if (mia !== peticionZapatillas || !ok) return;
+  pintarZapatillas(datos);
+}
+
+function pintarZapatillas(d) {
+  zapatillasVistas = d;
+  const aviso = $("fitness-zapatillas-aviso");
+  aviso.textContent = d.aviso_lectura ?? "";
+  aviso.hidden = !d.aviso_lectura;
+  const vacio = $("fitness-zapatillas-vacio");
+  vacio.hidden = d.zapatillas.length > 0;
+  vacio.textContent = d.strava?.conectado ? "Strava no tiene ninguna zapatilla en activo."
+    : "Aún no hay zapatillas: conecta Strava en Ajustes, desde el PC, y saldrán aquí con sus km.";
+  $("fitness-zapatillas-lista").replaceChildren(...d.zapatillas.map(filaZapatilla));
+}
+
+function restoZapatilla(z) {
+  if (z.quedan > 0) return `quedan ${enteras.format(z.quedan)}`;
+  return z.quedan < 0 ? `te has pasado ${enteras.format(-z.quedan)}` : "en el tope";
+}
+
+function filaZapatilla(z) {
+  const fila = el("li", { className: `zapatilla ${z.estado}` });
+  fila.dataset.id = z.id;
+  const cabeza = el("div", { className: "cab-zapatilla" }, el("strong", { textContent: z.nombre }),
+    z.texto_estado ? el("span", { className: `marca-zapatilla ${z.estado}`, textContent: z.texto_estado }) : null);
+  const cifras = el("p", { className: "num cifras-zapatilla",
+    textContent: `${enteras.format(Math.round(z.km))} de ${enteras.format(z.tope)} km · ${restoZapatilla(z)}` });
+  const fuente = el("p", { className: "suave fuente-zapatilla",
+    textContent: [z.texto_fuente, z.texto_lectura].filter(Boolean).join(" · ") });
+  fila.append(cabeza, cifras, fuente);
+  if (zapatillaAbierta?.id === z.id) {
+    fila.append(formZapatilla(z, zapatillaAbierta.que));
+    return fila;
+  }
+  const abrir = (que) => { zapatillaAbierta = { id: z.id, que }; pintarZapatillas(zapatillasVistas); };
+  const km = el("button", { type: "button", textContent: "Cambiar km" });
+  const tope = el("button", { type: "button", textContent: "Cambiar tope" });
+  km.addEventListener("click", () => abrir("km"));
+  tope.addEventListener("click", () => abrir("tope"));
+  fila.append(el("div", { className: "acciones acciones-zapatilla" }, km, tope));
+  return fila;
+}
+
+// R-288: the cap, a whole number from 50 to 3000; R-291: the km he says, «dicho por ti» (the server checks both)
+function formZapatilla(z, que) {
+  const campo = el("input", { type: "text", inputMode: que === "km" ? "decimal" : "numeric", autocomplete: "off",
+    id: `zapatilla-${que}-${z.id}`, value: que === "km" ? unDecimal.format(z.km).replace(/\./g, "") : String(z.tope) });
+  const etiqueta = el("label", { htmlFor: campo.id, textContent: que === "km" ? "Km que lleva" : "Tope en km" });
+  const error = el("p", { className: "aviso", role: "alert", hidden: true });
+  const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar" });
+  const cancelar = el("button", { type: "button", textContent: "Cancelar" });
+  const form = el("form", { className: "editar-zapatilla", noValidate: true },
+    etiqueta, campo, error, el("div", { className: "acciones" }, guardar, cancelar));
+  cancelar.addEventListener("click", () => { zapatillaAbierta = null; pintarZapatillas(zapatillasVistas); });
+  form.addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    guardar.disabled = true;
+    const { ok, datos } = await api(`/api/zapatillas/${encodeURIComponent(z.id)}`, { [que]: campo.value.trim() });
+    guardar.disabled = false;
+    if (!ok) { error.textContent = datos.error ?? "No se ha podido guardar."; error.hidden = false; return; }
+    zapatillaAbierta = null;
+    pintarZapatillas(datos);
+  });
+  queueMicrotask(() => campo.focus());
+  return form;
 }
 
 // -- unit 096: the proposals of a new threshold (R-260, R-261) -------------------------------------------------------

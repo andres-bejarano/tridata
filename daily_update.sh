@@ -202,6 +202,16 @@ if ! run_step "sync --weather" "$TRIDATA" sync --weather; then
     exit 1
 fi
 
+# --- Zapatillas de Strava (unidad 102, R-286, R-290) ----------------------
+# Una lectura de solo lectura de las zapatillas en activo y sus km. Sin
+# TRIDATA_STRAVA_CLIENTE o sin haber conectado Strava en Ajustes, `tridata
+# strava` lo dice en una línea y sale bien (se salta). Si Strava falla, los km
+# de antes se quedan con su fecha, el motivo queda apuntado y la rutina SIGUE:
+# no se marca como fallida ni se repite la rutina por esto (se lee mañana).
+if ! run_step "strava" "$TRIDATA" strava; then
+    echo "strava FAILED tras $MAX_ATTEMPTS intentos — se sigue con la rutina (se vuelve a leer mañana)" >> "$LOG"
+fi
+
 if "$TRIDATA" export-metrics --out "$METRICS" >> "$LOG" 2>&1; then
     echo "export-metrics OK" >> "$LOG"
 else

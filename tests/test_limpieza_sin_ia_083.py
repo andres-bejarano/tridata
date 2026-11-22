@@ -45,6 +45,7 @@ HERRAMIENTAS = {
     "guardar_transcripcion", "get_recetas", "get_rutas", "get_perfil_ruta",
     "preparar_macros", "guardar_macros",  # unit 098
     "get_comidas",  # unit 100
+    "preparar_zapatilla", "apuntar_zapatilla",  # unit 102
 }
 
 # -- R1 (portante): nothing that stays needs the paid AI -------------------------------------------------------------

@@ -38,6 +38,7 @@ carbohydrates and fat and the share of its kcal they cover), and the block `macr
 (`nutricion.macros.vista`: today with its objective and a `texto`, yesterday with its verdict, the 8 weeks).
 Unit 101 (R-285): `alimentos_sin_macros` says how many foods of the last 14 days have none, only when some.
 
+Unit 103 (REC-47 of `ver-fitness`, S-100): `carreras_sin_zapatilla`, the runs of Garmin without a shoe, read only.
 Unit 102 (REC-46 of `ver-fitness`, R-291): `zapatillas`, the shoes in use with their km, cap, what is left, their
 mark and where the km come from (Strava or said by Andrés) with its date and weekday; only when there are some, read
 without creating anything (`zapatillas.leer_sin_crear`).
@@ -76,7 +77,8 @@ from ..plan import ABIERTA, Planes
 from ..plan import semanas as semanas_del_plan
 from ..storage import DataStore
 from ..sync import ALL_SPORT_TYPES, CYCLING_TYPES, RUNNING_TYPES, SWIMMING_TYPES
-from ..zapatillas import leer_sin_crear as zapatillas_sin_crear, para_el_contexto
+from ..zapatillas import (carreras_para_el_contexto, leer_sin_crear as zapatillas_sin_crear, para_el_contexto,
+                          pendientes_sin_crear)
 
 DIAS_DIA_A_DIA = 56  # the last 8 weeks day by day; the earlier ones by week (S-39)
 DIAS_CON_ALIMENTOS = 14  # unit 100 (R-280): today and the 13 before carry each food; the earlier ones, by dates
@@ -130,8 +132,13 @@ está, ofrécele que el nutricionista se los estime con preparar_macros, que los
 guardado; \
 "zapatillas", sus zapatillas de correr en activo con sus km, su tope, lo que les queda ("quedan"), su "estado" \
 («pronto» si le quedan cincuenta km o menos, «pasada» si llegó al tope) y de dónde salen los km ("fuente": strava, \
-leídos de Strava una vez al día, o andres, dichos por él) con su fecha; si te dice cuántos km lleva una, prepáralo \
-con preparar_zapatilla y, solo con su «sí», guárdalo con apuntar_zapatilla; \
+leídos de Strava una vez al día, andres, dichos por él, o aqui, contados aquí con sus carreras de Garmin desde esa \
+fecha) con su fecha y su "uso" (suave, calidad o competicion: con ese uso se le suman las carreras según la sesión del \
+plan de ese día); si te dice cuántos km lleva una, prepáralo con preparar_zapatilla y, solo con su «sí», guárdalo con \
+apuntar_zapatilla; con esas mismas, accion alta da de alta una zapatilla nueva y accion carrera dice con qué \
+zapatilla corrió una carrera; \
+"carreras_sin_zapatilla", sus carreras de Garmin que no se sabe con qué zapatilla corrió (no suman a ninguna hasta \
+que lo diga): pregúntaselo y, con su «sí», apúntalo con accion carrera; \
 "google_calendar", si su Google Calendar está conectado y qué lleva su calendario «TriData». Tú no puedes poner ni \
 quitar nada allí: lo pone la app sola. Si te pregunta si algo está en el calendario, contesta con lo que dice \
 "google_calendar" y nunca que «debería aparecer»; si algo falta, puede tocar «Sincronizar ahora» en Ajustes › \
@@ -503,6 +510,9 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     zapatillas = zapatillas_sin_crear(registro.db_path, hoy)  # unit 102: read only, the same SQLite
     if zapatillas:
         datos_json["zapatillas"] = para_el_contexto(zapatillas)
+    sin_zapatilla = pendientes_sin_crear(registro.db_path, hoy)  # unit 103 (S-100): read only too
+    if sin_zapatilla:
+        datos_json["carreras_sin_zapatilla"] = carreras_para_el_contexto(sin_zapatilla)
     plan, incidencias = plan_en_curso(planes, store, hoy)
     if plan is not None:
         datos_json["plan"] = plan

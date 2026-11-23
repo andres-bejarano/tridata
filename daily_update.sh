@@ -205,6 +205,15 @@ if ! run_step "sync --weather" "$TRIDATA" sync --weather; then
     exit 1
 fi
 
+# --- Zapatillas: los km con las carreras de Garmin (unidad 103, R6) -------
+# Cada carrera nueva que trajo el sync suma a su zapatilla según el plan del
+# día (G-67) o se queda para preguntar. Contar dos veces no cambia nada. Si
+# falla, se apunta y la rutina SIGUE (se vuelve a contar mañana o al abrir
+# Fitness u Hoy).
+if ! run_step "zapatillas" "$TRIDATA" zapatillas; then
+    echo "zapatillas FAILED tras $MAX_ATTEMPTS intentos — se sigue con la rutina (se cuenta al abrir la app o mañana)" >> "$LOG"
+fi
+
 # --- Zapatillas de Strava (unidad 102, R-286, R-290) ----------------------
 # Una lectura de solo lectura de las zapatillas en activo y sus km. Sin
 # TRIDATA_STRAVA_CLIENTE o sin haber conectado Strava en Ajustes, `tridata

@@ -26,6 +26,10 @@ if [ "$1" = "strava" ] && [ "${STRAVA_CODIGO:-0}" != "0" ]; then
     echo "strava FAILED: Strava no responde"
     exit "$STRAVA_CODIGO"
 fi
+if [ "$1" = "zapatillas" ] && [ "${ZAPATILLAS_CODIGO:-0}" != "0" ]; then
+    echo "zapatillas FAILED: la base no se pudo abrir"
+    exit "$ZAPATILLAS_CODIGO"
+fi
 if [ "$1" = "sync" ] && [ "${2:-}" != "--laps" ] && [ "${2:-}" != "--weather" ] && [ -s "$SYNC_CODIGOS" ]; then
     c=$(head -n 1 "$SYNC_CODIGOS")
     tail -n +2 "$SYNC_CODIGOS" > "$SYNC_CODIGOS.resto"
@@ -74,6 +78,7 @@ class Rutina:
             "RATE_LIMIT_DELAY_SECONDS": "300", "LLAMADAS": str(self.llamadas), "ESPERAS": str(self.esperas),
             "SYNC_CODIGOS": str(self.codigos),
             "STRAVA_CODIGO": "0",  # unit 102: what the fake `tridata strava` answers
+            "ZAPATILLAS_CODIGO": "0",  # unit 103: what the fake `tridata zapatillas` answers
         }
 
     def correr(self, *codigos: int, args: tuple[str, ...] = ()) -> int:
@@ -243,5 +248,27 @@ def test_strava_que_falla_no_corta_la_rutina(rutina):  # R5 (102) · R-290: the 
     assert ordenes.index("strava") < ordenes.index("export-pmc") and ordenes[-1] == "export-nutricion"
     log = rutina.texto_log()
     assert "strava FAILED tras 3 intentos — se sigue con la rutina" in log
+    assert log.rstrip().endswith("Done.")
+    assert rutina.texto_marca() == f"{HOY_ISO()} hecha"
+
+
+# -- unit 103 (REC-47, R6): the count of the shoes with the runs of Garmin, a step that never stops the routine -------
+
+def test_el_paso_de_zapatillas_va_tras_el_sync_de_garmin(rutina):  # R6 (103)
+    assert rutina.correr() == 0
+    ordenes = [o.split()[0] if o.split()[0] != "sync" else o for o in rutina.ordenes()]
+    assert ordenes.count("zapatillas") == 1
+    assert ordenes.index("sync --weather") < ordenes.index("zapatillas") < ordenes.index("export-metrics")
+    assert "zapatillas OK" in rutina.texto_log()
+
+
+def test_zapatillas_que_falla_no_corta_la_rutina(rutina):  # R6 (103): its failure is written down and it goes on
+    rutina.entorno["ZAPATILLAS_CODIGO"] = "1"
+    assert rutina.correr() == 0
+    ordenes = [o.split()[0] for o in rutina.ordenes()]
+    assert ordenes.count("zapatillas") == 3  # tried like any step, then left for tomorrow
+    assert ordenes.index("zapatillas") < ordenes.index("export-pmc") and ordenes[-1] == "export-nutricion"
+    log = rutina.texto_log()
+    assert "zapatillas FAILED tras 3 intentos — se sigue con la rutina" in log
     assert log.rstrip().endswith("Done.")
     assert rutina.texto_marca() == f"{HOY_ISO()} hecha"

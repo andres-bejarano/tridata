@@ -8,6 +8,7 @@ Read only: nothing here writes. Every Garmin datum of «Cómo llegas» carries i
   or calories are lower than what its activities alone add up), so the resting HR of that day is not final.
 
 Unit 102 (REC-46, R-289): `zapatillas`, the shoes Hoy warns of (50 km or less to their cap, or past it); none, none.
+Unit 103 (REC-47, R-294): and after them, the runs of Garmin without a shoe, each with its question.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from .exporters import MarkdownExporter
 from .metrics import LimitesDelDia, compute_pmc, daily_tss, pmc_hasta
 from .storage import DataStore
 from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, _cuando
-from .zapatillas import Zapatillas, aviso_hoy
+from .zapatillas import Zapatillas, aviso_hoy, contar_sin_cortar
 
 OK, NO_HA_LLEGADO, INCOMPLETO = "ok", "no_ha_llegado", "incompleto"
 NOCHES_MEDIA_HRV = 7
@@ -119,5 +120,10 @@ def texto_sync(ok_en: str | None, ahora: datetime) -> str:
 
 def zapatillas(repo: Zapatillas, dia: date) -> list[dict[str, Any]]:
     """Unit 102 (R-289, C-366, C-367): «Meta Speed Sky Tokyo 350 de 400 km, toca cambiarla pronto» for each shoe with
-    50 km or less to its cap (or past it); [] when none, and Hoy shows nothing of shoes."""
-    return aviso_hoy(repo.lista(dia))
+    50 km or less to its cap (or past it); [] when none, and Hoy shows nothing of shoes.
+
+    Unit 103 (R3, C-375): the new runs of Garmin counted first, and after the warnings one question per run without a
+    shoe, `{"pregunta": True, activity_id, fecha, km, texto, opciones}` («¿Con qué zapatilla corriste el 26/11 (8,1
+    km)?», a button per shoe here in use). Both go in the box `.aviso-zapatillas`, never a `.tarjeta-hoy`."""
+    contar_sin_cortar(repo)
+    return [*aviso_hoy(repo.lista(dia)), *({**p, "pregunta": True} for p in repo.pendientes(dia))]

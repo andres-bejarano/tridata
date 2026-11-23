@@ -330,6 +330,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Read once the shoes in use and their km from Strava (only read; the daily routine's step)",
     )
 
+    sub.add_parser(
+        "zapatillas",
+        help="Count the km of the shoes given here with the runs of Garmin (the daily routine's step, after sync)",
+    )
+
     return parser
 
 
@@ -354,6 +359,20 @@ def _cmd_strava(db_path: Path, token: Path, cliente: str | None, *, transporte: 
         print(f"strava FAILED: {exc}", file=sys.stderr)
         return 1
     print(f"strava OK: {resultado['activas']} zapatillas en activo")
+    return 0
+
+
+def _cmd_zapatillas(db_path: Path) -> int:
+    """Unit 103 (REC-47, R6): each new run of Garmin to its shoe (rule G-67) or to the question; counting twice changes
+    nothing. A failure: one line and exit 1 (the routine writes it down and goes on)."""
+    from .zapatillas import Zapatillas
+
+    try:
+        resultado = Zapatillas(db_path).contar()
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        print(f"zapatillas FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    print(f"zapatillas OK: {resultado['nuevas']} carreras nuevas, {resultado['sin_zapatilla']} sin zapatilla")
     return 0
 
 
@@ -396,6 +415,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "strava":  # unit 102: needs neither Garmin nor the store of Garmin
         cliente = os.environ.get("TRIDATA_STRAVA_CLIENTE", "").strip()
         return _cmd_strava(DEFAULT_DB_PATH, STRAVA_TOKEN, str(Path(cliente).expanduser()) if cliente else None)
+
+    if args.command == "zapatillas":  # unit 103: the same SQLite, no Garmin
+        return _cmd_zapatillas(DEFAULT_DB_PATH)
 
     store = DataStore()
 

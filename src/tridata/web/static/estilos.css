@@ -904,3 +904,22 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .lineas-zapatillas { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .lineas-zapatillas li { overflow-wrap: anywhere; font-weight: 600; color: var(--alerta); }
 .lineas-zapatillas li.pasada { color: var(--peligro); }
+/* -- unit 103 (REC-47): the question «¿Con qué zapatilla…?», the form «Dar de alta» and «Últimas carreras» -- */
+.preguntas-zapatilla { display: grid; gap: 10px; margin-bottom: 8px; }
+.pregunta-zapatilla { display: grid; gap: 6px; }
+.pregunta-zapatilla > p { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.preguntas-zapatilla .pregunta-zapatilla { padding: 10px 12px; border-radius: 12px; background: var(--alerta-fondo); }
+.opciones-zapatilla { display: flex; flex-wrap: wrap; gap: 6px; }
+.opciones-zapatilla button { flex: 1 1 8rem; min-height: 44px; overflow-wrap: anywhere; }
+.aviso-zapatillas .pregunta-zapatilla { margin-top: 8px; }
+.alta-zapatillas { display: grid; margin-top: 8px; }
+.alta-zapatillas > button { min-height: 44px; }
+.alta-zapatilla select { min-height: 44px; }
+.lista-carreras { list-style: none; margin: 0; padding: 0; display: grid; }
+.carrera-zapatilla { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--borde); }
+.carrera-zapatilla:first-child { padding-top: 2px; }
+.carrera-zapatilla:last-child { border-bottom: 0; padding-bottom: 2px; }
+.cab-carrera { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.origen-carrera { font-size: .85rem; color: var(--suave); }
+.origen-carrera.sin { color: var(--alerta); font-weight: 600; }
+.carrera-zapatilla select { min-height: 44px; }

@@ -29,7 +29,8 @@ macros of what is saved, and `apuntar_comida` asks the team to estimate those of
 Unit 101 (REC-45, R-284): the same pair fills in what was logged without macros in the last 14 days (`apuntado:<id>`).
 Unit 102 (REC-46, R-291): `preparar_zapatilla` (read-only: what the km Andrés says of a shoe would leave, and its
 fingerprint) and `apuntar_zapatilla` (with his «sí» and that fingerprint, «dicho por ti»); `get_contexto` carries the
-shoes in use with their km, cap and mark.
+shoes in use with their km, cap and mark. Unit 103 (REC-47, R-292, R-294): the same pair with `accion` «alta» (a shoe
+given here) and «carrera» (the shoe of a run counted here); `get_contexto` carries the runs without a shoe too.
 
 Run it with `tridata-mcp` (stdio transport) and register that command in
 your MCP client, e.g. for Claude Code:
@@ -660,27 +661,38 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
 
     from .conversaciones.desde_pc import apuntar_zapatilla_desde_pc, preparar_zapatilla_desde_pc
 
-    zapatilla_forma = ("zapatilla: its name as get_contexto says it (or part of it, e.g. «Nimbus»). km: the km Andrés "
-                       "says it has in total (a number, a decimal allowed).")
+    zapatilla_forma = ("zapatilla: its name as get_contexto says it (or part of it, e.g. «Nimbus»); for accion alta, "
+                       "the name of the new shoe. km: the km Andrés says it has in total (a number, a decimal "
+                       "allowed); for alta, its km at the start; for carrera, the km of that run. accion (optional): "
+                       "«km» (by default: the km of a shoe in use), «alta» (unit 103: give a new running shoe, counted "
+                       "here from now with the runs of Garmin; needs uso, and tope or the one of its name) or "
+                       "«carrera» (unit 103: the shoe of a run counted here, e.g. one of carreras_sin_zapatilla of "
+                       "get_contexto, or to change the one the plan gave). tope (alta): its cap in km, a whole number "
+                       "from 50 to 3000. uso (alta): «suave» (rodajes), «calidad» (series, ritmo, tiradas) or "
+                       "«competicion». carrera (carrera): its date (año-mes-día) or its id from get_contexto.")
 
     @server.tool(name="preparar_zapatilla", annotations=lee, structured_output=False, description=(
         "Say what saving the km Andrés says one of his running shoes in use has would leave (unit 102): its km now and "
-        "where they come from (Strava, once a day, or said by him), and how it would stay («dicho por ti», with "
-        "today's date, until Strava gives a newer number equal or higher), with its fingerprint (`Huella`). It saves "
-        "NOTHING. Show Andrés the result and ask; only after his «sí» call apuntar_zapatilla with the same "
-        f"zapatilla, km and that huella. If the name fits more than one, or none, it says which there are.\n"
-        f"{zapatilla_forma}"))
-    def preparar_zapatilla_tool(zapatilla: str, km: float) -> str:
-        return preparar_zapatilla_desde_pc(equipo, zapatilla, km)
+        "where they come from (Strava, once a day, counted here, or said by him), and how it would stay, with its "
+        "fingerprint (`Huella`). Also (unit 103) a new shoe given here (accion alta) or the shoe of one run "
+        "(accion carrera). It saves NOTHING. Show Andrés the result and ask; only after his «sí» call "
+        "apuntar_zapatilla with the same zapatilla, km, accion, tope, uso, carrera and that huella. If the name fits "
+        f"more than one, or none, it says which there are.\n{zapatilla_forma}"))
+    def preparar_zapatilla_tool(zapatilla: str, km: float, accion: str = "km", tope: int | None = None,
+                                uso: str | None = None, carrera: str | None = None) -> str:
+        return preparar_zapatilla_desde_pc(equipo, zapatilla, km, accion, tope, uso, carrera)
 
     @server.tool(name="apuntar_zapatilla", annotations=guarda, structured_output=False, description=(
-        "Save the km of a shoe preparar_zapatilla already showed and Andrés answered «sí» to, «dicho por ti». NEVER "
-        "call it without his «sí». If the shoe changed since it was prepared (e.g. Strava gave new km) nothing is "
-        f"saved and the new version comes back: show it to him again.\n{papeles} {zapatilla_forma} The same given to "
-        "preparar_zapatilla. huella: the `Huella` it returned. texto (optional): a short line for Andrés, in "
+        "Save what preparar_zapatilla already showed and Andrés answered «sí» to: the km of a shoe («dicho por ti», "
+        "or a new start for one counted here), a new shoe (accion alta) or the shoe of a run (accion carrera). NEVER "
+        "call it without his «sí». If anything changed since it was prepared nothing is saved and the new version "
+        f"comes back: show it to him again.\n{papeles} {zapatilla_forma} The same given to preparar_zapatilla. "
+        "huella: the `Huella` it returned. texto (optional): a short line for Andrés, in "
         f"Spanish.\n{registro}"))
-    def apuntar_zapatilla_tool(papel: str, zapatilla: str, km: float, huella: str, texto: str = "") -> str:
-        return apuntar_zapatilla_desde_pc(equipo, papel, zapatilla, km, huella, texto)
+    def apuntar_zapatilla_tool(papel: str, zapatilla: str, km: float, huella: str, texto: str = "",
+                               accion: str = "km", tope: int | None = None, uso: str | None = None,
+                               carrera: str | None = None) -> str:
+        return apuntar_zapatilla_desde_pc(equipo, papel, zapatilla, km, huella, texto, accion, tope, uso, carrera)
 
     garmin_lee = ToolAnnotations(read_only_hint=True, open_world_hint=True)
 

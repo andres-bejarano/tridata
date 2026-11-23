@@ -12,6 +12,11 @@
 // Unit 102 (REC-46, R-289): above the cards, «👟 Zapatillas» only while a shoe has 50 km or less to its cap or is past
 // it (`zapatillas` of /api/hoy): «Meta Speed Sky Tokyo 350 de 400 km, toca cambiarla pronto». Without any, nothing of
 // shoes is in Hoy: the box is emptied and hidden. It is not a `.tarjeta-hoy`; its link goes to Fitness.
+// Unit 103 (REC-47, R-294): in that same box, after the warnings, «¿Con qué zapatilla corriste el 26/11 (8,1 km)?» with
+// a button per shoe for each run of Garmin without one (`pregunta` in `zapatillas`); answering it
+// (POST /api/zapatillas/carrera/ID) repaints Hoy and the question goes.
+
+import { preguntaZapatilla } from "./fitness.js";
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -76,10 +81,24 @@ function pintarZapatillas(lista) {
   const ir = nodo("a", "ver-mas", "Ver Fitness ›");
   ir.href = "#fitness";
   cabeza.append(nodo("h2", "", "👟 Zapatillas"), ir);
-  const lineas = nodo("ul", "lineas-zapatillas");
-  lineas.append(...lista.map((z) => nodo("li", `zapatilla-hoy ${z.estado}`, z.texto)));
-  caja.replaceChildren(cabeza, lineas);
+  const avisos = lista.filter((z) => !z.pregunta);
+  const hijos = [cabeza];
+  if (avisos.length) {
+    const lineas = nodo("ul", "lineas-zapatillas");
+    lineas.append(...avisos.map((z) => nodo("li", `zapatilla-hoy ${z.estado}`, z.texto)));
+    hijos.push(lineas);
+  }
+  hijos.push(...lista.filter((z) => z.pregunta).map((p) => preguntaZapatilla(p, elegirZapatilla)));
+  caja.replaceChildren(...hijos);
   caja.hidden = false;
+}
+
+// unit 103 (C-375): the shoe of a run, from Hoy; then Hoy again (the question goes, a warning may come)
+async function elegirZapatilla(carrera, zapatilla) {
+  const { ok, datos } = await api(`/api/zapatillas/carrera/${encodeURIComponent(carrera)}`, { zapatilla });
+  if (!ok) return datos.error ?? "No se ha podido guardar.";
+  await cargarHoy();
+  return null;
 }
 
 function pintarComida(c) {

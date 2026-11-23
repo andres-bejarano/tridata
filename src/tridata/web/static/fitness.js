@@ -31,6 +31,10 @@
 // what is left (or gone over), «toca cambiarla pronto» / «pasada» and where the km come from with its date («de Strava,
 // el 21/11» · «dicho por ti, hoy»), and why the last read of Strava failed if it did. «Cambiar km» and «Cambiar tope»
 // open a small form in its row (POST /api/zapatillas/ID): the server checks it and says why when it does not go.
+// Unit 103 (REC-47): «Dar de alta una zapatilla» (POST /api/zapatillas: name, km, cap and use) and «Retirar» in the
+// rows of the shoes counted here; above the list, «¿Con qué zapatilla corriste el 26/11 (8,1 km)?» with a button per
+// shoe for each run without one; and «Últimas carreras» with the shoe of each one, which a selector changes
+// (POST /api/zapatillas/carrera/ID). Names always with `textContent`.
 
 import { graficaCarga, graficaPulso, graficaSemanas, leyendaCarga, leyendaSemanas } from "./grafica.js";
 
@@ -60,6 +64,8 @@ let periodoVisto = null; // unit 097: the `periodo` of the last answer (to fill 
 let zapatillasVistas = null; // unit 102: the last /api/zapatillas answer
 let zapatillaAbierta = null; // unit 102: {id, que: "km" | "tope"} of the form open
 let peticionZapatillas = 0; // unit 102: drops a late answer
+let altaAbierta = false; // unit 103: the form «Dar de alta» open
+const USOS = [["suave", "Rodaje y suave"], ["calidad", "Series, ritmo y tiradas"], ["competicion", "Competición"]];
 const PERIODOS = { 14: "últimos 14 días", 42: "últimas 6 semanas", 91: "últimos 3 meses", 365: "último año" };
 const ETIQUETAS = { 14: "de los últimos 14 días", 42: "de las últimas 6 semanas", 91: "de los últimos 3 meses", 365: "del último año" };
 
@@ -217,8 +223,105 @@ function pintarZapatillas(d) {
   const vacio = $("fitness-zapatillas-vacio");
   vacio.hidden = d.zapatillas.length > 0;
   vacio.textContent = d.strava?.conectado ? "Strava no tiene ninguna zapatilla en activo."
-    : "Aún no hay zapatillas: conecta Strava en Ajustes, desde el PC, y saldrán aquí con sus km.";
+    : "Aún no hay zapatillas: dalas de alta con los km que llevan y desde entonces se les suman las carreras de Garmin.";
   $("fitness-zapatillas-lista").replaceChildren(...d.zapatillas.map(filaZapatilla));
+  pintarPreguntas($("fitness-zapatillas-pregunta"), d.pendientes ?? [], elegirCarrera);
+  pintarAlta();
+  pintarCarreras(d.ultimas ?? [], d.opciones ?? []);
+}
+
+// unit 103 (R-294): the shoe of a run, chosen by Andrés; the answer repaints the shoes, or the reason is returned
+async function elegirCarrera(carrera, zapatilla) {
+  const { ok, datos } = await api(`/api/zapatillas/carrera/${encodeURIComponent(carrera)}`, { zapatilla });
+  if (!ok) return datos.error ?? "No se ha podido guardar.";
+  pintarZapatillas(datos);
+  return null;
+}
+
+// unit 103 (C-375): one question per run without a shoe, with a button per shoe here in use. Shared with Hoy.
+export function pintarPreguntas(caja, pendientes, elegir) {
+  caja.hidden = pendientes.length === 0;
+  caja.replaceChildren(...pendientes.map((p) => preguntaZapatilla(p, elegir)));
+}
+
+export function preguntaZapatilla(p, elegir) {
+  const error = el("p", { className: "aviso", role: "alert", hidden: true });
+  const botones = p.opciones.map((o) => {
+    const boton = el("button", { type: "button", textContent: o.nombre });
+    boton.addEventListener("click", async () => {
+      for (const b of botones) b.disabled = true;
+      const fallo = await elegir(p.activity_id, o.id);
+      if (fallo) { error.textContent = fallo; error.hidden = false; for (const b of botones) b.disabled = false; }
+    });
+    return boton;
+  });
+  return el("div", { className: "pregunta-zapatilla" }, el("p", { textContent: p.texto }),
+    el("div", { className: "opciones-zapatilla" }, ...botones), error);
+}
+
+// unit 103 (R-292): «Dar de alta una zapatilla» opens its form; the server checks everything and says why
+function pintarAlta() {
+  const caja = $("fitness-zapatillas-alta");
+  if (!altaAbierta) {
+    const abrir = el("button", { type: "button", textContent: "Dar de alta una zapatilla" });
+    abrir.addEventListener("click", () => { altaAbierta = true; pintarAlta(); });
+    caja.replaceChildren(abrir);
+    return;
+  }
+  const campo = (id, etiqueta, props) => {
+    const input = el("input", { id, type: "text", autocomplete: "off", ...props });
+    return [el("label", { htmlFor: id, textContent: etiqueta }), input];
+  };
+  const [lNombre, nombre] = campo("alta-zapatilla-nombre", "Nombre", { maxLength: 80 });
+  const [lKm, km] = campo("alta-zapatilla-km", "Km que lleva", { inputMode: "decimal" });
+  const [lTope, tope] = campo("alta-zapatilla-tope", "Tope en km", { inputMode: "numeric", value: "700" });
+  const uso = el("select", { id: "alta-zapatilla-uso" },
+    ...USOS.map(([valor, texto]) => el("option", { value: valor, textContent: texto })));
+  const lUso = el("label", { htmlFor: uso.id, textContent: "Para qué la usas" });
+  const error = el("p", { className: "aviso", role: "alert", hidden: true });
+  const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar" });
+  const cancelar = el("button", { type: "button", textContent: "Cancelar" });
+  const form = el("form", { className: "editar-zapatilla alta-zapatilla", noValidate: true },
+    lNombre, nombre, lKm, km, lTope, tope, lUso, uso, error, el("div", { className: "acciones" }, guardar, cancelar));
+  cancelar.addEventListener("click", () => { altaAbierta = false; pintarAlta(); });
+  form.addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    guardar.disabled = true;
+    const { ok, datos } = await api("/api/zapatillas", { nombre: nombre.value.trim(), km: km.value.trim(),
+      tope: tope.value.trim(), uso: uso.value });
+    guardar.disabled = false;
+    if (!ok) { error.textContent = datos.error ?? "No se ha podido guardar."; error.hidden = false; return; }
+    altaAbierta = false;
+    pintarZapatillas(datos);
+  });
+  caja.replaceChildren(form);
+  queueMicrotask(() => nombre.focus());
+}
+
+// unit 103 (R-295): the last runs since the start with their shoe; changing it moves the km at once
+function pintarCarreras(ultimas, opciones) {
+  $("fitness-carreras").hidden = ultimas.length === 0;
+  $("fitness-carreras-lista").replaceChildren(...ultimas.map((c) => {
+    const [dia, mes] = [Number(c.fecha.slice(8, 10)), Number(c.fecha.slice(5, 7))];
+    const elegir = el("select", { ariaLabel: `Zapatilla de la carrera del ${dia}/${mes}` });
+    if (!c.zapatilla_id) elegir.append(el("option", { value: "", textContent: "¿Con cuál?", disabled: true, selected: true }));
+    if (c.zapatilla_id && !opciones.some((o) => o.id === c.zapatilla_id)) {
+      elegir.append(el("option", { value: c.zapatilla_id, textContent: c.nombre, disabled: true }));
+    }
+    elegir.append(...opciones.map((o) => el("option", { value: o.id, textContent: o.nombre })));
+    if (c.zapatilla_id) elegir.value = c.zapatilla_id;
+    const error = el("p", { className: "aviso", role: "alert", hidden: true });
+    elegir.addEventListener("change", async () => {
+      elegir.disabled = true;
+      const fallo = await elegirCarrera(c.activity_id, elegir.value);
+      if (fallo) { error.textContent = fallo; error.hidden = false; elegir.disabled = false; }
+    });
+    const origen = el("span", { className: `origen-carrera${c.zapatilla_id ? "" : " sin"}`,
+      textContent: c.texto_origen ?? "sin zapatilla" });
+    return el("li", { className: "carrera-zapatilla" },
+      el("div", { className: "cab-carrera" }, el("strong", { className: "num", textContent: c.texto }), origen),
+      elegir, error);
+  }));
 }
 
 function restoZapatilla(z) {
@@ -245,7 +348,17 @@ function filaZapatilla(z) {
   const tope = el("button", { type: "button", textContent: "Cambiar tope" });
   km.addEventListener("click", () => abrir("km"));
   tope.addEventListener("click", () => abrir("tope"));
-  fila.append(el("div", { className: "acciones acciones-zapatilla" }, km, tope));
+  const acciones = el("div", { className: "acciones acciones-zapatilla" }, km, tope);
+  if (z.fuente === "aqui") { // unit 103 (R-292): out of the list; what it counted stays with it
+    const retirar = el("button", { type: "button", textContent: "Retirar" });
+    retirar.addEventListener("click", async () => {
+      retirar.disabled = true;
+      const { ok, datos } = await api(`/api/zapatillas/${encodeURIComponent(z.id)}`, { retirar: true });
+      if (ok) pintarZapatillas(datos); else retirar.disabled = false;
+    });
+    acciones.append(retirar);
+  }
+  fila.append(acciones);
   return fila;
 }
 

@@ -9,6 +9,7 @@ Read only: nothing here writes. Every Garmin datum of «Cómo llegas» carries i
 
 Unit 102 (REC-46, R-289): `zapatillas`, the shoes Hoy warns of (50 km or less to their cap, or past it); none, none.
 Unit 103 (REC-47, R-294): and after them, the runs of Garmin without a shoe, each with its question.
+Unit 106 (REC-50, R-308): and the line of each run of today and yesterday with its shoe, to change it.
 """
 from __future__ import annotations
 
@@ -124,6 +125,13 @@ def zapatillas(repo: Zapatillas, dia: date) -> list[dict[str, Any]]:
 
     Unit 103 (R3, C-375): the new runs of Garmin counted first, and after the warnings one question per run without a
     shoe, `{"pregunta": True, activity_id, fecha, km, texto, opciones}` («¿Con qué zapatilla corriste el 26/11 (8,1
-    km)?», a button per shoe here in use). Both go in the box `.aviso-zapatillas`, never a `.tarjeta-hoy`."""
+    km)?», a button per shoe here in use). Both go in the box `.aviso-zapatillas`, never a `.tarjeta-hoy`.
+
+    Unit 106 (R6, R-308, S-104): between them, one line per counted run of today or yesterday, `{"carrera": True,
+    activity_id, texto, boton, opciones, …}` («25/11: 12,4 km con SonicBlast» · «Cambiar», or «… · Sin zapatilla» ·
+    «Elegir»); a run that is a line is not asked again (the older ones still are)."""
     contar_sin_cortar(repo)
-    return [*aviso_hoy(repo.lista(dia)), *({**p, "pregunta": True} for p in repo.pendientes(dia))]
+    recientes = repo.recientes(dia)
+    en_linea = {r["activity_id"] for r in recientes}
+    return [*aviso_hoy(repo.lista(dia)), *({**r, "carrera": True} for r in recientes),
+            *({**p, "pregunta": True} for p in repo.pendientes(dia) if p["activity_id"] not in en_linea)]

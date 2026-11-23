@@ -22,6 +22,14 @@ Unit 103 (REC-47): «manda Garmin».
     POST /api/zapatillas/{id}   also {"retirar": true} (R1): out of the list; 404 if it is not one here in use
     POST /api/zapatillas/carrera/{activity_id}   {"zapatilla": id}: the shoe of that run, chosen by Andrés (R3, R4);
                                 400 if that shoe is not one here in use, 404 without that run
+
+Unit 106 (REC-50).
+    GET  /api/zapatillas        also `retiradas`: the shoes here retired, with their km (R3)
+    GET  /api/zapatillas/carrera/{activity_id}   the line of that run: «25/11: 12,4 km con SonicBlast» with
+                                «Cambiar», or «… · Sin zapatilla» with «Elegir», and the shoes it may be given (R7); 404
+                                if it is not a run counted here
+    POST /api/zapatillas/{id}   also {"activar": true} (R3): a retired shoe here in use again with its km; 404 if it is
+                                not one here retired
 All behind the middleware `Origen` of the app.
 """
 from __future__ import annotations
@@ -48,6 +56,7 @@ UNA_COSA = "Di los km o el tope de la zapatilla, una cosa cada vez."
 ALTA_MAL = "Di el nombre, los km, el tope y para qué la usas."
 DI_CUAL = "Di con qué zapatilla corriste."
 NO_HAY_CARRERA = "Esa carrera no está entre las contadas aquí."
+NO_RETIRADA = "Esa zapatilla no está entre las retiradas."
 
 
 def _cuando(momento: str, hoy: date) -> str:
@@ -113,16 +122,33 @@ def rutas(repo: Zapatillas, strava: Strava, hoy: Callable[[], date], ahora: Call
             return JSONResponse({"error": NO_HAY_CARRERA}, status_code=404)
         return JSONResponse(await run_in_threadpool(_vista))
 
+    def _linea(activity_id: str) -> dict[str, Any] | None:
+        contar(repo)
+        return repo.linea_carrera(activity_id, hoy())
+
+    async def ver_carrera(request: Request) -> Response:  # unit 106 (R7)
+        linea = await run_in_threadpool(_linea, request.path_params["activity_id"])
+        if linea is None:
+            return JSONResponse({"error": NO_HAY_CARRERA}, status_code=404)
+        return JSONResponse(linea)
+
     async def cambiar(request: Request) -> Response:
         ident = request.path_params["id"]
         try:
             cuerpo = await request.json()
         except ValueError:
             cuerpo = None
-        if not isinstance(cuerpo, dict) or len(cuerpo) != 1 or not ({"km", "tope", "retirar"} & set(cuerpo)):
+        if not isinstance(cuerpo, dict) or len(cuerpo) != 1 or not ({"km", "tope", "retirar", "activar"} & set(cuerpo)):
             return JSONResponse({"error": UNA_COSA}, status_code=400)
         try:
-            if "retirar" in cuerpo:  # unit 103 (R1)
+            if "activar" in cuerpo:  # unit 106 (R3)
+                if cuerpo["activar"] is not True:
+                    return JSONResponse({"error": UNA_COSA}, status_code=400)
+                try:
+                    await run_in_threadpool(repo.reactivar, ident, ahora())
+                except KeyError:
+                    return JSONResponse({"error": NO_RETIRADA}, status_code=404)
+            elif "retirar" in cuerpo:  # unit 103 (R1)
                 if cuerpo["retirar"] is not True:
                     return JSONResponse({"error": UNA_COSA}, status_code=400)
                 await run_in_threadpool(repo.retirar, ident)
@@ -161,6 +187,7 @@ def rutas(repo: Zapatillas, strava: Strava, hoy: Callable[[], date], ahora: Call
     return [
         Route("/api/zapatillas", ver),
         Route("/api/zapatillas", alta, methods=["POST"]),
+        Route("/api/zapatillas/carrera/{activity_id}", ver_carrera),
         Route("/api/zapatillas/carrera/{activity_id}", elegir, methods=["POST"]),
         Route("/api/zapatillas/{id}", cambiar, methods=["POST"]),
         Route("/api/strava", ver_strava),

@@ -923,3 +923,21 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .origen-carrera { font-size: .85rem; color: var(--suave); }
 .origen-carrera.sin { color: var(--alerta); font-weight: 600; }
 .carrera-zapatilla select { min-height: 44px; }
+/* -- unit 106 (REC-50): the line of a run with its shoe (Hoy and the detail in Fitness), «Retirar» with its
+   confirmation and the folded list «Retiradas» -- */
+.linea-zapatilla { display: grid; gap: 6px; }
+.aviso-zapatillas .linea-zapatilla { margin-top: 8px; }
+.detalle-fitness .linea-zapatilla { margin-bottom: 10px; padding: 10px 12px; border-radius: 12px; background: var(--alerta-fondo); }
+.cab-linea-zapatilla { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.cab-linea-zapatilla > p { margin: 0; font-weight: 600; overflow-wrap: anywhere; flex: 1 1 12rem; }
+.linea-zapatilla.sin .cab-linea-zapatilla > p { color: var(--alerta); }
+.cab-linea-zapatilla > button { min-height: 44px; min-width: 6rem; }
+.confirmar-retirar { display: grid; gap: 6px; margin-top: 4px; }
+.confirmar-retirar > p { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.confirmar-retirar .acciones { flex-wrap: wrap; }
+.confirmar-retirar button { flex: 1 1 6rem; min-height: 44px; }
+.retiradas-zapatillas > summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--acento); font-weight: 650; list-style: none; }
+.retiradas-zapatillas > summary::-webkit-details-marker { display: none; }
+.retiradas-zapatillas > summary::after { content: "›"; margin-left: auto; font-size: 1.3rem; transition: transform .15s; }
+.retiradas-zapatillas[open] > summary::after { transform: rotate(90deg); }
+.retiradas-zapatillas .zapatilla button { min-height: 44px; }

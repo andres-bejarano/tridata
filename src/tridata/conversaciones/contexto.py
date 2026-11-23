@@ -134,7 +134,7 @@ guardado; \
 («pronto» si le quedan cincuenta km o menos, «pasada» si llegó al tope) y de dónde salen los km ("fuente": strava, \
 leídos de Strava una vez al día, andres, dichos por él, o aqui, contados aquí con sus carreras de Garmin desde esa \
 fecha) con su fecha y su "uso" (suave, calidad o competicion: con ese uso se le suman las carreras según la sesión del \
-plan de ese día); si te dice cuántos km lleva una, prepáralo con preparar_zapatilla y, solo con su «sí», guárdalo con \
+plan de ese día; trail: se le suman las carreras que Garmin guardó como trail, diga lo que diga el plan); si te dice cuántos km lleva una, prepáralo con preparar_zapatilla y, solo con su «sí», guárdalo con \
 apuntar_zapatilla; con esas mismas, accion alta da de alta una zapatilla nueva y accion carrera dice con qué \
 zapatilla corrió una carrera; \
 "carreras_sin_zapatilla", sus carreras de Garmin que no se sabe con qué zapatilla corrió (no suman a ninguna hasta \

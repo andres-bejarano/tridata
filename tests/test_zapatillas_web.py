@@ -277,9 +277,11 @@ def test_la_web_cuenta_y_trae_pendientes_y_ultimas(web):  # R2, R3, R4 (103) · 
     assert [o["nombre"] for o in pregunta["opciones"]] == ["Gel Nimbus 28", "Meta Speed Sky Tokyo", "SonicBlast"]
     assert [(u["activity_id"], u["nombre"], u["texto_origen"]) for u in datos["ultimas"]] == [
         ("c22", None, None), ("c21", "SonicBlast", "por el plan")]
-    # Hoy asks the same, in the warning of the shoes
+    # Hoy: unit 106 (R6, S-104): the runs of today and yesterday are a line with «Cambiar» / «Elegir», not a question
     hoy = web.cliente.get("/api/hoy").json()
-    assert [z["texto"] for z in hoy["zapatillas"] if z.get("pregunta")] == ["¿Con qué zapatilla corriste hoy (8,1 km)?"]
+    assert [z["texto"] for z in hoy["zapatillas"] if z.get("pregunta")] == []
+    assert [z["texto"] for z in hoy["zapatillas"] if z.get("carrera")] == ["21/11: 12,4 km con SonicBlast",
+                                                                          "22/11: 8,1 km · Sin zapatilla"]
     # answering it adds the km and the question goes
     r = web.cliente.post("/api/zapatillas/carrera/c22", json={"zapatilla": ids["Gel Nimbus 28"]})
     assert r.status_code == 200
@@ -287,7 +289,8 @@ def test_la_web_cuenta_y_trae_pendientes_y_ultimas(web):  # R2, R3, R4 (103) · 
     assert datos["pendientes"] == []
     assert next(z for z in datos["zapatillas"] if z["nombre"] == "Gel Nimbus 28")["km"] == 158.1
     assert datos["ultimas"][0]["texto_origen"] == "elegida por ti"
-    assert web.cliente.get("/api/hoy").json()["zapatillas"] == []
+    assert [z["texto"] for z in web.cliente.get("/api/hoy").json()["zapatillas"]] == [
+        "21/11: 12,4 km con SonicBlast", "22/11: 8,1 km con Gel Nimbus 28"]
     # and changing the one of a run moves its km (C-376)
     r = web.cliente.post("/api/zapatillas/carrera/c21", json={"zapatilla": ids["Gel Nimbus 28"]})
     km = {z["nombre"]: z["km"] for z in r.json()["zapatillas"]}
@@ -303,3 +306,48 @@ def test_elegir_lo_que_no_vale_en_la_web(web):  # R3 (103)
     assert web.cliente.post("/api/zapatillas/carrera/no-existe",
                             json={"zapatilla": ids["SonicBlast"]}).status_code == 404
     assert len(web.cliente.get("/api/zapatillas").json()["pendientes"]) == 1
+
+
+# -- unit 106 (REC-50): the use trail, the line of a run, retire and put back in use -----------------------------------
+
+def test_alta_de_trail_en_la_web(web):  # R1 · R-303, C-385
+    r = web.cliente.post("/api/zapatillas", json={"nombre": "Asics Trabuco 13", "km": "200", "tope": 700,
+                                                  "uso": "trail"})
+    assert r.status_code == 200
+    (trabuco,) = r.json()["zapatillas"]
+    assert trabuco["texto"].startswith("Asics Trabuco 13 · 200 de 700 km · quedan 500") and trabuco["uso"] == "trail"
+
+
+def test_la_linea_de_una_carrera_en_la_web(web):  # R7 · R-309, C-392
+    ids = _tres(web)
+    _plan(web, {"2026-11-21": "Series 3×2 km a 3:50-4:00"})
+    _correr(web, "c21", "2026-11-21", 12.4)
+    _correr(web, "c22", "2026-11-22", 8.1)
+    r = web.cliente.get("/api/zapatillas/carrera/c21")
+    assert r.status_code == 200
+    linea = r.json()
+    assert (linea["texto"], linea["boton"], linea["zapatilla_id"]) == ("21/11: 12,4 km con SonicBlast", "Cambiar",
+                                                                      ids["SonicBlast"])
+    assert [o["nombre"] for o in linea["opciones"]] == ["Gel Nimbus 28", "Meta Speed Sky Tokyo", "SonicBlast"]
+    sin = web.cliente.get("/api/zapatillas/carrera/c22").json()
+    assert (sin["texto"], sin["boton"]) == ("22/11: 8,1 km · Sin zapatilla", "Elegir")
+    web.cliente.post("/api/zapatillas/carrera/c22", json={"zapatilla": ids["Gel Nimbus 28"]})
+    assert web.cliente.get("/api/zapatillas/carrera/c22").json()["texto"] == "22/11: 8,1 km con Gel Nimbus 28"
+    no = web.cliente.get("/api/zapatillas/carrera/no-es-una-carrera")
+    assert no.status_code == 404 and no.json()["error"]
+
+
+def test_retirar_y_volver_a_activo_en_la_web(web):  # R3 · R-305, C-388
+    ids = _tres(web)
+    nimbus = ids["Gel Nimbus 28"]
+    assert web.cliente.get("/api/zapatillas").json()["retiradas"] == []
+    r = web.cliente.post(f"/api/zapatillas/{nimbus}", json={"retirar": True})
+    (retirada,) = r.json()["retiradas"]
+    assert (retirada["id"], retirada["nombre"], retirada["km"]) == (nimbus, "Gel Nimbus 28", 150.0)
+    r = web.cliente.post(f"/api/zapatillas/{nimbus}", json={"activar": True})
+    assert r.status_code == 200
+    datos = r.json()
+    assert datos["retiradas"] == []
+    assert next(z for z in datos["zapatillas"] if z["id"] == nimbus)["km"] == 150.0
+    assert web.cliente.post(f"/api/zapatillas/{nimbus}", json={"activar": True}).status_code == 404
+    assert web.cliente.post(f"/api/zapatillas/{nimbus}", json={"activar": "sí"}).status_code == 400

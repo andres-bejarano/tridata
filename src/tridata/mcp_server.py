@@ -668,8 +668,9 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
                        "here from now with the runs of Garmin; needs uso, and tope or the one of its name) or "
                        "«carrera» (unit 103: the shoe of a run counted here, e.g. one of carreras_sin_zapatilla of "
                        "get_contexto, or to change the one the plan gave). tope (alta): its cap in km, a whole number "
-                       "from 50 to 3000. uso (alta): «suave» (rodajes), «calidad» (series, ritmo, tiradas) or "
-                       "«competicion». carrera (carrera): its date (año-mes-día) or its id from get_contexto.")
+                       "from 50 to 3000. uso (alta): «suave» (rodajes), «calidad» (series, ritmo, tiradas), "
+                       "«competicion» or «trail» (unit 106: the runs Garmin keeps as trail go to it, whatever the "
+                       "plan says). carrera (carrera): its date (año-mes-día) or its id from get_contexto.")
 
     @server.tool(name="preparar_zapatilla", annotations=lee, structured_output=False, description=(
         "Say what saving the km Andrés says one of his running shoes in use has would leave (unit 102): its km now and "

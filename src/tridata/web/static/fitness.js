@@ -35,6 +35,11 @@
 // rows of the shoes counted here; above the list, «¿Con qué zapatilla corriste el 26/11 (8,1 km)?» with a button per
 // shoe for each run without one; and «Últimas carreras» with the shoe of each one, which a selector changes
 // (POST /api/zapatillas/carrera/ID). Names always with `textContent`.
+// Unit 106 (REC-50): the use «Trail» in the form; «Retirar» asks in its row («¿Retirar la Gel Nimbus 28?» Sí / No);
+// the retired ones go folded into «Retiradas», each with «Volver a ponerla en activo» (POST /api/zapatillas/ID
+// {activar}); and the detail of a run (`abrirActividad`) carries above its laps the line of its shoe
+// (GET /api/zapatillas/carrera/ID: «25/11: 12,4 km con SonicBlast» · «Cambiar», a button per shoe), shared with Hoy
+// (`lineaZapatilla`). Not a run counted here (404): no line.
 
 import { graficaCarga, graficaPulso, graficaSemanas, leyendaCarga, leyendaSemanas } from "./grafica.js";
 
@@ -65,7 +70,9 @@ let zapatillasVistas = null; // unit 102: the last /api/zapatillas answer
 let zapatillaAbierta = null; // unit 102: {id, que: "km" | "tope"} of the form open
 let peticionZapatillas = 0; // unit 102: drops a late answer
 let altaAbierta = false; // unit 103: the form «Dar de alta» open
-const USOS = [["suave", "Rodaje y suave"], ["calidad", "Series, ritmo y tiradas"], ["competicion", "Competición"]];
+let retirarAbierta = null; // unit 106: the id of the shoe whose «¿Retirar…?» is open
+const USOS = [["suave", "Rodaje y suave"], ["calidad", "Series, ritmo y tiradas"], ["competicion", "Competición"],
+  ["trail", "Trail"]];
 const PERIODOS = { 14: "últimos 14 días", 42: "últimas 6 semanas", 91: "últimos 3 meses", 365: "último año" };
 const ETIQUETAS = { 14: "de los últimos 14 días", 42: "de las últimas 6 semanas", 91: "de los últimos 3 meses", 365: "del último año" };
 
@@ -227,7 +234,61 @@ function pintarZapatillas(d) {
   $("fitness-zapatillas-lista").replaceChildren(...d.zapatillas.map(filaZapatilla));
   pintarPreguntas($("fitness-zapatillas-pregunta"), d.pendientes ?? [], elegirCarrera);
   pintarAlta();
+  pintarRetiradas(d.retiradas ?? []);
   pintarCarreras(d.ultimas ?? [], d.opciones ?? []);
+}
+
+// unit 106 (R-305): the shoes here retired, folded; «Volver a ponerla en activo» brings it back with its km
+function pintarRetiradas(retiradas) {
+  $("fitness-retiradas").hidden = retiradas.length === 0;
+  $("fitness-retiradas-lista").replaceChildren(...retiradas.map((z) => {
+    const volver = el("button", { type: "button", textContent: "Volver a ponerla en activo" });
+    const error = el("p", { className: "aviso", role: "alert", hidden: true });
+    volver.addEventListener("click", async () => {
+      volver.disabled = true;
+      const { ok, datos } = await api(`/api/zapatillas/${encodeURIComponent(z.id)}`, { activar: true });
+      if (ok) { pintarZapatillas(datos); return; }
+      error.textContent = datos.error ?? "No se ha podido guardar.";
+      error.hidden = false;
+      volver.disabled = false;
+    });
+    const fila = el("li", { className: "zapatilla" },
+      el("div", { className: "cab-zapatilla" }, el("strong", { textContent: z.nombre })),
+      el("p", { className: "num cifras-zapatilla",
+        textContent: `${enteras.format(Math.round(z.km))} de ${enteras.format(z.tope)} km · ${restoZapatilla(z)}` }),
+      volver, error);
+    fila.dataset.id = z.id;
+    return fila;
+  }));
+}
+
+// unit 106 (R-308, R-309): the line of a run with its shoe and «Cambiar» (or «Sin zapatilla» and «Elegir»); tapping
+// it shows a button per shoe in use, and one tap gives it that shoe. `elegir(carrera, zapatilla)` saves it and returns
+// an error text, or null (the caller repaints). Shared with Hoy.
+export function lineaZapatilla(l, elegir) {
+  const error = el("p", { className: "aviso", role: "alert", hidden: true });
+  const opciones = el("div", { className: "opciones-zapatilla", hidden: true });
+  const botones = l.opciones.map((o) => {
+    const boton = el("button", { type: "button", textContent: o.nombre });
+    boton.addEventListener("click", async () => {
+      for (const b of botones) b.disabled = true;
+      const fallo = await elegir(l.activity_id, o.id);
+      if (fallo) { error.textContent = fallo; error.hidden = false; for (const b of botones) b.disabled = false; }
+    });
+    return boton;
+  });
+  opciones.append(...botones);
+  const abrir = el("button", { type: "button", textContent: l.boton });
+  abrir.setAttribute("aria-expanded", "false");
+  abrir.addEventListener("click", () => {
+    opciones.hidden = !opciones.hidden;
+    abrir.setAttribute("aria-expanded", String(!opciones.hidden));
+  });
+  const linea = el("div", { className: `linea-zapatilla${l.zapatilla_id ? "" : " sin"}` },
+    el("div", { className: "cab-linea-zapatilla" }, el("p", { className: "num", textContent: l.texto }), abrir),
+    opciones, error);
+  linea.dataset.carrera = l.activity_id;
+  return linea;
 }
 
 // unit 103 (R-294): the shoe of a run, chosen by Andrés; the answer repaints the shoes, or the reason is returned
@@ -317,7 +378,7 @@ function pintarCarreras(ultimas, opciones) {
       if (fallo) { error.textContent = fallo; error.hidden = false; elegir.disabled = false; }
     });
     const origen = el("span", { className: `origen-carrera${c.zapatilla_id ? "" : " sin"}`,
-      textContent: c.texto_origen ?? "sin zapatilla" });
+      textContent: c.texto_ya_contada ?? c.texto_origen ?? "sin zapatilla" }); // unit 106 (R-307)
     return el("li", { className: "carrera-zapatilla" },
       el("div", { className: "cab-carrera" }, el("strong", { className: "num", textContent: c.texto }), origen),
       elegir, error);
@@ -349,17 +410,40 @@ function filaZapatilla(z) {
   km.addEventListener("click", () => abrir("km"));
   tope.addEventListener("click", () => abrir("tope"));
   const acciones = el("div", { className: "acciones acciones-zapatilla" }, km, tope);
+  if (z.fuente === "aqui" && retirarAbierta === z.id) { // unit 106 (R-305): it asks first, in its row
+    fila.append(confirmarRetirar(z));
+    return fila;
+  }
   if (z.fuente === "aqui") { // unit 103 (R-292): out of the list; what it counted stays with it
     const retirar = el("button", { type: "button", textContent: "Retirar" });
-    retirar.addEventListener("click", async () => {
-      retirar.disabled = true;
-      const { ok, datos } = await api(`/api/zapatillas/${encodeURIComponent(z.id)}`, { retirar: true });
-      if (ok) pintarZapatillas(datos); else retirar.disabled = false;
-    });
+    retirar.addEventListener("click", () => { retirarAbierta = z.id; pintarZapatillas(zapatillasVistas); });
     acciones.append(retirar);
   }
   fila.append(acciones);
   return fila;
+}
+
+// unit 106 (R-305, C-388): «¿Retirar la Gel Nimbus 28?» Sí / No; «No» changes nothing
+function confirmarRetirar(z) {
+  const si = el("button", { type: "button", className: "principal", textContent: "Sí" });
+  const no = el("button", { type: "button", textContent: "No" });
+  const error = el("p", { className: "aviso", role: "alert", hidden: true });
+  no.addEventListener("click", () => { retirarAbierta = null; pintarZapatillas(zapatillasVistas); });
+  si.addEventListener("click", async () => {
+    si.disabled = no.disabled = true;
+    const { ok, datos } = await api(`/api/zapatillas/${encodeURIComponent(z.id)}`, { retirar: true });
+    if (!ok) {
+      error.textContent = datos.error ?? "No se ha podido retirar.";
+      error.hidden = false;
+      si.disabled = no.disabled = false;
+      return;
+    }
+    retirarAbierta = null;
+    pintarZapatillas(datos);
+  });
+  queueMicrotask(() => no.focus());
+  return el("div", { className: "confirmar-retirar", role: "group" },
+    el("p", { textContent: `¿Retirar la ${z.nombre}?` }), el("div", { className: "acciones" }, si, no), error);
 }
 
 // R-288: the cap, a whole number from 50 to 3000; R-291: the km he says, «dicho por ti» (the server checks both)
@@ -642,13 +726,29 @@ async function alternarDetalle() {
 
 // Unit 093 (R-241): the detail of any activity by its id, in `caja` (the last activity's or the week's session);
 // `sigue()` says whether it is still wanted when the answer comes.
+// Unit 106 (R-309): above everything, the line of its shoe when it is a run counted here (a 404 says it is not).
 async function abrirActividad(id, caja, sigue) {
   caja.replaceChildren(el("p", { className: "suave", textContent: "Cargando las vueltas…" }));
   caja.hidden = false;
-  const { ok, datos } = await api(`/api/actividad/${encodeURIComponent(id)}`);
+  const [{ ok, datos }, zapatilla] = await Promise.all([api(`/api/actividad/${encodeURIComponent(id)}`),
+    api(`/api/zapatillas/carrera/${encodeURIComponent(id)}`)]);
   if (!sigue()) return;
   if (!ok) { caja.replaceChildren(el("p", { className: "aviso", textContent: datos.error ?? "No he podido cargarla." })); return; }
   pintarDetalle(datos, caja);
+  if (zapatilla.ok) caja.prepend(lineaDeCarrera(zapatilla.datos, caja, sigue));
+}
+
+// The line of the detail: choosing repaints it (and the shoes above), in its place
+function lineaDeCarrera(linea, caja, sigue) {
+  const nodo = lineaZapatilla(linea, async (carrera, zapatilla) => {
+    const { ok, datos } = await api(`/api/zapatillas/carrera/${encodeURIComponent(carrera)}`, { zapatilla });
+    if (!ok) return datos.error ?? "No se ha podido guardar.";
+    pintarZapatillas(datos);
+    const otra = await api(`/api/zapatillas/carrera/${encodeURIComponent(carrera)}`);
+    if (otra.ok && sigue() && nodo.isConnected) nodo.replaceWith(lineaDeCarrera(otra.datos, caja, sigue));
+    return null;
+  });
+  return nodo;
 }
 
 function ritmo(v) {

@@ -379,11 +379,11 @@ def test_rutina_con_el_sync_bien_lo_rehace_dos_veces(tmp_path):  # R8 · R-60, C
 
 def test_rutina_sin_entorno_usa_las_rutas_de_siempre():  # R8 · the 08:00 routine does the same as today
     texto = SCRIPT.read_text(encoding="utf-8")
-    assert 'TRIDATA="${TRIDATA:-/home/ankalagon/anaconda3/envs/tridata/bin/tridata}"' in texto
-    assert 'LOG="${LOG:-/home/ankalagon/projects/tridata/sync.log}"' in texto
-    assert 'EXPORTS_DIR="${EXPORTS_DIR:-/home/ankalagon/projects/tridata/exports}"' in texto
+    assert 'TRIDATA="${TRIDATA:-${HOME}/anaconda3/envs/tridata/bin/tridata}"' in texto
+    assert 'LOG="${LOG:-${HOME}/projects/tridata/sync.log}"' in texto
+    assert 'EXPORTS_DIR="${EXPORTS_DIR:-${HOME}/projects/tridata/exports}"' in texto
     assert 'NUTRICION="$EXPORTS_DIR/nutricion.md"' in texto
-    assert 'WIDE_MARKER="${WIDE_MARKER:-/home/ankalagon/.tridata/last_wide_sync}"' in texto
+    assert 'WIDE_MARKER="${WIDE_MARKER:-${HOME}/.tridata/last_wide_sync}"' in texto
     assert 'RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-60}"' in texto
 
 

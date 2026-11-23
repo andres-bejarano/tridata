@@ -20,6 +20,7 @@ se comprueba a sí mismo.
 | Instalar y correr el E2E de la pantalla del móvil (extra `e2e`, fuera de `dev` y del CI; sin él `tests/e2e/` se salta) | `python -m pip install -e ".[dev,e2e]" && python -m playwright install chromium`, y luego `TRIDATA_CAPTURAS=../../.runtime/<unidad>/capturas PYTHONPATH=src python -m pytest -q tests/e2e` (las capturas solo si se pone `TRIDATA_CAPTURAS`) |
 | Comprobación de seguridad | `scripts/ci/security` |
 | Todo seguido (lint, suite, seguridad) | `scripts/check.sh` |
+| Activar el hook de pre-commit (una vez por clon): rechaza el commit si lleva PDFs, GPX reales, `inscripciones/`, `deficit*`, `.env*` o un secreto que vea gitleaks (sin gitleaks, también rechaza); `scripts/ci/lint` repite lo de los ficheros sobre todo el árbol | `git config core.hooksPath scripts/hooks` |
 | Parar / limpiar | `rm -f /tmp/tridata-pmc.md && deactivate` (el entorno entero: `rm -rf ~/.venvs/tridata-dev`) |
 
 Instalar gitleaks (versión fijada y suma SHA-256 comprobada; es la misma que usa GitHub):

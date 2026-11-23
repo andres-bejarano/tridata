@@ -203,3 +203,103 @@ def test_strava_conectado_con_el_ultimo_fallo(tmp_path):  # R5 · R7: Ajustes sa
     assert datos["conectado"] is True
     assert datos["texto"] == "Conectado · última lectura el 21/11 a las 8:00"
     assert datos["error"] == "el permiso de Strava ya no vale: vuelve a conectar en Ajustes"
+
+
+# -- unit 103 (REC-47): the shoes given here, the count with the runs of Garmin and the question ------------------------
+
+ALTA = datetime(2026, 11, 20, 9, 0)  # before the runs of these tests (`HOY` is 22/11)
+
+
+def _correr(web: Web, ident: str, dia: str, km: float) -> None:
+    from tridata.models import Activity
+    from tridata.storage import DataStore
+
+    DataStore(web.db).save_activities([Activity(
+        activity_id=ident, activity_date=date.fromisoformat(dia), activity_type="running", name="Carrera",
+        duration_seconds=3000, distance_meters=km * 1000, start_time_local=f"{dia}T07:30:00")])
+
+
+def _plan(web: Web, sesiones: dict[str, str]) -> None:
+    from tridata.plan import Planes
+
+    Planes(web.db).crear({"nombre": "Plan de prueba", "apartados": [{"titulo": "Sesiones", "parte": "sesiones_clave"}],
+                          "carreras": [{"apartado": 0, "nombre": "Maratón de prueba", "fecha": "2026-12-06",
+                                        "objetivo": "", "estado": "", "principal": True}],
+                          "sesiones": [{"apartado": 0, "fecha": f, "titulo": t, "bloques": [], "clave": False}
+                                       for f, t in sesiones.items()]}, datetime(2026, 11, 1, 9, 0))
+
+
+def _tres(web: Web) -> dict[str, str]:
+    ids = {}
+    for nombre, km, tope, uso in (("SonicBlast", 310, 700, "calidad"), ("Gel Nimbus 28", 150, 700, "suave"),
+                                  ("Meta Speed Sky Tokyo", 90, 400, "competicion")):
+        ids[nombre] = web.zapatillas.dar_de_alta(nombre, km, tope, uso, ALTA)["id"]
+    return ids
+
+
+def test_alta_en_la_web(web):  # R1 (103) · C-377
+    r = web.cliente.post("/api/zapatillas", json={"nombre": "SonicBlast", "km": "310", "tope": 700, "uso": "calidad"})
+    assert r.status_code == 200
+    (sonic,) = r.json()["zapatillas"]
+    assert sonic["texto"] == "SonicBlast · 310 de 700 km · quedan 390 · contados aquí desde hoy"
+    assert sonic["uso"] == "calidad" and sonic["fuente"] == "aqui"
+
+
+@pytest.mark.parametrize("cuerpo", [{"nombre": "X", "km": 10, "tope": 700, "uso": "montaña"},
+                                    {"nombre": "", "km": 10, "tope": 700, "uso": "suave"},
+                                    {"nombre": "X", "km": -1, "tope": 700, "uso": "suave"},
+                                    {"nombre": "X", "km": 10, "tope": 5, "uso": "suave"},
+                                    {"nombre": "X", "km": 10, "tope": 700}, []])
+def test_alta_que_no_vale_en_la_web(web, cuerpo):  # R1 (103)
+    r = web.cliente.post("/api/zapatillas", json=cuerpo)
+    assert r.status_code == 400 and r.json()["error"]
+    assert web.zapatillas.todas() == []
+
+
+def test_retirar_en_la_web(web):  # R1 (103)
+    ids = _tres(web)
+    r = web.cliente.post(f"/api/zapatillas/{ids['Gel Nimbus 28']}", json={"retirar": True})
+    assert r.status_code == 200
+    assert [z["nombre"] for z in r.json()["zapatillas"]] == ["Meta Speed Sky Tokyo", "SonicBlast"]
+    assert web.cliente.post(f"/api/zapatillas/{ids['Gel Nimbus 28']}", json={"retirar": True}).status_code == 404
+
+
+def test_la_web_cuenta_y_trae_pendientes_y_ultimas(web):  # R2, R3, R4 (103) · C-371, C-375
+    ids = _tres(web)
+    _plan(web, {"2026-11-21": "Series 3×2 km a 3:50-4:00"})
+    _correr(web, "c21", "2026-11-21", 12.4)
+    _correr(web, "c22", "2026-11-22", 8.1)
+    datos = web.cliente.get("/api/zapatillas").json()
+    sonic = next(z for z in datos["zapatillas"] if z["nombre"] == "SonicBlast")
+    assert sonic["km"] == 322.4
+    (pregunta,) = datos["pendientes"]
+    assert pregunta["texto"] == "¿Con qué zapatilla corriste hoy (8,1 km)?" and pregunta["activity_id"] == "c22"
+    assert [o["nombre"] for o in pregunta["opciones"]] == ["Gel Nimbus 28", "Meta Speed Sky Tokyo", "SonicBlast"]
+    assert [(u["activity_id"], u["nombre"], u["texto_origen"]) for u in datos["ultimas"]] == [
+        ("c22", None, None), ("c21", "SonicBlast", "por el plan")]
+    # Hoy asks the same, in the warning of the shoes
+    hoy = web.cliente.get("/api/hoy").json()
+    assert [z["texto"] for z in hoy["zapatillas"] if z.get("pregunta")] == ["¿Con qué zapatilla corriste hoy (8,1 km)?"]
+    # answering it adds the km and the question goes
+    r = web.cliente.post("/api/zapatillas/carrera/c22", json={"zapatilla": ids["Gel Nimbus 28"]})
+    assert r.status_code == 200
+    datos = r.json()
+    assert datos["pendientes"] == []
+    assert next(z for z in datos["zapatillas"] if z["nombre"] == "Gel Nimbus 28")["km"] == 158.1
+    assert datos["ultimas"][0]["texto_origen"] == "elegida por ti"
+    assert web.cliente.get("/api/hoy").json()["zapatillas"] == []
+    # and changing the one of a run moves its km (C-376)
+    r = web.cliente.post("/api/zapatillas/carrera/c21", json={"zapatilla": ids["Gel Nimbus 28"]})
+    km = {z["nombre"]: z["km"] for z in r.json()["zapatillas"]}
+    assert (km["SonicBlast"], km["Gel Nimbus 28"]) == (310.0, 170.5)
+
+
+def test_elegir_lo_que_no_vale_en_la_web(web):  # R3 (103)
+    ids = _tres(web)
+    _correr(web, "c22", "2026-11-22", 8.1)
+    web.cliente.get("/api/zapatillas")
+    assert web.cliente.post("/api/zapatillas/carrera/c22", json={"zapatilla": "otra"}).status_code == 400
+    assert web.cliente.post("/api/zapatillas/carrera/c22", json={}).status_code == 400
+    assert web.cliente.post("/api/zapatillas/carrera/no-existe",
+                            json={"zapatilla": ids["SonicBlast"]}).status_code == 404
+    assert len(web.cliente.get("/api/zapatillas").json()["pendientes"]) == 1

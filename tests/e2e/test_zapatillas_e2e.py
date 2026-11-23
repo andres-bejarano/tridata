@@ -127,3 +127,107 @@ def test_los_botones_de_las_zapatillas_miden_44_px(servidor, abrir, ir_a):  # er
     ancho = p.evaluate("document.documentElement.scrollWidth")
     assert ancho <= 390, ancho
     assert re.search(r"quedan \d+", p.locator("#fitness-zapatillas").inner_text())
+
+
+# -- unit 103 (REC-47, E2E-18): the shoes given here, the question in Hoy and Fitness, and changing a run's shoe ------
+
+ALTA = datetime(2026, 10, 18, 9, 0)  # before the run of these tests (20/10, the day before `HOY`)
+
+
+def _tres_de_aqui(servidor) -> Zapatillas:
+    repo = Zapatillas(servidor.db)
+    for nombre, km, tope, uso in (("SonicBlast", 310, 700, "calidad"), ("Gel Nimbus 28", 150, 700, "suave"),
+                                  ("Meta Speed Sky Tokyo", 90, 400, "competicion")):
+        repo.dar_de_alta(nombre, km, tope, uso, ALTA)
+    from tridata.models import Activity
+
+    servidor.store.save_activities([Activity(
+        activity_id="e2e-carrera", activity_date=AYER.date(), activity_type="running", name="Carrera",
+        duration_seconds=2700, distance_meters=8100, start_time_local="2026-10-20T07:30:00")])
+    return repo
+
+
+def test_dar_de_alta_en_fitness(servidor, abrir, ir_a, capturar):  # R1 (103) · C-377
+    p = abrir(servidor, "/", esperar=False)
+    expect(p.locator("section#hoy")).to_be_visible()
+    ir_a(p, "fitness")
+    caja = p.locator("#fitness-zapatillas")
+    for nombre, km, tope, uso in (("SonicBlast", "310", "700", "calidad"), ("Gel Nimbus 28", "150", "700", "suave"),
+                                  ("Meta Speed Sky Tokyo", "90", "400", "competicion")):
+        caja.get_by_role("button", name="Dar de alta una zapatilla").click()
+        form = caja.locator("form.alta-zapatilla")
+        form.get_by_label("Nombre").fill(nombre)
+        form.get_by_label("Km que lleva").fill(km)
+        form.get_by_label("Tope en km").fill(tope)
+        form.get_by_label("Para qué la usas").select_option(uso)
+        form.get_by_role("button", name="Guardar").click()
+        expect(form).to_have_count(0)
+    expect(p.locator("#fitness-zapatillas-lista .zapatilla")).to_have_count(3)
+    expect(_fila(p, "SonicBlast")).to_contain_text("310 de 700 km · quedan 390")
+    expect(_fila(p, "SonicBlast")).to_contain_text("contados aquí desde hoy")
+    # a use that is not valid is not offered; an empty name: the server says why
+    caja.get_by_role("button", name="Dar de alta una zapatilla").click()
+    form = caja.locator("form.alta-zapatilla")
+    form.get_by_role("button", name="Guardar").click()
+    expect(form.locator(".aviso")).to_be_visible()
+    form.get_by_role("button", name="Cancelar").click()
+    p.locator("#fitness-zapatillas").scroll_into_view_if_needed()
+    capturar(p, "fitness-zapatillas-alta")
+    # retiring one takes it out of the list
+    _fila(p, "Gel Nimbus 28").get_by_role("button", name="Retirar").click()
+    expect(p.locator("#fitness-zapatillas-lista .zapatilla")).to_have_count(2)
+    expect(caja).not_to_contain_text("Gel Nimbus 28")
+
+
+@TEMAS
+def test_la_pregunta_en_hoy_y_en_fitness(servidor, abrir, ir_a, capturar, oscuro):  # E2E-18 · C-375, C-376
+    _tres_de_aqui(servidor)
+    p = abrir(servidor, "/", esperar=False, oscuro=oscuro)
+    hoy = p.locator("section#hoy")
+    aviso = hoy.locator(".aviso-zapatillas")
+    expect(aviso).to_be_visible()
+    expect(aviso).to_contain_text("¿Con qué zapatilla corriste el 20/10 (8,1 km)?")
+    expect(aviso.get_by_role("button")).to_have_count(3)
+    expect(hoy.locator(".tarjeta-hoy")).to_have_count(3)  # the cards of always are still three
+    expect(aviso.locator(".tarjeta-hoy")).to_have_count(0)
+    capturar(p, f"hoy-pregunta-zapatilla-{'oscuro' if oscuro else 'claro'}")
+    # in Fitness the same question, and the run without a shoe in «Últimas carreras»
+    ir_a(p, "fitness")
+    pregunta = p.locator("#fitness-zapatillas-pregunta")
+    expect(pregunta).to_contain_text("¿Con qué zapatilla corriste el 20/10 (8,1 km)?")
+    expect(p.locator("#fitness-carreras .carrera-zapatilla")).to_have_count(1)
+    p.locator("#fitness-zapatillas").scroll_into_view_if_needed()
+    capturar(p, f"fitness-pregunta-zapatilla-{'oscuro' if oscuro else 'claro'}")
+    # answering in Hoy: it goes, and the km go to that shoe
+    ir_a(p, "hoy")
+    aviso.get_by_role("button", name="Gel Nimbus 28").click()
+    expect(aviso).to_be_hidden()
+    expect(hoy.locator(".tarjeta-hoy")).to_have_count(3)
+    ir_a(p, "fitness")
+    expect(_fila(p, "Gel Nimbus 28")).to_contain_text("158 de 700 km")
+    expect(pregunta).to_be_hidden()
+    carrera = p.locator("#fitness-carreras .carrera-zapatilla")
+    expect(carrera).to_contain_text("20/10 · 8,1 km")
+    expect(carrera).to_contain_text("elegida por ti")
+    # changing it in «Últimas carreras» moves the km (C-376)
+    carrera.get_by_label("Zapatilla de la carrera del 20/10").select_option(label="SonicBlast")
+    expect(_fila(p, "SonicBlast")).to_contain_text("318 de 700 km")
+    expect(_fila(p, "Gel Nimbus 28")).to_contain_text("150 de 700 km")
+    p.locator("#fitness-carreras").scroll_into_view_if_needed()
+    capturar(p, f"fitness-ultimas-carreras-{'oscuro' if oscuro else 'claro'}")
+
+
+def test_la_pregunta_en_fitness_se_contesta(servidor, abrir, ir_a):  # C-375 in Fitness
+    _tres_de_aqui(servidor)
+    p = abrir(servidor, "/", esperar=False)
+    expect(p.locator("section#hoy")).to_be_visible()
+    ir_a(p, "fitness")
+    pregunta = p.locator("#fitness-zapatillas-pregunta")
+    pregunta.get_by_role("button", name="SonicBlast").click()
+    expect(pregunta).to_be_hidden()
+    expect(_fila(p, "SonicBlast")).to_contain_text("318 de 700 km")
+    botones = p.locator("#fitness-zapatillas button:visible, #fitness-carreras select:visible")
+    for i in range(botones.count()):
+        caja = botones.nth(i).bounding_box()
+        assert caja and caja["height"] >= 44, botones.nth(i).inner_text()
+    assert p.evaluate("document.documentElement.scrollWidth") <= 390

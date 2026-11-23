@@ -13,6 +13,16 @@
 
 Strava is read only here and in the daily routine (`tridata strava`): never with «Actualizar Garmin», never in a
 thread of the app. Nothing here answers or logs a token, the client's secret, the `code` or the path of the JSON.
+
+Unit 103 (REC-47): «manda Garmin».
+    GET  /api/zapatillas        counts first the new runs of Garmin (`Zapatillas.contar`) and adds `pendientes` (the
+                                runs without a shoe, with their question and a button per shoe here in use), `ultimas`
+                                (the last 10 runs with their shoe and who chose it) and `opciones` (those shoes)
+    POST /api/zapatillas        {"nombre", "km", "tope", "uso"}: a shoe given here (R1); 400 with why
+    POST /api/zapatillas/{id}   also {"retirar": true} (R1): out of the list; 404 if it is not one here in use
+    POST /api/zapatillas/carrera/{activity_id}   {"zapatilla": id}: the shoe of that run, chosen by Andrés (R3, R4);
+                                400 if that shoe is not one here in use, 404 without that run
+All behind the middleware `Origen` of the app.
 """
 from __future__ import annotations
 
@@ -28,13 +38,16 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ..strava import FALTA_CLIENTE, SIN_CONECTAR, ErrorStrava, Strava
-from ..zapatillas import ErrorZapatilla, Zapatillas, leer_de_strava
+from ..zapatillas import ErrorZapatilla, Zapatillas, contar_sin_cortar as contar, leer_de_strava
 
 log = logging.getLogger(__name__)
 
 CONECTANDO = "Ya estoy conectando Strava: termina en el navegador del PC."
 NO_ESTA = "Esa zapatilla no está entre las que tienes en activo."
 UNA_COSA = "Di los km o el tope de la zapatilla, una cosa cada vez."
+ALTA_MAL = "Di el nombre, los km, el tope y para qué la usas."
+DI_CUAL = "Di con qué zapatilla corriste."
+NO_HAY_CARRERA = "Esa carrera no está entre las contadas aquí."
 
 
 def _cuando(momento: str, hoy: date) -> str:
@@ -64,7 +77,40 @@ def rutas(repo: Zapatillas, strava: Strava, hoy: Callable[[], date], ahora: Call
         dia = hoy()
         return {**repo.vista(dia), "strava": estado_strava(strava, repo, dia)}
 
+    def _contada() -> dict[str, Any]:
+        contar(repo)
+        return _vista()
+
+    async def _cuerpo(request: Request) -> Any:
+        try:
+            return await request.json()
+        except ValueError:
+            return None
+
     async def ver(request: Request) -> Response:
+        return JSONResponse(await run_in_threadpool(_contada))
+
+    async def alta(request: Request) -> Response:
+        cuerpo = await _cuerpo(request)
+        if not isinstance(cuerpo, dict):
+            return JSONResponse({"error": ALTA_MAL}, status_code=400)
+        try:
+            await run_in_threadpool(repo.dar_de_alta, cuerpo.get("nombre"), cuerpo.get("km"), cuerpo.get("tope"),
+                                    cuerpo.get("uso"), ahora())
+        except ErrorZapatilla as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(await run_in_threadpool(_contada))
+
+    async def elegir(request: Request) -> Response:
+        cuerpo = await _cuerpo(request)
+        if not isinstance(cuerpo, dict) or not isinstance(cuerpo.get("zapatilla"), str):
+            return JSONResponse({"error": DI_CUAL}, status_code=400)
+        try:
+            await run_in_threadpool(repo.elegir, request.path_params["activity_id"], cuerpo["zapatilla"])
+        except ErrorZapatilla as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except KeyError:
+            return JSONResponse({"error": NO_HAY_CARRERA}, status_code=404)
         return JSONResponse(await run_in_threadpool(_vista))
 
     async def cambiar(request: Request) -> Response:
@@ -73,10 +119,14 @@ def rutas(repo: Zapatillas, strava: Strava, hoy: Callable[[], date], ahora: Call
             cuerpo = await request.json()
         except ValueError:
             cuerpo = None
-        if not isinstance(cuerpo, dict) or len(cuerpo) != 1 or not ({"km", "tope"} & set(cuerpo)):
+        if not isinstance(cuerpo, dict) or len(cuerpo) != 1 or not ({"km", "tope", "retirar"} & set(cuerpo)):
             return JSONResponse({"error": UNA_COSA}, status_code=400)
         try:
-            if "tope" in cuerpo:
+            if "retirar" in cuerpo:  # unit 103 (R1)
+                if cuerpo["retirar"] is not True:
+                    return JSONResponse({"error": UNA_COSA}, status_code=400)
+                await run_in_threadpool(repo.retirar, ident)
+            elif "tope" in cuerpo:
                 await run_in_threadpool(repo.cambiar_tope, ident, cuerpo["tope"])
             else:
                 await run_in_threadpool(repo.poner_km, ident, cuerpo["km"], ahora())
@@ -110,6 +160,8 @@ def rutas(repo: Zapatillas, strava: Strava, hoy: Callable[[], date], ahora: Call
 
     return [
         Route("/api/zapatillas", ver),
+        Route("/api/zapatillas", alta, methods=["POST"]),
+        Route("/api/zapatillas/carrera/{activity_id}", elegir, methods=["POST"]),
         Route("/api/zapatillas/{id}", cambiar, methods=["POST"]),
         Route("/api/strava", ver_strava),
         Route("/api/strava/conectar", conectar, methods=["POST"]),

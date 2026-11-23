@@ -51,6 +51,8 @@ as the recent ones (`contexto.detalle_dias`). Read only.
 Unit 102 (REC-46 of `ver-fitness`, R-291, C-369): `preparar_zapatilla_desde_pc` says what the km Andrés says of a shoe
 in use would leave (before and after, «dicho por ti» with its date) and its fingerprint, and writes nothing;
 `apuntar_zapatilla_desde_pc` saves them with that fingerprint (`zapatillas.Zapatillas.poner_km`).
+Unit 103 (REC-47, R-292, R-294): the same two with `accion` «alta» (a shoe given here, with its km, cap and use) and
+«carrera» (the shoe of a run counted here, by its date or id), with the same fingerprint.
 
 Each save leaves its message in «Desde el PC» (R-196). Nothing here calls a paid AI.
 
@@ -86,7 +88,8 @@ from ..storage import DataStore
 from ..sync import RUNNING_TYPES, dentro_de
 from ..web.app import DIAS_RECIENTES
 from ..web.calendario import Sincronizacion
-from ..zapatillas import ErrorZapatilla, Zapatillas, validar_km, vista as vista_zapatilla
+from ..zapatillas import (AQUI, ErrorZapatilla, Zapatillas, pregunta, tope_sembrado, validar_km, validar_nombre,
+                          validar_tope, validar_uso, vista as vista_zapatilla)
 from . import Conversaciones
 from .cambios import CambioInterpretado, cambio_no_entendido
 from .contexto import Contexto, detalle_dias, montar
@@ -693,72 +696,167 @@ def guardar_macros_desde_pc(equipo: Equipo, papel: str, propuestas: Any, huella_
 
 
 # -- unit 102 (R-291, C-369): the km of a shoe, said by Andrés to the coach ------------------------------------------
+# -- unit 103 (R-292, R-294): and the shoes given here (`alta`) and the shoe of a run (`carrera`) ----------------------
 
-PREGUNTA_ZAPATILLA = ("Enséñaselo a Andrés tal cual y pregúntale; solo con su «sí», llama a apuntar_zapatilla con esta "
-                      "misma zapatilla, estos km y esta huella.")
+PREGUNTA_ZAPATILLA = ("Enséñaselo a Andrés tal cual y pregúntale; solo con su «sí», llama a apuntar_zapatilla con lo "
+                      "mismo que diste a preparar_zapatilla (zapatilla, km y, si los diste, accion, tope, uso y "
+                      "carrera) y esta huella.")
+ACCIONES_ZAPATILLA = ("km", "alta", "carrera")
 
 
 def _zapatillas(equipo: Equipo) -> Zapatillas:
     return equipo.zapatillas or Zapatillas(equipo.asistente.registro.db_path)
 
 
-def _zapatilla_propuesta(equipo: Equipo, zapatilla: Any, km: Any) -> tuple[dict, float, str, str] | str:
-    """(the shoe as it is now, the km said, what would be saved in words, its fingerprint), or why not."""
-    repo = _zapatillas(equipo)
-    try:
-        nuevos = validar_km(km)
-    except ErrorZapatilla as exc:
-        return f"No se puede: {exc} {NADA}"
-    halladas = repo.buscar(str(zapatilla or ""))
-    activas = repo.activas()
-    nombres = ", ".join(f"«{z['nombre']}»" for z in activas) or "ninguna (¿ha conectado Strava en Ajustes?)"
+def _huella_de(**datos: Any) -> str:
+    return hashlib.sha256(json.dumps(datos, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
+
+
+def _una_zapatilla(repo: Zapatillas, zapatilla: Any, solo_aqui: bool = False) -> dict | str:
+    halladas = [z for z in repo.buscar(str(zapatilla or "")) if not solo_aqui or z["fuente"] == AQUI]
+    activas = [z for z in repo.activas() if not solo_aqui or z["fuente"] == AQUI]
+    nombres = ", ".join(f"«{z['nombre']}»" for z in activas) or "ninguna (puede darlas de alta en Fitness)"
     if not halladas:
         return f"No hay ninguna zapatilla en activo que sea «{zapatilla}»: las que tiene son {nombres}. {NADA}"
     if len(halladas) > 1:
         return (f"Hay más de una que encaja con «{zapatilla}»: " + ", ".join(f"«{z['nombre']}»" for z in halladas)
                 + f". Pregunta a Andrés cuál es y prepáralo otra vez con su nombre. {NADA}")
-    (fila,) = halladas
-    hoy = equipo.asistente.hoy()
+    return halladas[0]
+
+
+def _propuesta_km(equipo: Equipo, zapatilla: Any, km: Any) -> tuple[str, str, Callable[[], str]] | str:
+    """(what would be saved in words, its fingerprint, what saves it), or why not."""
+    repo = _zapatillas(equipo)
+    try:
+        nuevos = validar_km(km)
+    except ErrorZapatilla as exc:
+        return f"No se puede: {exc} {NADA}"
+    fila = _una_zapatilla(repo, zapatilla)
+    if isinstance(fila, str):
+        return fila
+    hoy, ahora = equipo.asistente.hoy(), equipo.ahora().isoformat(timespec="minutes")
     antes = vista_zapatilla(fila, hoy)
-    despues = vista_zapatilla({**fila, "km": nuevos, "fuente": "andres",
-                               "fecha_km": equipo.ahora().isoformat(timespec="minutes")}, hoy)
+    if fila["fuente"] == AQUI:  # unit 103 (R5): a new start; from now only the runs after it add
+        despues = vista_zapatilla({**fila, "km": nuevos, "partida": ahora, "fecha_km": ahora}, hoy)
+        hasta = "y desde ahora suman solo las carreras que vengan"
+    else:
+        despues = vista_zapatilla({**fila, "km": nuevos, "fuente": "andres", "fecha_km": ahora}, hoy)
+        hasta = "hasta que Strava dé un número más nuevo e igual o mayor"
     texto = (f"{fila['nombre']}: ahora {antes['texto'].split(' · ', 1)[1]}\n"
-             f"Quedaría: {despues['texto'].split(' · ', 1)[1]} (hasta que Strava dé un número más nuevo e igual o "
-             "mayor)")
-    firma = json.dumps({"id": fila["id"], "km": fila["km"], "fuente": fila["fuente"], "fecha_km": fila["fecha_km"],
-                        "nuevos": nuevos, "dia": hoy.isoformat()}, sort_keys=True)
-    return fila, nuevos, texto, hashlib.sha256(firma.encode("utf-8")).hexdigest()[:12]
+             f"Quedaría: {despues['texto'].split(' · ', 1)[1]} ({hasta})")
+    huella = _huella_de(id=fila["id"], km=fila["km"], fuente=fila["fuente"], fecha_km=fila["fecha_km"],
+                        nuevos=nuevos, dia=hoy.isoformat())
+
+    def hacer() -> str:
+        guardada = repo.poner_km(fila["id"], nuevos, equipo.ahora())
+        return f"Hecho: {vista_zapatilla(guardada, equipo.asistente.hoy())['texto']}."
+    return texto, huella, hacer
 
 
-def preparar_zapatilla_desde_pc(equipo: Equipo, zapatilla: Any, km: Any) -> str:
-    """R-291: what `apuntar_zapatilla_desde_pc` would save and its fingerprint. Writes nothing."""
-    hecho = _zapatilla_propuesta(equipo, zapatilla, km)
+def _propuesta_alta(equipo: Equipo, zapatilla: Any, km: Any, tope: Any,
+                    uso: Any) -> tuple[str, str, Callable[[], str]] | str:
+    """R1 (R-292, C-377): a shoe given here."""
+    repo = _zapatillas(equipo)
+    try:
+        nombre, km_ok, uso_ok = validar_nombre(zapatilla), validar_km(km), validar_uso(uso)
+        tope_ok = validar_tope(tope if tope is not None else tope_sembrado(nombre))
+    except ErrorZapatilla as exc:
+        return f"No se puede: {exc} {NADA}"
+    activas = repo.activas()
+    if any(z["nombre"].lower() == nombre.lower() for z in activas):
+        return f"No se puede: ya tiene en activo una zapatilla «{nombre}». {NADA}"
+    hoy, ahora = equipo.asistente.hoy(), equipo.ahora().isoformat(timespec="minutes")
+    como = vista_zapatilla({"id": "", "nombre": nombre, "km": km_ok, "tope": tope_ok, "fuente": AQUI, "uso": uso_ok,
+                            "fecha_km": ahora, "partida": ahora}, hoy)
+    texto = (f"Alta de «{nombre}», para {uso_ok}: {como['texto'].split(' · ', 1)[1]}. Desde ahora le suman las "
+             "carreras de Garmin que tocan según el plan (si hay duda, se pregunta).")
+    huella = _huella_de(accion="alta", nombre=nombre, km=km_ok, tope=tope_ok, uso=uso_ok, dia=hoy.isoformat(),
+                        activas=sorted(z["id"] for z in activas))
+
+    def hacer() -> str:
+        dada = repo.dar_de_alta(nombre, km_ok, tope_ok, uso_ok, equipo.ahora())
+        return f"Hecho: {vista_zapatilla(dada, equipo.asistente.hoy())['texto']}."
+    return texto, huella, hacer
+
+
+def _propuesta_carrera(equipo: Equipo, zapatilla: Any, km: Any, carrera: Any) -> tuple[str, str, Callable[[], str]] | str:
+    """R3 (R-294, S-100), R4: the shoe of a run counted here, said by Andrés."""
+    repo = _zapatillas(equipo)
+    fila = _una_zapatilla(repo, zapatilla, solo_aqui=True)
+    if isinstance(fila, str):
+        return fila
+    try:
+        km_dicho: float | None = validar_km(km)
+    except ErrorZapatilla:
+        km_dicho = None
+    halladas = repo.buscar_carrera(carrera, km_dicho)
+    if not halladas:
+        return (f"No hay ninguna carrera contada aquí que sea «{carrera}» (di su fecha, año-mes-día, o su id de "
+                f"get_contexto). {NADA}")
+    if len(halladas) > 1:
+        return ("Ese día hay más de una carrera: " + ", ".join(f"{c['km']} km" for c in halladas)
+                + f". Prepáralo otra vez con los km de la que es. {NADA}")
+    (c,) = halladas
+    hoy = equipo.asistente.hoy()
+    (vista_c,) = pregunta([c], [], hoy)
+    cuando = vista_c["texto"].removeprefix("¿Con qué zapatilla corriste ").removesuffix("?")
+    ahora = f"con «{c['nombre']}»" if c["zapatilla_id"] else "sin zapatilla"
+    suma = c["km"] if c["fecha"] > (fila.get("partida") or "") and c["zapatilla_id"] != fila["id"] else 0.0
+    despues = vista_zapatilla({**fila, "km": round(float(fila["km"]) + suma, 1)}, hoy)
+    texto = (f"La carrera {cuando}, ahora {ahora}.\nQuedaría con «{fila['nombre']}», elegida por ti: "
+             f"{despues['texto'].split(' · ', 1)[1]}")
+    huella = _huella_de(accion="carrera", carrera=c["activity_id"], antes=c["zapatilla_id"], origen=c["origen"],
+                        nueva=fila["id"], km=fila["km"], dia=hoy.isoformat())
+
+    def hacer() -> str:
+        repo.elegir(c["activity_id"], fila["id"])
+        nueva = next(z for z in repo.lista(equipo.asistente.hoy()) if z["id"] == fila["id"])
+        return f"Hecho: la carrera {cuando} va con «{fila['nombre']}»: {nueva['texto']}."
+    return texto, huella, hacer
+
+
+def _zapatilla_propuesta(equipo: Equipo, zapatilla: Any, km: Any, accion: Any = "km", tope: Any = None,
+                         uso: Any = None, carrera: Any = None) -> tuple[str, str, Callable[[], str]] | str:
+    que = str(accion or "km").strip().lower()
+    if que not in ACCIONES_ZAPATILLA:
+        return f"No se puede: la acción es km, alta o carrera, no «{accion}». {NADA}"
+    if que == "alta":
+        return _propuesta_alta(equipo, zapatilla, km, tope, uso)
+    if que == "carrera":
+        return _propuesta_carrera(equipo, zapatilla, km, carrera)
+    return _propuesta_km(equipo, zapatilla, km)
+
+
+def preparar_zapatilla_desde_pc(equipo: Equipo, zapatilla: Any, km: Any, accion: Any = "km", tope: Any = None,
+                                uso: Any = None, carrera: Any = None) -> str:
+    """R-291: what `apuntar_zapatilla_desde_pc` would save and its fingerprint. Writes nothing. Unit 103: also a shoe
+    given here (`alta`) and the shoe of a run (`carrera`)."""
+    hecho = _zapatilla_propuesta(equipo, zapatilla, km, accion, tope, uso, carrera)
     if isinstance(hecho, str):
         return hecho
-    _, _, texto, la_huella = hecho
+    texto, la_huella, _ = hecho
     return f"Esto es lo que se guardaría (aún no está guardado):\n{texto}\n{PREGUNTA_ZAPATILLA}\nHuella: {la_huella}"
 
 
 def apuntar_zapatilla_desde_pc(equipo: Equipo, papel: str, zapatilla: Any, km: Any, huella_vista: str,
-                               texto: str = "") -> str:
-    """R-291 (C-369): the km said, «dicho por ti», only if it is still what was shown (`huella_vista`); then the message
-    of R-196. Otherwise nothing."""
+                               texto: str = "", accion: Any = "km", tope: Any = None, uso: Any = None,
+                               carrera: Any = None) -> str:
+    """R-291 (C-369), unit 103 (C-377, S-100): what was shown, only if it is still that (`huella_vista`); then the
+    message of R-196. Otherwise nothing."""
     if papel not in PAPELES_PC:
         return papel_no_valido(papel)
-    hecho = _zapatilla_propuesta(equipo, zapatilla, km)
+    hecho = _zapatilla_propuesta(equipo, zapatilla, km, accion, tope, uso, carrera)
     if isinstance(hecho, str):
         return hecho
-    fila, nuevos, visto, la_huella = hecho
+    visto, la_huella, hacer = hecho
     if la_huella != str(huella_vista).strip():
         return f"{CAMBIO_VISTO} {NADA} Lo que se guardaría ahora:\n{visto}\n{PREGUNTA_ZAPATILLA}\nHuella: {la_huella}"
     try:
-        guardada = _zapatillas(equipo).poner_km(fila["id"], nuevos, equipo.ahora())
+        hecho_texto = hacer()
     except (KeyError, ErrorZapatilla, sqlite3.Error) as exc:
-        log.warning("shoe km from the PC not saved (%s)", type(exc).__name__)
-        return f"No se han guardado los km. {NADA}"
-    log.info("shoe km saved from the PC")
-    ahora = vista_zapatilla(guardada, equipo.asistente.hoy())
-    hecho_texto = f"Hecho: {ahora['texto']}."
+        log.warning("shoe from the PC not saved (%s)", type(exc).__name__)
+        return f"No se ha guardado. {NADA}"
+    log.info("shoe saved from the PC")
     _apuntar(equipo, papel, texto, hecho_texto)
     return hecho_texto
 

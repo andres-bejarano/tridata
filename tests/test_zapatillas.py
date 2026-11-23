@@ -232,7 +232,8 @@ def test_solo_crea_su_tabla(tmp_path):  # the other tables are not touched
     Zapatillas(db)
     with sqlite3.connect(db) as conn:
         despues = {t for (t,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    assert despues - antes == {"zapatilla", "zapatilla_lectura"} and antes <= despues
+    # unit 103: and the runs counted with each shoe (`zapatilla_carrera`)
+    assert despues - antes == {"zapatilla", "zapatilla_lectura", "zapatilla_carrera"} and antes <= despues
 
 
 def test_leer_sin_crear_no_crea_nada(tmp_path):  # the context reads without creating (trap of the 082)

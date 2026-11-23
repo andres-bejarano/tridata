@@ -146,6 +146,9 @@ def test_server_with_the_team_adds_its_tools(tmp_path, store):  # unit 065 R-186
     assert set(tools["preparar_zapatilla"].input_schema["required"]) == {"zapatilla", "km"}  # unit 102
     assert set(tools["apuntar_zapatilla"].input_schema["required"]) == {"papel", "zapatilla", "km", "huella"}
     assert "apuntar_zapatilla" in tools["preparar_zapatilla"].description
+    for nombre in ("preparar_zapatilla", "apuntar_zapatilla"):  # unit 103: also the shoes given here and their runs
+        assert {"accion", "tope", "uso", "carrera"} <= set(tools[nombre].input_schema["properties"])
+        assert "alta" in tools[nombre].description and "carrera" in tools[nombre].description
     for nombre in escriben:  # each one says: show it to Andrés and wait for his «sí»
         descripcion = tools[nombre].description
         assert "«sí»" in descripcion and "Andrés" in descripcion, nombre

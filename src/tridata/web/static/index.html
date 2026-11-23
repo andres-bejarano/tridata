@@ -166,9 +166,20 @@
       <h2 id="t-zapatillas" class="titulo-bloque">Zapatillas</h2>
       <article id="fitness-zapatillas" class="tarjeta bloque-fitness zapatillas-fitness" aria-labelledby="t-zapatillas">
         <p id="fitness-zapatillas-aviso" class="aviso" role="status" hidden></p>
+        <!-- unit 103 (REC-47, R-294): the runs of Garmin without a shoe, a button per shoe here in use -->
+        <div id="fitness-zapatillas-pregunta" class="preguntas-zapatilla" role="status" aria-live="polite" hidden></div>
         <ul id="fitness-zapatillas-lista" class="lista-zapatillas"></ul>
         <p id="fitness-zapatillas-vacio" class="suave" hidden></p>
+        <!-- unit 103 (R-292): «Dar de alta una zapatilla» and its form -->
+        <div id="fitness-zapatillas-alta" class="alta-zapatillas"></div>
       </article>
+      <!-- unit 103 (REC-47, R-295): the last runs since the start, with their shoe; it can be changed -->
+      <section id="fitness-carreras" aria-labelledby="t-carreras" hidden>
+        <h2 id="t-carreras" class="titulo-bloque">Últimas carreras</h2>
+        <article class="tarjeta bloque-fitness">
+          <ul id="fitness-carreras-lista" class="lista-carreras"></ul>
+        </article>
+      </section>
       </div>
       <div id="fitness-plan" class="plan" hidden>
         <p id="plan-aviso" role="status" aria-live="polite" hidden></p>

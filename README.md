@@ -107,7 +107,11 @@ Abre `.env` y rellena lo que pide. `.env` no se sube nunca a git.
 - `TRIDATA_HR_MAX` y `TRIDATA_HR_REST`: tu pulso máximo y en reposo. Con ellos se calcula la carga.
 - `TRIDATA_BASAL_KCAL` y `TRIDATA_KCAL_POR_PASO`: tu gasto basal y las kcal por paso. Solo se leen
   el primer día; después se cambian en **Ajustes**.
-- Opcional, `TRIDATA_MEDICOS_DIR`: la carpeta con los PDF de tus analíticas. Se leen ahí y nunca se copian.
+- Opcional, `TRIDATA_DOCS`: tu carpeta de papeles de deporte, fuera del repositorio (por ejemplo, una carpeta
+  de tu Drive sincronizada en el PC). Los PDF de tus analíticas van en su `health/` (se leen ahí y nunca se
+  copian) y los GPX de tus carreras, p. ej., en su `routes/`: el coach no lee ningún fichero fuera de ella.
+  `tridata backup` deja en su `tridata-backup/` una copia comprimida al día (las 14 últimas, como mucho un
+  borrado al día) y ninguna credencial entra en ella. Sustituye a la antigua `TRIDATA_MEDICOS_DIR`.
 
 ### 3. Traer tu historia de Garmin
 
@@ -250,8 +254,8 @@ de potencia. CTL y ATL son medias exponenciales de 42 y 7 días.
 
 ## Privacidad
 
-- Todo vive en `~/.tridata/data.sqlite3`, en tu PC, con copia verificada en `~/.tridata/backups/`
-  antes de cada sincronización.
+- Todo vive en `~/.tridata/data.sqlite3`, en tu PC, con copia verificada antes de cada
+  sincronización (en `tridata-backup/` de `TRIDATA_DOCS`, comprimida; sin ella, en `~/.tridata/backups/`).
 - La app no llama a ninguna IA. Lo que preguntas al equipo pasa por **tu** sesión de Claude Code.
   Ese proveedor recibe lo que el equipo lee para contestarte.
 - Con Tailscale, la app solo se ve desde tus dispositivos: nada queda abierto a internet.
@@ -264,7 +268,7 @@ de potencia. CTL y ATL son medias exponenciales de 42 y 7 días.
 |---|---|
 | `tridata web` | Arranca la app (`--host` y `--port` para cambiar dónde escucha). |
 | `tridata sync` | Trae lo nuevo de Garmin (`--since` para rellenar historia, `--revalidate-days` para revisar días recientes). |
-| `tridata backup` | Copia verificada de los datos. |
+| `tridata backup` | Copia verificada de los datos: un `.tar.gz` en `tridata-backup/` de `TRIDATA_DOCS` (sin ella, en `~/.tridata/backups/`). |
 | `tridata export` y `export-*` | Exportaciones en Markdown o JSON: métricas, carrera, bici, natación, fuerza, carga y nutrición. |
 | `tridata show-laps` | Las vueltas de una actividad. |
 | `tridata comprobar-privados` | Busca tus valores de salud donde no deben estar. |

@@ -130,7 +130,10 @@ echo "=== $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
 
 # --- Copia de seguridad, antes de tocar nada -----------------------------
 # Copia verificada de la base de datos (y del diario de déficit, que no se
-# puede volver a bajar de Garmin) en ~/.tridata/backups/, guardando 14.
+# puede volver a bajar de Garmin), guardando 14. Unidad 104: sin destino, con
+# TRIDATA_DOCS en .env va comprimida a su tridata-backup/ (como mucho un
+# borrado al día; nunca una credencial); sin ella, o sin la carpeta montada,
+# a ~/.tridata/backups/. La línea del log no lleva la ruta.
 # Va antes del sync para que un sync que estropee algo no arrastre también
 # la copia. Si falla, se avisa pero no se bloquea el resto (y se vuelve a
 # intentar en el reintento de la hora siguiente).

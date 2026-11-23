@@ -90,7 +90,7 @@ print(json.dumps({"fallos": fallos, "pagina": pagina.status_code, "html": pagina
 
 def test_sin_anthropic_ni_whisper_todo_arranca(tmp_path):  # R1 (portante)
     entorno = {k: v for k, v in os.environ.items()
-               if k not in ("ANTHROPIC_API_KEY", "TRIDATA_MEDICOS_DIR", "TRIDATA_GOOGLE_CLIENTE")}
+               if k not in ("ANTHROPIC_API_KEY", "TRIDATA_DOCS", "TRIDATA_MEDICOS_DIR", "TRIDATA_GOOGLE_CLIENTE")}
     entorno |= {"HOME": str(tmp_path), "PYTHONPATH": os.pathsep.join([str(SRC), str(RAIZ / "tests")])}
     hecho = subprocess.run([sys.executable, "-c", _SIN_IA, str(tmp_path / "data.sqlite3")], cwd=tmp_path,  # noqa: S603
                            env=entorno, capture_output=True, text=True, timeout=180, check=False)

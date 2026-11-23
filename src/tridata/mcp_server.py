@@ -39,10 +39,8 @@ your MCP client, e.g. for Claude Code:
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable
 from datetime import date, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from dotenv import load_dotenv
@@ -58,7 +56,7 @@ from .metrics import LimitesDelDia, compute_pmc, daily_tss, pmc_hasta, trimp_for
 from .nutricion.ajustes import historial_fc_de
 from .nutricion.registro import SECCIONES
 from .storage import DEFAULT_DB_PATH, DataStore
-from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES
+from .sync import ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, carpeta_datos
 
 if TYPE_CHECKING:  # imported when the team is built (`main`), so the Garmin tools load only what they use
     from .conversaciones.desde_pc import Equipo
@@ -696,7 +694,8 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
         "The profile of ONE route to prepare a race: its distance, climb, the altitude every 100 m and its stretches "
         "of climb (subida), descent (bajada) and flat (llano) with their climb and slope. Never its coordinates. "
         "Give one of: garmin (the id of a route saved in Garmin, from get_rutas), actividad (the id of a run done) or "
-        "gpx (the path of a GPX file on this PC). Without altitude, or if Garmin does not answer, it says so: ask "
+        "gpx (the path of a GPX file inside Andrés's sports folder, e.g. routes/x.gpx; files outside it are not read). "
+        "Without altitude, or if Garmin does not answer, it says so: ask "
         "Andrés for a GPX. Read-only."))
     def get_perfil_ruta_tool(garmin: int | None = None, actividad: str | None = None, gpx: str | None = None) -> str:
         return perfil_ruta_desde_pc(equipo, garmin, actividad, gpx)
@@ -710,9 +709,9 @@ def main() -> None:
     # unit 083: the team's tools need nothing beyond the `mcp` extra (no paid AI), so they are always there
     from .conversaciones.desde_pc import montar_equipo
 
-    medicos_dir = os.environ.get("TRIDATA_MEDICOS_DIR", "").strip()
-    equipo = montar_equipo(DEFAULT_DB_PATH, store=store,
-                           medicos_dir=Path(medicos_dir).expanduser() if medicos_dir else None)
+    docs = carpeta_datos()  # unit 104: TRIDATA_DOCS; the medical PDF are its health/ (TRIDATA_MEDICOS_DIR is gone)
+    equipo = montar_equipo(DEFAULT_DB_PATH, store=store, medicos_dir=docs / "health" if docs else None,
+                           docs_dir=docs)
     build_server(store, limites_fc=lambda: historial_fc_de(DEFAULT_DB_PATH).limites, equipo=equipo).run("stdio")
 
 

@@ -83,7 +83,7 @@ from ..plan import Planes
 from ..plan import rutas as perfiles
 from ..plan.importar import apartados_del_coach, confirmar as confirmar_plan, proponer_ordenado
 from ..storage import DataStore
-from ..sync import RUNNING_TYPES
+from ..sync import RUNNING_TYPES, dentro_de
 from ..web.app import DIAS_RECIENTES
 from ..web.calendario import Sincronizacion
 from ..zapatillas import ErrorZapatilla, Zapatillas, validar_km, vista as vista_zapatilla
@@ -114,13 +114,16 @@ class Equipo:
     calendario: Calendario
     ahora: Callable[[], datetime] = datetime.now
     zapatillas: Zapatillas | None = None  # unit 102: the shoes and their km
+    docs: Path | None = None  # unit 104: the sports folder (TRIDATA_DOCS); no file outside it is read
 
 
 def montar_equipo(db_path: Path | str, *, store: DataStore | None, medicos_dir: Path | str | None = None,
-                  token: Path | str | None = None,
+                  docs_dir: Path | str | None = None, token: Path | str | None = None,
                   hoy: Callable[[], date] = date.today, ahora: Callable[[], datetime] = datetime.now) -> Equipo:
     """The same repositories `web/app.py::crear_app` builds over `db_path`; `token` is Google Calendar's (by default
-    `google-token.json` next to the database), only to say whether it is connected."""
+    `google-token.json` next to the database), only to say whether it is connected. `docs_dir` (unit 104) is the sports
+    folder: the frontier of every file the team asks for (the medical PDF of `medicos_dir`, a GPX)."""
+    docs = Path(docs_dir).expanduser() if docs_dir else None
     registro = RegistroComidas(db_path)
     ajustes = Ajustes(db_path)
     pesos = RegistroPeso(db_path)
@@ -142,8 +145,8 @@ def montar_equipo(db_path: Path | str, *, store: DataStore | None, medicos_dir: 
     Suplementacion(db_path)  # unit 082: its tables, as the app makes them at start (what fails leaves no trace)
     zapatillas = Zapatillas(db_path)  # unit 102: its tables too, at start (trap of the 082)
     return Equipo(conversaciones=Conversaciones(db_path), asistente=asistente,
-                  medicos=Medicos(db_path, medicos_dir),
-                  calendario=Calendario(db_path, token, None), ahora=ahora, zapatillas=zapatillas)
+                  medicos=Medicos(db_path, medicos_dir, raiz=docs),
+                  calendario=Calendario(db_path, token, None), ahora=ahora, zapatillas=zapatillas, docs=docs)
 
 
 def contexto(equipo: Equipo) -> Contexto:
@@ -881,8 +884,9 @@ def importar_plan_desde_pc(equipo: Equipo, papel: str, entrada: Any, huella_vist
 
 # -- unit 081 · R2 (R-221, R-222): a medical PDF read by the coach -----------------------------------------------------
 
-NO_EN_LA_CARPETA = ("Ese PDF no está en la carpeta de tus analíticas (TRIDATA_MEDICOS_DIR): solo se guarda la "
-                    "transcripción de un PDF de esa carpeta (mira get_analiticas_pendientes).")
+NO_EN_LA_CARPETA = ("Ese PDF no está en la carpeta de tus analíticas (health/ de tu carpeta de deporte, TRIDATA_DOCS): "
+                    "solo leo de tu carpeta de deporte y solo se guarda la transcripción de un PDF de esa carpeta "
+                    "(mira get_analiticas_pendientes).")
 SIN_VALORES = "La transcripción no trae ningún valor: no se guarda."
 _TIPOS = {"analitica": "analítica", "prueba_esfuerzo": "prueba de esfuerzo", "otro": "otro documento"}
 
@@ -993,6 +997,11 @@ NO_GARMIN = ("Garmin no responde ahora: pide a Andrés el GPX de la ruta (en Gar
              "GPX») y pásame la ruta del fichero en su PC.")
 RUTAS_HECHAS = 20  # the last runs offered as a route, as the app offered them
 GPX_MAX = 10 * 1024 * 1024
+# unit 104 (R2): a GPX is read only from the sports folder (TRIDATA_DOCS), e.g. its routes/
+GPX_FUERA = ("Ese GPX está fuera de tu carpeta de deporte: solo leo de tu carpeta de deporte (TRIDATA_DOCS). Pide a "
+             "Andrés que lo copie a su routes/ y pásame esa ruta.")
+GPX_SIN_CARPETA = ("No sé cuál es tu carpeta de deporte: falta TRIDATA_DOCS en .env, y solo leo GPX de tu carpeta "
+                   "de deporte.")
 
 
 class _GarminCaido(Exception):
@@ -1059,7 +1068,11 @@ def perfil_ruta_desde_pc(equipo: Equipo, garmin: Any = None, actividad: Any = No
     without Garmin it says so and asks for a GPX (R-153). Read-only."""
     try:
         if isinstance(gpx, str) and gpx.strip():
-            ruta = Path(gpx.strip()).expanduser()
+            if equipo.docs is None:
+                return GPX_SIN_CARPETA
+            ruta = dentro_de(gpx.strip(), equipo.docs)  # unit 104 (R2): links and «..» resolved, before anything
+            if ruta is None:
+                return GPX_FUERA
             if not ruta.is_file():
                 return "No encuentro ese GPX en el PC: pide a Andrés la ruta completa del fichero."
             if ruta.stat().st_size > GPX_MAX:

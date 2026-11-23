@@ -28,7 +28,8 @@ Examples:
     # readable file that the two imports below can load back (unit 015); offline, no Garmin credentials
     tridata export-nutricion --out exports/nutricion.md
 
-    # Verified copy of the store (plus extra files, e.g. a food diary), keep 14
+    # Verified copy of the store (plus extra files, e.g. a food diary), keep 14. Unit 104: with TRIDATA_DOCS in .env,
+    # ONE compressed file in its tridata-backup/ (at most one old copy removed a day); without it, ~/.tridata/backups
     tridata backup --extra deficit/deficit.md
 
     # Food log web app on this PC only (needs the `app` extra and .env values)
@@ -57,12 +58,14 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import logging
 import os
 import re
 import shutil
 import sqlite3
 import sys
+import tarfile
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -83,11 +86,15 @@ from .metrics import compute_pmc, daily_tss
 from .nutricion.ajustes import historial_fc_de
 from .storage import DEFAULT_DB_PATH, DataStore
 from .sync import (
-    ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncEnMarcha, SyncService, cerrojo_sync,
-    desde_para_actualizar,
+    ALL_SPORT_TYPES, CYCLING_TYPES, GYM_TYPES, RUNNING_TYPES, SWIMMING_TYPES, SyncEnMarcha, SyncService, carpeta_datos,
+    cerrojo_sync, desde_para_actualizar,
 )
 
 DEFAULT_BACKUP_DIR = DEFAULT_DB_PATH.parent / "backups"
+# unit 104 (R6): when the last old copy was removed from the synced folder; it lives here, never in that folder
+PODA_MARCADOR = DEFAULT_DB_PATH.parent / "ultima-poda-copia"
+COPIAS_DATOS = "tridata-backup"  # the subfolder of TRIDATA_DOCS with the copies
+_COPIA_PROPIA = re.compile(r"tridata-\d{4}-\d{2}-\d{2}T\d{6}(?:-\d{3})?\.tar\.gz")
 STRAVA_TOKEN = DEFAULT_DB_PATH.parent / "strava-token.json"  # unit 102: next to the database, 600
 PRIVADOS_ACEPTADOS = DEFAULT_DB_PATH.parent / "privados-aceptados"  # bug 037: leaks the user accepted, local
 
@@ -242,9 +249,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     backup_cmd = sub.add_parser(
         "backup",
-        help="Write a verified copy of the local store to ~/.tridata/backups/",
+        help=("Write a verified copy of the local store: one .tar.gz in tridata-backup/ of TRIDATA_DOCS, "
+              "or ~/.tridata/backups/ without it"),
     )
-    backup_cmd.add_argument("--dest", type=Path, default=DEFAULT_BACKUP_DIR)
+    backup_cmd.add_argument(
+        "--dest", type=Path, default=None,
+        help="Copy into this folder instead (one subfolder per copy, as ~/.tridata/backups/).",
+    )
     backup_cmd.add_argument(
         "--keep", type=int, default=14, metavar="N",
         help="Number of most recent backups to keep (default: 14).",
@@ -486,7 +497,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "backup":
-        return _cmd_backup(store, args.dest, args.keep, args.extra)
+        if args.dest is not None:
+            return _cmd_backup(store, args.dest, args.keep, args.extra)
+        return _backup_por_defecto(store, args.keep, args.extra)
 
     if args.command == "web":
         return _cmd_web(args.host, args.port)
@@ -555,10 +568,136 @@ def _cmd_cadencia_bici(store: DataStore, svc: SyncService) -> int:
     return 0
 
 
-def _cmd_backup(store: DataStore, dest_root: Path, keep: int, extras: list[Path]) -> int:
+def es_credencial(ruta: Path) -> bool:
+    """Unit 104 (R5): `.env` and its copies (`env-antes-…`), the Garmin session and the tokens never go in a copy. Both
+    the path given and the file it really is are looked at."""
+    reales = [ruta]
+    try:
+        reales.append(ruta.resolve())
+    except (OSError, RuntimeError):
+        pass
+    for r in reales:
+        nombre = r.name.lower()
+        if nombre.startswith(("env", ".env")) or ".env" in nombre or fnmatch.fnmatch(nombre, "*token*.json"):
+            return True
+        if ".garmin_claude_bridge" in r.parts:
+            return True
+    return False
+
+
+def _extras_mal(extras: list[Path]) -> bool:
+    """Says (stderr, by file name) and returns True if an `--extra` is a credential or is missing: nothing is written."""
+    credenciales = [p for p in extras if es_credencial(p)]
+    if credenciales:
+        print(f"Copia NO hecha: {', '.join(p.name for p in credenciales)} es una credencial (.env o sus copias, la "
+              "sesión de Garmin, un token) y no entra nunca en una copia. No se ha escrito nada.", file=sys.stderr)
+        return True
     missing = [p for p in extras if not p.is_file()]
     if missing:
         print(f"--extra file(s) not found: {', '.join(map(str, missing))}", file=sys.stderr)
+        return True
+    return False
+
+
+def _backup_por_defecto(store: DataStore, keep: int, extras: list[Path]) -> int:
+    """Unit 104 (R3, R4): `tridata backup` without `--dest`. With TRIDATA_DOCS, one compressed copy in its
+    tridata-backup/; without it, as always in ~/.tridata/backups; with it but its folder missing (the Drive not
+    mounted), there too and said in one line. The synced folder is never created and its path is never printed."""
+    docs = carpeta_datos()
+    if docs is None:
+        return _cmd_backup(store, DEFAULT_BACKUP_DIR, keep, extras)
+    if not docs.is_dir():
+        if _extras_mal(extras):
+            return 1
+        print("La carpeta de datos (TRIDATA_DOCS) no está (¿el Drive sin montar?): la copia se hace en "
+              "~/.tridata/backups.")
+        return _cmd_backup(store, DEFAULT_BACKUP_DIR, keep, extras)
+    return _cmd_backup_datos(store, docs / COPIAS_DATOS, keep, extras)
+
+
+def _comprobar_copia(ruta: Path, nombres: list[str]) -> None:
+    """Reopens the compressed copy and reads every member whole (the gzip checks its CRC): it carries exactly
+    `nombres`, and `data.sqlite3` is a SQLite. Raises `tarfile.TarError`/OSError/ValueError otherwise."""
+    with tarfile.open(ruta, "r:gz") as tar:
+        miembros = tar.getmembers()
+        if sorted(m.name for m in miembros) != sorted(nombres) or not all(m.isfile() for m in miembros):
+            raise ValueError("la copia no lleva lo que se metió")
+        for m in miembros:
+            leido = tar.extractfile(m)
+            datos = leido.read() if leido is not None else b""
+            if len(datos) != m.size:
+                raise ValueError(f"{m.name} incompleto en la copia")
+            if m.name == "data.sqlite3" and not datos.startswith(b"SQLite format 3\x00"):
+                raise ValueError("data.sqlite3 no es una base SQLite")
+
+
+def _podar_copias(destino: Path, keep: int) -> int:
+    """Unit 104 (R6): over `keep` own copies (`tridata-<stamp>.tar.gz`), the oldest one is removed, ONE, and only if no
+    copy was removed today (`PODA_MARCADOR`): the sync of the Drive stops on many removals at once. Nothing else is
+    ever removed. Returns how many were removed (0 or 1)."""
+    if keep <= 0:
+        return 0
+    copias = sorted((p for p in destino.iterdir() if p.is_file() and _COPIA_PROPIA.fullmatch(p.name)),
+                    key=lambda p: p.name[:-len(".tar.gz")])
+    if len(copias) <= keep:
+        return 0
+    marcador = PODA_MARCADOR
+    if marcador.exists() and date.fromtimestamp(marcador.stat().st_mtime) == date.today():
+        return 0
+    copias[0].unlink()
+    marcador.parent.mkdir(parents=True, exist_ok=True)
+    marcador.touch()
+    os.utime(marcador)
+    return 1
+
+
+def _cmd_backup_datos(store: DataStore, destino: Path, keep: int, extras: list[Path]) -> int:
+    """Unit 104 (R3, R5, R6): ONE `tridata-<stamp>.tar.gz` (600) in `destino` with the verified database and the
+    extras, written beside under a hidden name, reopened and checked, and only then given its name (`os.replace`).
+    Its output carries no path (it goes to sync.log)."""
+    if _extras_mal(extras):
+        return 1
+    if not destino.is_dir():
+        destino.mkdir(mode=0o700)  # its parent (TRIDATA_DOCS) exists: checked by the caller, never created
+    sello = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    final = destino / f"tridata-{sello}.tar.gz"
+    for n in range(1, 1000):
+        if not final.exists():
+            break
+        final = destino / f"tridata-{sello}-{n:03d}.tar.gz"
+    else:
+        print("Too many backups in the same second in the data folder.", file=sys.stderr)
+        return 1
+    nombres = ["data.sqlite3", *(e.name for e in extras)]
+    parcial = destino / f".{final.name}.parcial"
+    try:
+        with tempfile.TemporaryDirectory(prefix="tridata-copia-") as tmp:
+            counts = store.backup(Path(tmp) / "data.sqlite3")
+            fd = os.open(parcial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f, tarfile.open(fileobj=f, mode="w:gz", dereference=True) as tar:
+                tar.add(Path(tmp) / "data.sqlite3", arcname="data.sqlite3", recursive=False)
+                for extra in extras:
+                    tar.add(extra, arcname=extra.name, recursive=False)
+        _comprobar_copia(parcial, nombres)
+        os.replace(parcial, final)
+        final.chmod(0o600)
+        _comprobar_copia(final, nombres)
+    except (OSError, tarfile.TarError, ValueError) as exc:
+        parcial.unlink(missing_ok=True)
+        final.unlink(missing_ok=True)
+        print(f"Backup FAILED: la copia comprimida no se pudo comprobar ({type(exc).__name__}).", file=sys.stderr)
+        return 1
+    podadas = _podar_copias(destino, keep)
+    print(
+        f"Backup OK: {final.name} en {COPIAS_DATOS}/ de la carpeta de datos ({sum(counts.values())} rows in "
+        f"{len(counts)} tables" + (f", +{len(extras)} extra file(s)" if extras else "")
+        + f"); removed {podadas} old backup(s)."
+    )
+    return 0
+
+
+def _cmd_backup(store: DataStore, dest_root: Path, keep: int, extras: list[Path]) -> int:
+    if _extras_mal(extras):  # unit 104 (R5): a credential, or a missing file
         return 1
 
     # Timestamped folders sort chronologically, which rotation relies on. A second backup in the same

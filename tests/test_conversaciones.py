@@ -104,7 +104,7 @@ def test_un_pdf_que_desaparece_sale_del_contexto(tmp_path, carpeta):  # R4
 
 def test_sin_carpeta_lo_dice(tmp_path):  # R4
     sin = Medicos(tmp_path / "data.sqlite3", None).estado()
-    assert "TRIDATA_MEDICOS_DIR" in sin["aviso"] and sin["documentos"] == []
+    assert "TRIDATA_DOCS" in sin["aviso"] and sin["documentos"] == []
     no_esta = Medicos(tmp_path / "data.sqlite3", tmp_path / "no-existe").estado()
     assert no_esta["aviso"] and no_esta["documentos"] == []
     vacia = tmp_path / "vacia"

@@ -149,7 +149,7 @@ def test_un_dato_nuevo_cambia_el_contexto(tmp_path):  # R2 · C-157: the race of
 def test_sin_datos_medicos_lo_dice(tmp_path):  # R4 (unit 083: the line of R5 is gone; what it said, not)
     ctx = Mundo(tmp_path, con_medicos=False).contexto()
     assert ctx.ve == ("comidas", "peso", "entrenos", "sueño", "pulso", "HRV")
-    assert ctx.aviso and "TRIDATA_MEDICOS_DIR" in ctx.aviso
+    assert ctx.aviso and "TRIDATA_DOCS" in ctx.aviso
     assert VALOR_INVENTADO not in "".join(ctx.bloques)
 
 

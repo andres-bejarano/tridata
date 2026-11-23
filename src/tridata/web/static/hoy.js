@@ -15,8 +15,11 @@
 // Unit 103 (REC-47, R-294): in that same box, after the warnings, «¿Con qué zapatilla corriste el 26/11 (8,1 km)?» with
 // a button per shoe for each run of Garmin without one (`pregunta` in `zapatillas`); answering it
 // (POST /api/zapatillas/carrera/ID) repaints Hoy and the question goes.
+// Unit 106 (REC-50, R-308): between the warnings and the questions, one line per run of today or yesterday
+// (`carrera` in `zapatillas`): «25/11: 12,4 km con SonicBlast» · «Cambiar» (or «… · Sin zapatilla» · «Elegir»); tapping
+// it shows a button per shoe in use and one tap gives it that shoe and repaints Hoy. That run is not asked again.
 
-import { preguntaZapatilla } from "./fitness.js";
+import { lineaZapatilla, preguntaZapatilla } from "./fitness.js";
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -81,13 +84,14 @@ function pintarZapatillas(lista) {
   const ir = nodo("a", "ver-mas", "Ver Fitness ›");
   ir.href = "#fitness";
   cabeza.append(nodo("h2", "", "👟 Zapatillas"), ir);
-  const avisos = lista.filter((z) => !z.pregunta);
+  const avisos = lista.filter((z) => !z.pregunta && !z.carrera);
   const hijos = [cabeza];
   if (avisos.length) {
     const lineas = nodo("ul", "lineas-zapatillas");
     lineas.append(...avisos.map((z) => nodo("li", `zapatilla-hoy ${z.estado}`, z.texto)));
     hijos.push(lineas);
   }
+  hijos.push(...lista.filter((z) => z.carrera).map((l) => lineaZapatilla(l, elegirZapatilla)));
   hijos.push(...lista.filter((z) => z.pregunta).map((p) => preguntaZapatilla(p, elegirZapatilla)));
   caja.replaceChildren(...hijos);
   caja.hidden = false;

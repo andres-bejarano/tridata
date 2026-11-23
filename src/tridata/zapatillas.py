@@ -23,6 +23,13 @@ they are given is their start (`partida`). Each run of Garmin after the start go
 clear (then Fitness and Hoy ask: `pendientes`). The km of a shoe here = its km at the start + the runs after its start
 counted with it. Andrés may choose or change the shoe of a run (`elegir`, origen `andres`: the rule never changes it
 again). The km by hand (`poner_km`) of a shoe here is a new start. Strava's reads (102) never touch these shoes.
+
+Unit 106 (REC-50 of `ver-fitness`: R-303..R-309, G-67, S-101..S-104): the use `trail` (R1); a run Garmin keeps as
+`trail_running` goes to the ONE shoe of trail in use, before competition and the plan (R2); a retired shoe here can be
+put back in use with its km (`reactivar`, R3) and from then on (`activa_desde`) it gets runs again; each count looks
+again at the runs the rule left without a shoe (R4); a run before the start of the shoe chosen stays with it without
+adding and says so (R5); `linea_carrera` / `recientes` are the line «25/11: 12,4 km con SonicBlast» of Hoy and Fitness
+(R6, R7).
 """
 from __future__ import annotations
 
@@ -35,7 +42,7 @@ import sqlite3
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -52,15 +59,17 @@ BIEN, PRONTO, PASADA = "bien", "pronto", "pasada"
 TEXTO_ESTADO = {BIEN: None, PRONTO: "toca cambiarla pronto", PASADA: "pasada"}
 STRAVA, ANDRES = "strava", "andres"
 AQUI, REGLA = "aqui", "regla"  # unit 103: a shoe counted here; a run whose shoe the rule G-67 gave
-SUAVE, CALIDAD, COMPETICION = "suave", "calidad", "competicion"
-USOS = (SUAVE, CALIDAD, COMPETICION)
+SUAVE, CALIDAD, COMPETICION, TRAIL = "suave", "calidad", "competicion", "trail"
+USOS = (SUAVE, CALIDAD, COMPETICION, TRAIL)  # unit 106 (R1): trail
+TIPO_TRAIL = "trail_running"  # unit 106 (R2): how Garmin keeps a run of trail
 TIPOS_CARRERA = ("running", "trail_running", "treadmill_running", "indoor_running")  # = sync.RUNNING_TYPES
 N_ULTIMAS = 10
 TEXTO_ORIGEN = {REGLA: "por el plan", ANDRES: "elegida por ti"}
-USO_MAL = "Di para qué la usas: suave, calidad o competicion."
+USO_MAL = "Di para qué la usas: suave, calidad, competicion o trail."
 NOMBRE_MAL = "Ponle un nombre a la zapatilla."
 NOMBRE_REPETIDO = "Ya tienes en activo una zapatilla con ese nombre."
 NO_ESTA = "Esa zapatilla no está entre las que tienes en activo."
+CAMBIAR, ELEGIR = "Cambiar", "Elegir"  # unit 106 (R6): the button of the line of a run
 VACIA = "Strava no ha dado ninguna zapatilla (lista vacía): se reintenta mañana"
 TOPE_MAL = f"El tope es un número entero de km, de {TOPE_MIN} a {TOPE_MAX}."
 KM_MAL = f"Los km son un número de 0 a {KM_MAX}."
@@ -88,10 +97,12 @@ CREATE TABLE IF NOT EXISTS zapatilla_carrera (
 );
 """
 # unit 103: added to a base of the 102 without them (checked first, so it is idempotent and touches no row)
-_NUEVAS = (("uso", "TEXT"), ("km_partida", "REAL"), ("partida", "TEXT"))
-_CARRERAS = ("SELECT c.activity_id, c.fecha, c.km, c.zapatilla_id, c.origen, z.nombre FROM zapatilla_carrera c "
-             "LEFT JOIN zapatilla z ON z.id = c.zapatilla_id")
-_COLUMNAS = "id, nombre, km, fuente, fecha_km, tope, en_activo, intento, motivo, uso, km_partida, partida"
+# unit 106: `activa_desde`, the moment a shoe put back in use may get runs again (NULL: since its start)
+_NUEVAS = (("uso", "TEXT"), ("km_partida", "REAL"), ("partida", "TEXT"), ("activa_desde", "TEXT"))
+_CARRERAS = ("SELECT c.activity_id, c.fecha, c.km, c.zapatilla_id, c.origen, z.nombre, z.partida, z.km_partida "
+             "FROM zapatilla_carrera c LEFT JOIN zapatilla z ON z.id = c.zapatilla_id")
+_COLUMNAS = ("id, nombre, km, fuente, fecha_km, tope, en_activo, intento, motivo, uso, km_partida, partida, "
+             "activa_desde")
 
 
 class ErrorZapatilla(ValueError):
@@ -169,10 +180,13 @@ _CALIDAD = re.compile(r"\b(series?|ritmos?|tiradas?)\b|\d+\s*[x×]\s*\d")
 _SUAVE = re.compile(r"\b(rodajes?|suaves?|shake\s*-?\s*out|suelt[oa]s?)\b")
 
 
-def uso_g67(titulos: list[str], competicion: bool) -> str | None:
-    """G-67: `competicion` if Garmin marks it or the plan has a race that day; `calidad` if a session of the day says
-    series, ritmo or tirada or has repetitions («2×15'», «3x2 km»); `suave` if it says rodaje, suave, shake out or
-    suelto; None with no session, nothing that fits, or two different uses."""
+def uso_g67(titulos: list[str], competicion: bool, trail: bool = False) -> str | None:
+    """G-67: `trail` if Garmin kept it as a run of trail (unit 106), whatever the rest says; `competicion` if Garmin
+    marks it or the plan has a race that day; `calidad` if a session of the day says series, ritmo or tirada or has
+    repetitions («2×15'», «3x2 km»); `suave` if it says rodaje, suave, shake out or suelto; None with no session,
+    nothing that fits, or two different uses."""
+    if trail:
+        return TRAIL
     if competicion:
         return COMPETICION
     usos = set()
@@ -185,9 +199,11 @@ def uso_g67(titulos: list[str], competicion: bool) -> str | None:
     return usos.pop() if len(usos) == 1 else None
 
 
-def regla_g67(titulos: list[str], competicion: bool, activas: list[dict[str, Any]]) -> str | None:
-    """R2, R3: the id of the ONE shoe in use of the use G-67 gives; None when the rule is not sure (it asks)."""
-    uso = uso_g67(titulos, competicion)
+def regla_g67(titulos: list[str], competicion: bool, activas: list[dict[str, Any]],
+              trail: bool = False) -> str | None:
+    """R2, R3: the id of the ONE shoe in use of the use G-67 gives; None when the rule is not sure (it asks). Unit 106:
+    a run of trail without one shoe of trail in use asks too (never another use)."""
+    uso = uso_g67(titulos, competicion, trail)
     del_uso = [z["id"] for z in activas if uso is not None and z.get("uso") == uso]
     return del_uso[0] if len(del_uso) == 1 else None
 
@@ -292,14 +308,15 @@ class Zapatillas:
 
     def vista(self, hoy: date) -> dict[str, Any]:
         """GET /api/zapatillas: the list and, when the last read failed, why (C-368); unit 103: the runs without a shoe
-        (`pendientes`) and the last ones (`ultimas`)."""
+        (`pendientes`) and the last ones (`ultimas`); unit 106: the shoes here retired (`retiradas`)."""
         lectura = self.estado_lectura()
         aviso = None
         if lectura["motivo"] and lectura["intento"]:
             cuando = _cuando(date.fromisoformat(lectura["intento"][:10]), hoy)
             aviso = f"{cuando[0].upper()}{cuando[1:]} no se pudo leer Strava: {lectura['motivo']}."
         return {"zapatillas": self.lista(hoy), "lectura": lectura, "aviso_lectura": aviso,
-                "pendientes": self.pendientes(hoy), "ultimas": self.ultimas(hoy), "opciones": self._opciones()}
+                "pendientes": self.pendientes(hoy), "ultimas": self.ultimas(hoy), "opciones": self._opciones(),
+                "retiradas": self.retiradas(hoy)}
 
     def buscar(self, que: str) -> list[dict[str, Any]]:
         """The shoes in use whose id is `que` or whose name has it (for the coach)."""
@@ -430,6 +447,26 @@ class Zapatillas:
                 raise KeyError(ident)
             conn.execute("UPDATE zapatilla SET en_activo = 0 WHERE id = ?", (ident,))
 
+    def reactivar(self, ident: str, ahora: datetime) -> dict[str, Any]:
+        """Unit 106 (R3, C-388): a shoe here retired, in use again with its km as they were (neither its km nor its
+        start change); it gets the runs after `ahora`, not those that came while it was retired. `KeyError` if it is
+        not a retired shoe here; `ErrorZapatilla` if another one in use has its name."""
+        with self._connect() as conn:
+            fila = conn.execute("SELECT nombre FROM zapatilla WHERE id = ? AND fuente = ? AND en_activo = 0",
+                                (ident, AQUI)).fetchone()
+            if fila is None:
+                raise KeyError(ident)
+            if any(z["nombre"].lower() == fila["nombre"].lower() for z in conn.execute(
+                    "SELECT nombre FROM zapatilla WHERE en_activo = 1")):
+                raise ErrorZapatilla(NOMBRE_REPETIDO)
+            conn.execute("UPDATE zapatilla SET en_activo = 1, activa_desde = ? WHERE id = ?", (_momento(ahora), ident))
+            return dict(self._una(conn, ident))
+
+    def retiradas(self, hoy: date) -> list[dict[str, Any]]:
+        """Unit 106 (R3): the shoes here retired, by name, as Fitness shows them (Strava's are Strava's business)."""
+        return [vista(z, hoy) for z in _ordenadas([z for z in self.todas()
+                                                   if not z["en_activo"] and z["fuente"] == AQUI])]
+
     @staticmethod
     def _recalcular(conn: sqlite3.Connection, ident: str) -> None:
         """km = the km of its start + its runs after the start (R2, R5)."""
@@ -444,37 +481,52 @@ class Zapatillas:
     def contar(self) -> dict[str, int]:
         """R2, R3, R6: every run of Garmin after the start of the shoes here goes ONCE into `zapatilla_carrera` with
         the shoe of the rule G-67, or none; the km of those shoes counted again. Without Garmin's base or without
-        shoes here, nothing; without the plan, every new run asks."""
+        shoes here, nothing; without the plan, every new run asks. Unit 106 (R4): the runs the rule left without a
+        shoe go through the rule again (the plan of their day may have come); those chosen by Andrés, or already
+        given a shoe, never. `nuevas` and `sin_zapatilla` speak only of the new runs."""
         with self._connect() as conn:
             tablas = {f[0] for f in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
             (desde,) = conn.execute("SELECT MIN(partida) FROM zapatilla WHERE fuente = ?", (AQUI,)).fetchone()
             if "activities" not in tablas or desde is None:
                 return {"nuevas": 0, "sin_zapatilla": 0}
             hechas = {f[0] for f in conn.execute("SELECT activity_id FROM zapatilla_carrera")}
-            nuevas = []
+            sin_regla = {f[0] for f in conn.execute("SELECT activity_id FROM zapatilla_carrera WHERE zapatilla_id "
+                                                    "IS NULL AND origen = ?", (REGLA,))}
+            nuevas: list[tuple[str, str, float, bool, bool]] = []  # (id, start, km, race marked, trail)
+            otra_vez: list[tuple[str, str, float, bool, bool]] = []  # unit 106 (R4): those the rule left without one
             for ident, dia, payload in conn.execute("SELECT activity_id, activity_date, payload FROM activities "
                                                     "WHERE activity_date >= ? ORDER BY activity_date, activity_id",
                                                     (desde[:10],)):
-                if ident in hechas:
+                if ident in hechas and ident not in sin_regla:
                     continue
                 datos = json.loads(payload)
                 inicio = str(datos.get("start_time_local") or f"{dia}T00:00")
                 if datos.get("activity_type") not in TIPOS_CARRERA or inicio <= desde:
                     continue
                 km = round(float(datos.get("distance_meters") or 0) / 1000, 1)
-                nuevas.append((str(ident), inicio, km, datos.get("event_type") == "race"))
-            if not nuevas:
+                carrera = (str(ident), inicio, km, datos.get("event_type") == "race",
+                           datos.get("activity_type") == TIPO_TRAIL)
+                (otra_vez if ident in hechas else nuevas).append(carrera)
+            if not nuevas and not otra_vez:
                 return {"nuevas": 0, "sin_zapatilla": 0}
             activas = self._activas_aqui(conn)
             plan = _PlanDelDia(self._db_path) if "plan_sesion" in tablas else None
-            filas = []
-            for ident, inicio, km, marcada in nuevas:
+
+            def regla(inicio: str, marcada: bool, trail: bool) -> str | None:
                 titulos, carrera_plan = plan.del_dia(date.fromisoformat(inicio[:10])) if plan else ([], False)
-                candidatas = [z for z in activas if (z["partida"] or "") < inicio]
-                filas.append((ident, inicio, km, regla_g67(titulos, marcada or carrera_plan, candidatas), REGLA))
+                candidatas = [z for z in activas
+                              if (z["partida"] or "") < inicio and (z["activa_desde"] or "") < inicio]
+                return regla_g67(titulos, marcada or carrera_plan, candidatas, trail)
+
+            filas = [(ident, inicio, km, regla(inicio, marcada, trail), REGLA)
+                     for ident, inicio, km, marcada, trail in nuevas]
             conn.executemany("INSERT OR IGNORE INTO zapatilla_carrera (activity_id, fecha, km, zapatilla_id, origen) "
                              "VALUES (?, ?, ?, ?, ?)", filas)
-            tocadas = {f[3] for f in filas if f[3] is not None}
+            puestas = [(zapatilla, ident) for ident, inicio, _km, marcada, trail in otra_vez
+                       if (zapatilla := regla(inicio, marcada, trail)) is not None]
+            conn.executemany("UPDATE zapatilla_carrera SET zapatilla_id = ? WHERE activity_id = ? "
+                             "AND zapatilla_id IS NULL AND origen = 'regla'", puestas)
+            tocadas = {f[3] for f in filas if f[3] is not None} | {zapatilla for zapatilla, _ in puestas}
             sin = sum(1 for f in filas if f[3] is None)
             for zapatilla in tocadas:
                 self._recalcular(conn, zapatilla)
@@ -516,6 +568,20 @@ class Zapatillas:
             halladas = [c for c in halladas if abs(float(c["km"]) - km) < 0.05] or halladas
         return halladas
 
+    def linea_carrera(self, activity_id: str, hoy: date) -> dict[str, Any] | None:
+        """Unit 106 (R5, R7, C-392): the line of one counted run, «25/11: 12,4 km con SonicBlast» with «Cambiar», or
+        «26/11: 8,1 km · Sin zapatilla» with «Elegir», and a button per shoe here in use; None if it is not a run
+        counted here."""
+        halladas = self._carreras("WHERE c.activity_id = ?", (str(activity_id),))
+        return _linea(halladas[0], self._opciones()) if halladas else None
+
+    def recientes(self, hoy: date) -> list[dict[str, Any]]:
+        """Unit 106 (R6, S-104): the lines of the runs counted of today and yesterday, oldest first."""
+        dias = ((hoy - timedelta(days=1)).isoformat(), hoy.isoformat())
+        carreras = self._carreras("WHERE substr(c.fecha, 1, 10) IN (?, ?) ORDER BY c.fecha", dias)
+        opciones = self._opciones()
+        return [_linea(c, opciones) for c in carreras]
+
     def pendientes(self, hoy: date) -> list[dict[str, Any]]:
         """R3 (C-375): the runs without a shoe, oldest first, each with its question and a button per shoe here in
         use."""
@@ -527,8 +593,37 @@ class Zapatillas:
                  "zapatilla_id": c["zapatilla_id"], "nombre": c["nombre"] if c["zapatilla_id"] else None,
                  "origen": c["origen"] if c["zapatilla_id"] else None,
                  "texto_origen": TEXTO_ORIGEN[c["origen"]] if c["zapatilla_id"] else None,
+                 "texto_ya_contada": _ya_contada(c),
                  "texto": f"{_corta(date.fromisoformat(c['fecha'][:10]))} · {_km_carrera(c['km'])}"}
                 for c in self._carreras("ORDER BY c.fecha DESC LIMIT ?", (n,))]
+
+
+def _incluida(c: dict[str, Any]) -> bool:
+    """R5 (unit 106): whether the km of a run add to its shoe: only after the start of that shoe."""
+    return bool(c["zapatilla_id"]) and (c.get("partida") is None or c["fecha"] > c["partida"])
+
+
+def _ya_contada(c: dict[str, Any]) -> str | None:
+    """R5 (C-390): «SonicBlast · ya contada en los 360 km que dijiste el 28/11» for a run with a shoe whose start is
+    after it; None otherwise."""
+    if not c["zapatilla_id"] or _incluida(c):
+        return None
+    return (f"{c['nombre']} · ya contada en los {_km_carrera(float(c['km_partida'] or 0))} que dijiste el "
+            f"{_corta(date.fromisoformat(c['partida'][:10]))}")
+
+
+def _linea(c: dict[str, Any], opciones: list[dict[str, str]]) -> dict[str, Any]:
+    """R6, R7 (unit 106): the line of a run with its button and the shoes it may be given."""
+    cabeza = f"{_corta(date.fromisoformat(c['fecha'][:10]))}: {_km_carrera(c['km'])}"
+    if not c["zapatilla_id"]:
+        texto = f"{cabeza} · Sin zapatilla"
+    else:
+        ya = _ya_contada(c)
+        texto = f"{cabeza} · {ya}" if ya else f"{cabeza} con {c['nombre']}"
+    return {"activity_id": c["activity_id"], "fecha": c["fecha"][:10], "km": c["km"],
+            "zapatilla_id": c["zapatilla_id"], "nombre": c["nombre"] if c["zapatilla_id"] else None,
+            "origen": c["origen"] if c["zapatilla_id"] else None, "incluida": _incluida(c), "texto": texto,
+            "boton": CAMBIAR if c["zapatilla_id"] else ELEGIR, "opciones": opciones}
 
 
 class _PlanDelDia:
@@ -639,7 +734,7 @@ def carreras_para_el_contexto(pendientes: list[dict[str, Any]]) -> list[dict[str
              "km": p["km"]} for p in pendientes]
 
 
-__all__ = ["AQUI", "AVISO_KM", "BIEN", "PASADA", "PRONTO", "TIPOS_CARRERA", "TOPE_MAX", "TOPE_MIN", "TOPE_NUEVA",
+__all__ = ["AQUI", "AVISO_KM", "BIEN", "PASADA", "PRONTO", "TIPOS_CARRERA", "TRAIL", "TOPE_MAX", "TOPE_MIN", "TOPE_NUEVA",
            "USOS", "VACIA", "ErrorZapatilla", "Zapatillas", "aviso_hoy", "carreras_para_el_contexto", "contar_sin_cortar",
            "estado",
            "leer_de_strava", "leer_sin_crear", "para_el_contexto", "pendientes_sin_crear", "pregunta", "regla_g67",

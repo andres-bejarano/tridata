@@ -34,7 +34,8 @@
         <p id="hoy-fecha" class="suave"></p>
       </div>
       <!-- unit 102 (REC-46, R-289): only with a shoe at 50 km or less from its cap (or past it), filled by hoy.js; it
-           is not a `.tarjeta-hoy` (those are the three cards of always and they navigate) -->
+           is not a `.tarjeta-hoy` (those are the three cards of always and they navigate). Unit 106 (R-308): also the
+           line of each run of today and yesterday with its shoe and «Cambiar» / «Elegir» -->
       <article id="hoy-zapatillas" class="tarjeta aviso-zapatillas" role="status" aria-live="polite" hidden></article>
       <article id="hoy-comida" class="tarjeta tarjeta-hoy" data-ir="dia">
         <div class="cab-hoy"><h2>🍽️ Comida</h2><a class="ver-mas" href="#dia">Ver Nutrición ›</a></div>
@@ -173,6 +174,13 @@
         <!-- unit 103 (R-292): «Dar de alta una zapatilla» and its form -->
         <div id="fitness-zapatillas-alta" class="alta-zapatillas"></div>
       </article>
+      <!-- unit 106 (REC-50, R-305): the shoes here retired, folded; each one can be put back in use with its km -->
+      <section id="fitness-retiradas" aria-label="Zapatillas retiradas" hidden>
+        <details class="tarjeta bloque-fitness retiradas-zapatillas">
+          <summary>Retiradas</summary>
+          <ul id="fitness-retiradas-lista" class="lista-zapatillas"></ul>
+        </details>
+      </section>
       <!-- unit 103 (REC-47, R-295): the last runs since the start, with their shoe; it can be changed -->
       <section id="fitness-carreras" aria-labelledby="t-carreras" hidden>
         <h2 id="t-carreras" class="titulo-bloque">Últimas carreras</h2>

@@ -22,12 +22,14 @@ from tridata.nutricion import DESDE_SIEMPRE, Ajustes
 from tridata.plan import Planes
 from tridata.storage import DataStore
 from tridata.sync import RUNNING_TYPES
+from tridata.hoy import zapatillas as zapatillas_hoy
 from tridata.zapatillas import (TIPOS_CARRERA, ErrorZapatilla, Zapatillas, aviso_hoy, leer_sin_crear,
-                                pendientes_sin_crear, regla_g67)
+                                pendientes_sin_crear, regla_g67, uso_g67)
 
 ALTA = datetime(2026, 11, 23, 10, 0)  # the moment of the start: the shoes are given that morning
 HOY = date(2026, 11, 30)
 SONIC, NIMBUS, META = "SonicBlast", "Gel Nimbus 28", "Meta Speed Sky Tokyo"
+TRABUCO, KM_TRABUCO = "Asics Trabuco 13", 200.0  # unit 106: the shoe of trail
 # invented km of the start (not those of any real shoe)
 KM_SONIC, KM_NIMBUS, KM_META = 310.0, 150.0, 90.0
 
@@ -154,13 +156,15 @@ def test_la_marca_de_competicion_de_garmin(mundo):  # R2 · G-67 (a): marked in 
 
 
 def test_trail_y_cinta_tambien_cuentan_y_la_bici_no(mundo):  # R2: only runs
+    # unit 106 (R2, G-67): a trail run goes to the shoe of trail, whatever the plan says (before: to the Nimbus)
+    mundo.ids[TRABUCO] = mundo.repo.dar_de_alta(TRABUCO, KM_TRABUCO, 700, "trail", ALTA)["id"]
     mundo.plan({"2026-11-24": ["Rodaje suave 30'"], "2026-11-25": ["Rodaje suave 30'"],
                 "2026-11-26": ["Rodaje suave 30'"]})
     mundo.correr("t", "2026-11-24", 8.0, tipo="trail_running")
     mundo.correr("c", "2026-11-25", 6.0, tipo="treadmill_running")
     mundo.correr("b", "2026-11-26", 40.0, tipo="cycling")
     mundo.repo.contar()
-    assert mundo.km(NIMBUS) == 164.0
+    assert mundo.km(NIMBUS) == 156.0 and mundo.km(TRABUCO) == 208.0
 
 
 def test_carrera_de_antes_del_alta_no_suma(mundo):  # R2 · C-374
@@ -492,3 +496,209 @@ def test_el_coach_accion_que_no_existe(equipo):
     antes = _volcado(db)
     assert "No se ha hecho nada" in preparar_zapatilla_desde_pc(eq, "Nimbus", 8.1, accion="borrar")
     assert _volcado(db) == antes
+
+
+# == unit 106 (REC-50 of `ver-fitness`: R-303..R-309, G-67, S-101..S-104) =========================================
+# R1 the use «trail»; R2 a trail run goes to the shoe of trail before the plan; R3 retire and put back in use; R4 the
+# runs without a shoe looked at again when the plan comes; R5 a run before the start of the shoe chosen does not add,
+# and says why; R6 the line of Hoy; R7 the line of a run (Fitness); R8 the km always = start + the runs after it.
+
+ACTIVAS_T = [*ACTIVAS, {"id": "t", "uso": "trail"}]
+
+
+def test_uso_g67_trail_primero():  # R2 · G-67 (unit): trail before competition and the plan
+    assert uso_g67(["Rodaje suave 50'"], False, trail=True) == "trail"
+    assert uso_g67([], True, trail=True) == "trail"
+    assert uso_g67(["Rodaje suave 50'"], False) == "suave"
+    assert uso_g67(["Rodaje suave 50'"], False, trail=False) == "suave"
+
+
+@pytest.mark.parametrize(("titulos", "competicion", "trail", "activas", "esperado"), [
+    (["Rodaje suave 50'"], False, True, ACTIVAS_T, "t"),  # trail + «Rodaje suave 50'» → trail
+    (["Rodaje suave 50'"], True, True, ACTIVAS_T, "t"),  # trail + competition → trail
+    (["Rodaje suave 50'"], False, True, ACTIVAS, None),  # trail without a shoe of trail → it asks
+    (["Rodaje suave 50'"], False, True, [*ACTIVAS_T, {"id": "t2", "uso": "trail"}], None),  # two of trail → it asks
+    (["Rodaje en grupo"], False, False, ACTIVAS_T, "n"),  # running + «Rodaje» → suave, never the one of trail
+    ([], False, False, [{"id": "t", "uso": "trail"}], None),  # not trail: never to the one of trail by the rule
+])
+def test_regla_g67_con_trail(titulos, competicion, trail, activas, esperado):  # R2 · G-67
+    assert regla_g67(titulos, competicion, activas, trail=trail) == esperado
+
+
+def _trabuco(mundo: Mundo, cuando: datetime = ALTA) -> str:
+    mundo.ids[TRABUCO] = mundo.repo.dar_de_alta(TRABUCO, KM_TRABUCO, 700, "trail", cuando)["id"]
+    return mundo.ids[TRABUCO]
+
+
+def test_alta_de_trail(mundo):  # R1 · R-303, C-385
+    _trabuco(mundo)
+    trabuco = next(z for z in mundo.repo.lista(HOY) if z["nombre"] == TRABUCO)
+    assert trabuco["texto"].startswith("Asics Trabuco 13 · 200 de 700 km · quedan 500")
+    assert trabuco["uso"] == "trail"
+
+
+def test_contar_trail_va_a_la_trabuco(mundo):  # R2 · R-304, C-386
+    _trabuco(mundo)
+    mundo.plan({"2026-11-30": ["Rodaje suave 50'"], "2026-11-29": ["Rodaje suave 50'"]})
+    mundo.correr("t30", "2026-11-30", 14.3, tipo="trail_running")
+    mundo.correr("r29", "2026-11-29", 10.0)  # not trail: the Nimbus, never the Trabuco
+    assert mundo.repo.contar() == {"nuevas": 2, "sin_zapatilla": 0}
+    assert mundo.km(TRABUCO) == 214.3 and mundo.km(NIMBUS) == 160.0
+    assert mundo.fila("t30")["zapatilla_id"] == mundo.ids[TRABUCO] and mundo.fila("t30")["origen"] == "regla"
+
+
+def test_trail_sin_trabuco_activa_pregunta(mundo):  # R2 · C-387
+    mundo.repo.retirar(_trabuco(mundo))
+    mundo.plan({"2026-11-29": ["Rodaje suave 50'"]})
+    mundo.correr("t29", "2026-11-29", 9.0, tipo="trail_running")
+    assert mundo.repo.contar() == {"nuevas": 1, "sin_zapatilla": 1}
+    assert mundo.km(NIMBUS) == KM_NIMBUS and mundo.km(TRABUCO) == KM_TRABUCO
+    assert [p["activity_id"] for p in mundo.repo.pendientes(HOY)] == ["t29"]
+
+
+def test_volver_a_mirar_al_llegar_el_plan(mundo):  # R4 · R-306, C-389
+    mundo.correr("c26", "2026-11-26", 8.1)
+    mundo.correr("c27", "2026-11-27", 6.0)
+    mundo.repo.contar()
+    mundo.repo.elegir("c27", mundo.ids[SONIC])  # chosen by hand: never touched
+    assert [p["activity_id"] for p in mundo.repo.pendientes(HOY)] == ["c26"]
+    mundo.plan({"2026-11-26": ["Rodaje suave"], "2026-11-27": ["Rodaje suave"]})
+    assert mundo.repo.contar() == {"nuevas": 0, "sin_zapatilla": 0}
+    assert mundo.km(NIMBUS) == 158.1 and mundo.km(SONIC) == 316.0
+    assert mundo.repo.pendientes(HOY) == []
+    assert (mundo.fila("c26")["zapatilla_id"], mundo.fila("c26")["origen"]) == (mundo.ids[NIMBUS], "regla")
+    assert (mundo.fila("c27")["zapatilla_id"], mundo.fila("c27")["origen"]) == (mundo.ids[SONIC], "andres")
+    mundo.repo.contar()  # counting again leaves the same
+    assert mundo.km(NIMBUS) == 158.1 and mundo.km(SONIC) == 316.0
+
+
+def test_retirar_y_volver_a_poner_en_activo(mundo):  # R3 · R-305, C-388
+    nimbus = mundo.ids[NIMBUS]
+    mundo.repo.poner_km(nimbus, 151, datetime(2026, 11, 23, 11, 0))
+    mundo.plan({"2026-11-24": ["Rodaje suave 30'"], "2026-11-26": ["Rodaje suave 30'"]})
+    mundo.repo.retirar(nimbus)
+    assert [z["nombre"] for z in mundo.repo.retiradas(HOY)] == [NIMBUS]
+    assert mundo.repo.retiradas(HOY)[0]["km"] == 151.0
+    mundo.correr("c24", "2026-11-24", 7.0)  # it arrives while the Nimbus is retired: it asks
+    mundo.repo.contar()
+    mundo.repo.reactivar(nimbus, datetime(2026, 11, 25, 12, 0))
+    assert mundo.km(NIMBUS) == 151.0
+    assert NIMBUS in [z["nombre"] for z in mundo.repo.lista(HOY)] and mundo.repo.retiradas(HOY) == []
+    (pregunta,) = mundo.repo.pendientes(HOY)
+    assert NIMBUS in [o["nombre"] for o in pregunta["opciones"]]
+    mundo.repo.contar()  # what arrived while it was retired is not given to it
+    assert mundo.km(NIMBUS) == 151.0 and mundo.fila("c24")["zapatilla_id"] is None
+    mundo.correr("c26", "2026-11-26", 5.0)  # a new run after: it adds
+    mundo.repo.contar()
+    assert mundo.km(NIMBUS) == 156.0
+    with pytest.raises(KeyError):
+        mundo.repo.reactivar(nimbus, datetime(2026, 11, 26, 12, 0))  # it is in use already
+
+
+def test_volver_a_poner_en_activo_con_un_nombre_repetido(mundo):  # R3: two in use with one name could not be told
+    mundo.repo.retirar(mundo.ids[NIMBUS])
+    mundo.repo.dar_de_alta(NIMBUS, 0, 700, "suave", datetime(2026, 11, 24, 9, 0))
+    with pytest.raises(ErrorZapatilla):
+        mundo.repo.reactivar(mundo.ids[NIMBUS], datetime(2026, 11, 25, 9, 0))
+
+
+def test_volver_a_poner_en_activo_una_de_strava_no(mundo):  # R3: only those counted here
+    mundo.repo.guardar_lectura([{"id": "g1", "nombre": "Nike Pegasus 41", "km": 12.0, "retirada": True}], ALTA)
+    assert mundo.repo.retiradas(HOY) == []
+    with pytest.raises(KeyError):
+        mundo.repo.reactivar("g1", datetime(2026, 11, 25, 9, 0))
+
+
+def test_elegir_una_carrera_de_antes_de_la_partida(mundo):  # R5 · R-307, C-390
+    mundo.correr("c26", "2026-11-26", 8.1)
+    mundo.repo.contar()
+    mundo.repo.poner_km(mundo.ids[SONIC], 360, datetime(2026, 11, 28, 12, 0))
+    mundo.repo.elegir("c26", mundo.ids[SONIC])
+    assert mundo.km(SONIC) == 360.0
+    linea = mundo.repo.linea_carrera("c26", HOY)
+    assert linea["zapatilla_id"] == mundo.ids[SONIC] and linea["incluida"] is False
+    assert "SonicBlast · ya contada en los 360 km que dijiste el 28/11" in linea["texto"]
+    (ultima,) = mundo.repo.ultimas(HOY)
+    assert ultima["texto_ya_contada"] == "SonicBlast · ya contada en los 360 km que dijiste el 28/11"
+    assert mundo.repo.recientes(date(2026, 11, 27))[0]["texto"] == linea["texto"]
+
+
+def test_la_linea_de_una_carrera(mundo):  # R6, R7 · R-308, R-309, C-391, C-392
+    mundo.plan({"2026-11-25": ["Series 3×2 km"]})
+    mundo.correr("c25", "2026-11-25", 12.4)
+    mundo.correr("c26", "2026-11-26", 8.1)
+    mundo.correr("bici", "2026-11-26", 40.0, hora="18:00:00", tipo="cycling")
+    mundo.repo.contar()
+    linea = mundo.repo.linea_carrera("c25", date(2026, 11, 26))
+    assert linea["texto"] == "25/11: 12,4 km con SonicBlast"
+    assert (linea["boton"], linea["origen"], linea["incluida"], linea["km"]) == ("Cambiar", "regla", True, 12.4)
+    assert [o["nombre"] for o in linea["opciones"]] == [NIMBUS, META, SONIC]
+    sin = mundo.repo.linea_carrera("c26", date(2026, 11, 26))
+    assert (sin["texto"], sin["boton"], sin["zapatilla_id"]) == ("26/11: 8,1 km · Sin zapatilla", "Elegir", None)
+    assert mundo.repo.linea_carrera("bici", HOY) is None  # not a run
+    assert mundo.repo.linea_carrera("no-existe", HOY) is None
+    mundo.repo.elegir("c25", mundo.ids[NIMBUS])  # «Cambiar» → «Gel Nimbus 28»: the km move
+    assert mundo.repo.linea_carrera("c25", HOY)["texto"] == "25/11: 12,4 km con Gel Nimbus 28"
+    assert (mundo.km(SONIC), mundo.km(NIMBUS)) == (KM_SONIC, 162.4)
+
+
+def test_las_recientes_son_las_de_hoy_y_ayer(mundo):  # R6 · S-104
+    for dia in ("2026-11-24", "2026-11-25", "2026-11-26"):
+        mundo.correr(f"c{dia[-2:]}", dia, 5.0)
+    mundo.repo.contar()
+    assert [r["activity_id"] for r in mundo.repo.recientes(date(2026, 11, 26))] == ["c25", "c26"]
+    assert mundo.repo.recientes(date(2026, 11, 28)) == []
+
+
+def test_hoy_la_linea_y_no_la_pregunta(mundo):  # R6 · R-308, C-391: the line replaces the question of that run
+    mundo.plan({"2026-11-25": ["Series 3×2 km"]})
+    mundo.correr("c22", "2026-11-23", 6.0, hora="18:00:00")  # older, without a shoe: still a question
+    mundo.correr("c25", "2026-11-25", 12.4)
+    mundo.correr("c26", "2026-11-26", 8.1)
+    lista = zapatillas_hoy(mundo.repo, date(2026, 11, 26))
+    lineas = [z for z in lista if z.get("carrera")]
+    assert [(z["activity_id"], z["texto"], z["boton"]) for z in lineas] == [
+        ("c25", "25/11: 12,4 km con SonicBlast", "Cambiar"), ("c26", "26/11: 8,1 km · Sin zapatilla", "Elegir")]
+    assert [z["activity_id"] for z in lista if z.get("pregunta")] == ["c22"]
+    assert zapatillas_hoy(mundo.repo, date(2026, 11, 29)) == [
+        {**p, "pregunta": True} for p in mundo.repo.pendientes(date(2026, 11, 29))]
+
+
+def _cuadra(mundo: Mundo) -> None:
+    """R8: every shoe here = its km of the start + its runs after the start, none else."""
+    with sqlite3.connect(mundo.db) as conn:
+        conn.row_factory = sqlite3.Row
+        for z in conn.execute("SELECT * FROM zapatilla WHERE fuente = 'aqui'").fetchall():
+            (suma,) = conn.execute("SELECT COALESCE(SUM(km), 0) FROM zapatilla_carrera WHERE zapatilla_id = ? "
+                                   "AND fecha > ?", (z["id"], z["partida"])).fetchone()
+            assert z["km"] == round(z["km_partida"] + suma, 1), z["nombre"]
+
+
+def test_elegir_deja_la_cuenta_cuadrada(mundo):  # R8
+    mundo.plan({"2026-11-24": ["Rodaje en grupo"], "2026-11-25": ["Series 3×2 km"]})
+    for ident, dia, km in (("c24", "2026-11-24", 10.2), ("c25", "2026-11-25", 12.4), ("c26", "2026-11-26", 8.1)):
+        mundo.correr(ident, dia, km)
+    mundo.repo.contar()
+    mundo.repo.poner_km(mundo.ids[SONIC], 330, datetime(2026, 11, 25, 20, 0))
+    for ident, nombre in (("c26", SONIC), ("c24", META), ("c25", NIMBUS), ("c24", SONIC), ("c26", NIMBUS)):
+        mundo.repo.elegir(ident, mundo.ids[nombre])
+        _cuadra(mundo)
+    antes = [(z["id"], z["km"]) for z in mundo.repo.todas()]
+    mundo.repo.contar()
+    mundo.repo.contar()
+    assert [(z["id"], z["km"]) for z in mundo.repo.todas()] == antes
+    _cuadra(mundo)
+
+
+def test_el_coach_da_de_alta_una_de_trail(equipo):  # R1 · R-303: the coach with uso trail
+    eq, db = equipo
+    texto = preparar_zapatilla_desde_pc(eq, TRABUCO, 200, accion="alta", tope=700, uso="trail")
+    assert "Huella: " in texto
+    hecho = apuntar_zapatilla_desde_pc(eq, "entrenador", TRABUCO, 200, _huella(texto), accion="alta", tope=700,
+                                       uso="trail")
+    assert hecho.startswith("Hecho")
+    (vista,) = Zapatillas(db).lista(HOY)
+    assert vista["uso"] == "trail" and vista["texto"].startswith("Asics Trabuco 13 · 200 de 700 km · quedan 500")
+    datos = json.loads(texto_contexto(eq).split("\n\n")[-1])
+    assert datos["zapatillas"][0]["uso"] == "trail"
+    assert "trail" in INSTRUCCIONES

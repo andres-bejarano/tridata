@@ -110,11 +110,14 @@ class Mundo:
         self.db = tmp_path / "data.sqlite3"
         self.store = DataStore(self.db)
         sembrar_garmin(self.store)
-        self.carpeta = tmp_path / "medicos"
-        self.carpeta.mkdir()
+        self.docs = tmp_path / "deporte-inventado"  # unit 104: the sports folder (TRIDATA_DOCS)
+        self.carpeta = self.docs / "health"
+        self.carpeta.mkdir(parents=True)
+        (self.docs / "routes").mkdir()
+        (self.docs / "routes" / GPX.name).write_bytes(GPX.read_bytes())
         self.pdf = self.carpeta / "analitica-nueva-inventada.pdf"
         self.pdf.write_bytes(b"%PDF-1.4 analitica inventada 1")
-        self.equipo = montar_equipo(self.db, store=self.store, medicos_dir=self.carpeta,
+        self.equipo = montar_equipo(self.db, store=self.store, medicos_dir=self.carpeta, docs_dir=self.docs,
                                     token=tmp_path / "google-token.json",
                                     hoy=lambda: HOY, ahora=lambda: AHORA)
         self.garmin = GarminRutas()
@@ -397,7 +400,7 @@ def test_get_rutas_da_las_de_garmin_y_las_carreras_hechas(mundo):  # R4 · R-151
     assert "r-dom" in respuesta  # a run already done, by its id
 
 
-@pytest.mark.parametrize("argumentos", [{"garmin": 77}, {"actividad": "r-dom"}, {"gpx": str(GPX)}])
+@pytest.mark.parametrize("argumentos", [{"garmin": 77}, {"actividad": "r-dom"}, {"gpx": f"routes/{GPX.name}"}])
 def test_perfil_de_una_ruta_sin_coordenadas(mundo, argumentos):  # R4 · R-152, R-154
     respuesta = mundo.llamar("get_perfil_ruta", argumentos)
     assert re.search(r"\b(19,\d|20(,\d)?) km", respuesta) and "subida" in respuesta and "bajada" in respuesta and "llano" in respuesta
@@ -415,10 +418,10 @@ def test_perfil_sin_altitud_o_garmin_caido_lo_dice_y_pide_un_gpx(mundo, tmp_path
         assert "Garmin no responde" in respuesta and "GPX" in respuesta
     rutas = mundo.llamar("get_rutas")
     assert "Garmin no responde" in rutas and "r-dom" in rutas  # the runs done are still offered
-    sin_ele = tmp_path / "sin-altitud-inventada.gpx"
+    sin_ele = mundo.docs / "routes" / "sin-altitud-inventada.gpx"
     sin_ele.write_text(re.sub(r"<ele>[^<]*</ele>", "", GPX.read_text(encoding="utf-8")), encoding="utf-8")
     assert SIN_ALTITUD in mundo.llamar("get_perfil_ruta", {"gpx": str(sin_ele)})
-    assert "no encuentro" in mundo.llamar("get_perfil_ruta", {"gpx": str(tmp_path / "no-esta.gpx")}).lower()
+    assert "no encuentro" in mundo.llamar("get_perfil_ruta", {"gpx": str(mundo.docs / "routes" / "no-esta.gpx")}).lower()
 
 
 # -- R5 · R-196 ------------------------------------------------------------------------------------------------------
@@ -459,7 +462,7 @@ def test_ninguna_herramienta_nueva_llama_a_una_ia_de_pago(mundo, texto, recetas)
                                                "transcripcion": TRANSCRIPCION, "huella": mundo.huella(preparada)})
         mundo.llamar("get_recetas")
         mundo.llamar("get_rutas")
-        mundo.llamar("get_perfil_ruta", {"gpx": str(GPX)})
+        mundo.llamar("get_perfil_ruta", {"gpx": f"routes/{GPX.name}"})
         mundo.llamar("get_contexto")
 
 
@@ -504,4 +507,4 @@ def test_sin_carpeta_de_analiticas_lo_dice(tmp_path):  # R2
                            hoy=lambda: HOY, ahora=lambda: AHORA)
     server = build_server(store, equipo=equipo)
     resultado = asyncio.run(server.call_tool("get_analiticas_pendientes", {}))
-    assert "TRIDATA_MEDICOS_DIR" in "".join(c.text for c in resultado.content)
+    assert "TRIDATA_DOCS" in "".join(c.text for c in resultado.content)

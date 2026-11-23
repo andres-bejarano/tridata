@@ -102,7 +102,7 @@ def test_tridata_web_arranca_sin_clave_ni_avisos_de_ia(tmp_path, sin_ia, monkeyp
 
     db = tmp_path / "data.sqlite3"
     Ajustes(db).cambiar({"basal_kcal": 1600, "kcal_por_paso": 0.04}, desde=DESDE_SIEMPRE)
-    for variable in ("TRIDATA_MEDICOS_DIR", "GARMIN_EMAIL", "GARMIN_PASSWORD", "TRIDATA_GOOGLE_CLIENTE"):
+    for variable in ("TRIDATA_DOCS", "TRIDATA_MEDICOS_DIR", "GARMIN_EMAIL", "GARMIN_PASSWORD", "TRIDATA_GOOGLE_CLIENTE"):
         monkeypatch.delenv(variable, raising=False)
     arrancada = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: arrancada.append(app))

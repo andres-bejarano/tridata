@@ -10,11 +10,15 @@ ends the same and the next one tries again. Only counts are logged, never a text
 
 Unit 096 (R-259): after saving the laps (`sync_laps`) or the detail (`sync_detalle`) of a session, `umbral.revisar_sesion`
 looks in it for an effort that proposes a new threshold. In its own `try`: a failure there never stops the sync.
+
+Unit 104 (R1, R2): `carpeta_datos` is THE folder of Andrés's personal papers of sport (`TRIDATA_DOCS` of `.env`, only
+its path; the repository is public) and `dentro_de` the one frontier every file the team asks for goes through.
 """
 from __future__ import annotations
 
 import fcntl
 import logging
+import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -28,6 +32,29 @@ from .plan.desde_garmin import cambios, programado
 from .storage import DataStore
 
 logger = logging.getLogger(__name__)
+
+# -- unit 104 (R1, R2): the one folder of the personal papers of sport --
+VARIABLE_DATOS = "TRIDATA_DOCS"
+VARIABLE_VIEJA = "TRIDATA_MEDICOS_DIR"  # replaced by TRIDATA_DOCS (its health/); only read to say so
+
+
+def carpeta_datos(entorno: Mapping[str, str] | None = None) -> Path | None:
+    """The folder of `TRIDATA_DOCS` (with `~` expanded), or None without it. Read when called, never at import."""
+    valor = (os.environ if entorno is None else entorno).get(VARIABLE_DATOS, "").strip()
+    return Path(valor).expanduser() if valor else None
+
+
+def dentro_de(ruta: Path | str, raiz: Path) -> Path | None:
+    """`ruta` (relative ones from `raiz`) resolved with its links and «..», if it falls inside `raiz` (resolved too);
+    None if it falls outside or cannot be resolved. Whatever is read is this resolved path, never the one given."""
+    try:
+        dada = Path(ruta).expanduser()
+        final = (dada if dada.is_absolute() else raiz / dada).resolve()
+        base = Path(raiz).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return final if final.is_relative_to(base) else None
+
 
 RUNNING_TYPES = (
     "running", "trail_running", "treadmill_running", "indoor_running",

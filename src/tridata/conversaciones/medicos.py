@@ -1,6 +1,8 @@
 """The medical documents of the team's context (unit 032, R4, P1, G-50): kept only on this PC.
 
-The PDFs live in the folder `TRIDATA_MEDICOS_DIR` of `.env` (outside any repository; only its path is written down).
+The PDFs live in `health/` of the sports folder `TRIDATA_DOCS` of `.env` (unit 104: it replaced `TRIDATA_MEDICOS_DIR`;
+outside any repository, only its path is written down). A PDF whose real path (links and «..» resolved) falls outside
+that folder is neither listed nor read.
 Their transcription (test, value, unit, reference range, date, and the notes of the report) is kept in the local
 SQLite (`transcripcion_medica`) with the SHA-256 of the file. A PDF that is no longer in the folder leaves the
 context. What goes in the context is that transcription, never the PDFs.
@@ -20,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 import unicodedata
@@ -33,10 +36,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger(__name__)
 
-SIN_CARPETA = ("No sé dónde están tus analíticas y tu prueba de esfuerzo: falta TRIDATA_MEDICOS_DIR en .env "
-               "(la carpeta de sus PDF)")
-NO_ESTA_CARPETA = "No encuentro la carpeta de tus analíticas (TRIDATA_MEDICOS_DIR)"
-SIN_PDF = "En la carpeta de tus analíticas (TRIDATA_MEDICOS_DIR) no hay ningún PDF"
+SIN_CARPETA = ("No sé dónde están tus analíticas y tu prueba de esfuerzo: falta TRIDATA_DOCS en .env "
+               "(tu carpeta de deporte; sus PDF van en su health/)")
+SUSTITUIDA = ("No sé dónde están tus analíticas y tu prueba de esfuerzo: TRIDATA_MEDICOS_DIR se ha sustituido por "
+              "TRIDATA_DOCS (tu carpeta de deporte; sus PDF van en su health/): ponla en .env")
+NO_ESTA_CARPETA = "No encuentro la carpeta de tus analíticas (health/ de TRIDATA_DOCS)"
+SIN_PDF = "En la carpeta de tus analíticas (health/ de TRIDATA_DOCS) no hay ningún PDF"
+
+
+def aviso_sin_carpeta() -> str:
+    """Unit 104 (R1): what is said without a folder; if only the old variable is there, that it was replaced."""
+    return SUSTITUIDA if os.environ.get("TRIDATA_MEDICOS_DIR", "").strip() else SIN_CARPETA
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS transcripcion_medica (
@@ -92,10 +102,14 @@ def _documento(fila: sqlite3.Row) -> dict[str, Any]:
 class Medicos:
     """The transcriptions of the PDFs of `carpeta`, in the SQLite of `db_path`."""
 
-    def __init__(self, db_path: Path | str, carpeta: Path | str | None, transcriptor: Any = None) -> None:
-        """`transcriptor` (`transcribir(pdf) -> (TranscripcionMedica, ...)`) is only for `al_dia`, see there."""
+    def __init__(self, db_path: Path | str, carpeta: Path | str | None, transcriptor: Any = None, *,
+                 raiz: Path | str | None = None) -> None:
+        """`transcriptor` (`transcribir(pdf) -> (TranscripcionMedica, ...)`) is only for `al_dia`, see there. `raiz`
+        (unit 104: the sports folder) is the frontier: a PDF whose real path falls outside it (or outside `carpeta`
+        when there is no `raiz`) does not exist here."""
         self._db_path = Path(db_path)
         self.carpeta = Path(carpeta).expanduser() if carpeta else None
+        self._raiz = Path(raiz).expanduser() if raiz else self.carpeta
         self._transcriptor = transcriptor
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
@@ -113,8 +127,16 @@ class Medicos:
     def _pdfs(self) -> dict[str, Path] | None:
         if self.carpeta is None or not self.carpeta.is_dir():
             return None
-        return {p.relative_to(self.carpeta).as_posix(): p for p in sorted(self.carpeta.rglob("*"))
-                if p.is_file() and p.suffix.lower() == ".pdf"}
+        frontera = (self._raiz or self.carpeta).resolve()
+        dentro = self.carpeta.resolve()
+        pdfs = {}
+        for p in sorted(self.carpeta.rglob("*")):
+            if p.suffix.lower() != ".pdf":
+                continue
+            real = p.resolve()  # unit 104 (R2): a link to a file outside the folder is not one of its PDF
+            if real.is_file() and real.is_relative_to(frontera) and real.is_relative_to(dentro):
+                pdfs[p.relative_to(self.carpeta).as_posix()] = real
+        return pdfs
 
     def al_dia(self) -> dict[str, Any]:
         """Unit 083: kept ONLY because `tests/test_privados.py` (outside this unit) seeds its transcription with a
@@ -198,7 +220,7 @@ class Medicos:
         documentos = self.transcripciones()
         aviso = None
         if self.carpeta is None:
-            aviso = SIN_CARPETA
+            aviso = aviso_sin_carpeta()
         elif pdfs is None:
             aviso = NO_ESTA_CARPETA
         elif not pdfs:

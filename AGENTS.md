@@ -90,7 +90,10 @@ PR, al entrar en `master` y cada lunes). Dependabot propone las actualizaciones.
   `guardar_transcripcion`, `get_recetas`, `get_rutas` y `get_perfil_ruta`. Lo que escribe deja un
   mensaje de su papel en la conversación «Desde el PC», que la app enseña en Ajustes › «Lo que ha
   hecho el coach». La pieza vive en `conversaciones/desde_pc.py` y lee la carpeta médica de
-  `TRIDATA_MEDICOS_DIR`. El equipo solo necesita el extra `mcp` en el entorno del MCP
+  `health/` de `TRIDATA_DOCS` (unidad 104: la carpeta de papeles de deporte; sustituye a `TRIDATA_MEDICOS_DIR`, y
+  ningún fichero que pida el equipo —PDF o GPX— se lee fuera de ella: `sync.dentro_de`). `tridata backup` sin
+  `--dest` deja ahí, en `tridata-backup/`, un `.tar.gz` verificado (600; 14 últimas, como mucho un borrado al día;
+  lista negra de credenciales). El equipo solo necesita el extra `mcp` en el entorno del MCP
   (`pip install -e ".[mcp]"`): desde la 083 no hay IA de pago en el código (ni su librería ni dictado).
 - `tests/` con `tests/fixtures/` (datos inventados); `scripts/ci/` las comprobaciones;
   `daily_update.sh` y `.config/systemd/user/` la rutina diaria.

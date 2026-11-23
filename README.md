@@ -14,7 +14,6 @@
   <img src="docs/screenshots/today.png" width="200" alt="Hoy: kcal que quedan, entreno y cómo llegas">
   <img src="docs/screenshots/nutrition.png" width="200" alt="Nutrición: presupuesto de kcal y comidas del día">
   <img src="docs/screenshots/fitness.png" width="200" alt="Fitness: carga, última actividad y recuperación">
-  <img src="docs/screenshots/assistant.png" width="200" alt="El equipo: una conversación sobre un objetivo de 10K">
 </p>
 <p align="center"><sub>Capturas de las pruebas automáticas, con datos inventados.</sub></p>
 

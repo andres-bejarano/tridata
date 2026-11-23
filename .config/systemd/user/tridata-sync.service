@@ -3,6 +3,6 @@ Description=Tridata daily sync and export
 
 [Service]
 Type=oneshot
-ExecStart=/home/ankalagon/projects/tridata/daily_update.sh
+ExecStart=%h/projects/tridata/daily_update.sh
 StandardOutput=journal
 StandardError=journal

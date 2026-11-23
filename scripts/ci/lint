@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Lint (ruff, incl. bandit security rules) and type checks (mypy).
+# Personal files in the versioned tree (unit 105), lint (ruff, incl. bandit security rules)
+# and type checks (mypy).
 # Same command locally and in GitHub Actions (quality-security.yml, job `lint`).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -13,6 +14,8 @@ for module in ruff mypy; do
   fi
 done
 
+echo "== ficheros personales"
+python scripts/ci/ficheros_personales.py
 echo "== ruff"
 python -m ruff check --no-cache src tests
 echo "== mypy"

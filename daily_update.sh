@@ -5,9 +5,9 @@ cd "$(dirname "$0")" || exit 1
 
 # Sin entorno, las rutas de siempre. El test de la unidad 015 las cambia (un `tridata`
 # falso, log y exports en una carpeta temporal) para ejecutar este script de verdad.
-TRIDATA="${TRIDATA:-/home/ankalagon/anaconda3/envs/tridata/bin/tridata}"
-LOG="${LOG:-/home/ankalagon/projects/tridata/sync.log}"
-EXPORTS_DIR="${EXPORTS_DIR:-/home/ankalagon/projects/tridata/exports}"
+TRIDATA="${TRIDATA:-${HOME}/anaconda3/envs/tridata/bin/tridata}"
+LOG="${LOG:-${HOME}/projects/tridata/sync.log}"
+EXPORTS_DIR="${EXPORTS_DIR:-${HOME}/projects/tridata/exports}"
 EXPORT="$EXPORTS_DIR/garmin_export.md"
 METRICS="$EXPORTS_DIR/metrics.md"
 RUNNING="$EXPORTS_DIR/running.md"
@@ -25,7 +25,7 @@ NUTRICION="$EXPORTS_DIR/nutricion.md"
 # falta acordarse de nada por separado.
 WIDE_DAYS=45
 WIDE_INTERVAL_DAYS=7
-WIDE_MARKER="${WIDE_MARKER:-/home/ankalagon/.tridata/last_wide_sync}"
+WIDE_MARKER="${WIDE_MARKER:-${HOME}/.tridata/last_wide_sync}"
 
 # --- Reintentos ante fallos transitorios de login ------------------------
 # El login a Garmin ha fallado varias veces con "Failed to retrieve social

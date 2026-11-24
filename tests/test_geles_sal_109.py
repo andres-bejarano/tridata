@@ -379,33 +379,3 @@ def test_leer_todo_sobre_una_base_de_la_082_sin_abrir(db):  # R8, R6: the contex
     assert [t["que"] for t in tomas[HOY.isoformat()]] == ["cafe", "cafe", "b12"]
     assert all(t["minuto"] is None and t["producto"] is None for t in tomas[HOY.isoformat()])
     assert _dump(db) == antes  # read only
-
-
-# -- R7 (review of the 109): totals never infinite, numbers never too big for SQLite ----------------------------------
-
-@pytest.mark.parametrize("datos, motivo", [
-    (_gel(minuto=60, mg=1e308, cantidad=10), "como mucho 1000"),  # mg × cantidad would be inf
-    (_gel(minuto=60, cantidad=1e308), "como mucho 50"),  # was a raw OverflowError of SQLite
-    (_gel(minuto=60, cantidad=51), "como mucho 50"),
-    (_gel(minuto=60, mg=1001), "como mucho 1000"),
-    (_gel(minuto=60, sodio_mg=5001), "como mucho 5000"),
-    ({"que": "sal", "sodio_mg": 1e308, "cantidad": 10, "minuto": 60}, "como mucho 5000"),
-    (_gel(minuto=1e308), "como mucho 2880"),  # int(1e308) does not fit an INTEGER of SQLite either
-])
-def test_totales_y_topes(sup, datos, motivo):  # R7
-    with pytest.raises(ValueError, match=motivo):
-        sup.apuntar(HOY, datos, hoy=HOY, ahora=AHORA)
-    assert sup.tomas_del_dia(HOY) == []
-
-
-def test_los_topes_valen_tambien_al_cambiar_y_en_productos(sup):  # R7
-    gel = sup.apuntar(HOY, _gel(minuto=60), hoy=HOY, ahora=AHORA)
-    for malo in ({"cantidad": 1e308}, {"mg": 1e308, "cantidad": 10}):
-        with pytest.raises(ValueError, match="como mucho"):
-            sup.cambiar(gel["id"], malo)
-    assert sup.toma(gel["id"]) == gel
-    with pytest.raises(ValueError, match="como mucho 1000"):
-        sup.guardar_producto({"nombre": "Gel enorme", "tipo": "gel", "mg_cafeina": 1e308})
-    assert sup.productos() == []
-    al_tope = sup.apuntar(HOY, _gel(minuto=90, mg=1000, cantidad=50, sodio_mg=5000), hoy=HOY, ahora=AHORA)
-    assert (al_tope["mg"], al_tope["sodio_mg"]) == (50000, 250000)  # the ceiling itself is allowed

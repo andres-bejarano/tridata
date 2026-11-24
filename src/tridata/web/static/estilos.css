@@ -743,7 +743,7 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .suplementacion { display: grid; gap: 8px; padding: 12px 14px; margin-bottom: 12px; }
 .sup-cab { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; }
 .sup-titulo { font-weight: 700; font-size: 1.05rem; font-variant-caps: all-small-caps; letter-spacing: .06em; color: var(--suave); }
-.sup-resumen { font-weight: 650; font-size: .95rem; white-space: nowrap; }
+.sup-resumen { font-weight: 650; font-size: .95rem; }  /* unit 109: with gels it is longer, it may wrap */
 .sup-tomas { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .sup-tomas button.toma {
   width: 100%; min-height: 44px; display: grid; grid-template-columns: 3.2rem minmax(0, 1fr) auto auto; gap: 8px;
@@ -762,6 +762,23 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .ficha-toma { display: grid; gap: 10px; margin: 6px 0; }
 .ficha-toma .fila { grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr)); }
 .campo-solo { display: flex; align-items: center; gap: 8px; font-size: .9rem; }
+/* unit 109: gels and salt — «En carrera» by minute, the sodium of the day and the saved products */
+.sup-sub { margin: 4px 0 0; font-weight: 650; font-size: .9rem; color: var(--suave); }
+.sup-carrera .toma-hora { white-space: nowrap; }
+.sup-sodio { margin: 0; font-weight: 600; font-size: .92rem; }
+.suplementacion button.ver-productos { min-height: 44px; justify-self: start; padding: 0 16px; color: var(--acento); }
+.sup-productos { display: grid; gap: 8px; padding-top: 4px; border-top: 1px solid var(--borde); }
+.lista-productos { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.lista-productos button.producto {
+  width: 100%; min-height: 44px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px;
+  align-items: center; text-align: left; background: transparent; border: 0; border-top: 1px solid var(--borde);
+  border-radius: 0; padding: 6px 0; color: var(--texto); font: inherit;
+}
+.lista-productos li:first-child button.producto { border-top: 0; }
+.producto-nombre { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.producto-valores { color: var(--suave); font-size: .88rem; white-space: nowrap; }
+.ficha-producto { display: grid; gap: 10px; }
+.ficha-producto .fila { grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr)); }
 .seccion-hora {
   margin-left: auto; min-height: 44px; min-width: 44px; padding: 0 12px; font: inherit; font-weight: 600; font-size: .9rem;
   color: var(--acento); background: transparent; border: 1px solid var(--borde); border-radius: 999px;

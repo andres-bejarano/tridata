@@ -72,7 +72,7 @@ from ..nutricion.macros import vista as vista_macros
 from ..nutricion.objetivo_dia import ObjetivosDia
 from ..nutricion.peso import RegistroPeso
 from ..nutricion.registro import DIAS_MACROS, MACROS, SECCIONES, RegistroComidas, sin_macros_desde
-from ..nutricion.suplementacion import horas_de_secciones, leer_todo, resumen_dia
+from ..nutricion.suplementacion import horas_de_secciones, leer_productos, leer_todo, resumen_dia
 from ..plan import ABIERTA, Planes
 from ..plan import semanas as semanas_del_plan
 from ..storage import DataStore
@@ -106,7 +106,9 @@ sus PDF) y sus datos en JSON: "hoy" es la fecha de hoy y "dia_semana", qué día
 fechas de esta semana y de la siguiente con su día; cada fecha lleva su día de la semana al lado ("dia", "desde_dia", \
 "hasta_dia"): léelo de ahí y no lo calcules nunca; "dias", las últimas 8 semanas día a día (comidas con sus \
 kcal, peso, pasos, pulso en reposo, sueño, HRV, entrenos con su id y carga; "suplementacion", sus cafés y su B12 con \
-la hora, los mg de cafeína, el total del día, la última toma y la leche de los cafés repartida; "horas_comidas", la \
+la hora, los mg de cafeína, el total del día, la última toma y la leche de los cafés repartida, y sus geles con \
+cafeína y pastillas de sal (por hora, o en "en_carrera" por minuto de carrera, con su cafeína y su sodio; con geles, \
+la cafeína del día por origen, "cafeina_cafe_mg" y "cafeina_geles_mg", y "sodio_mg"); "horas_comidas", la \
 hora de cada comida del día, con «~» si es la típica y no la dijo). Solo los últimos 14 días (hoy y \
 los 13 anteriores) llevan sus alimentos ("comidas"), sus "horas_comidas" y su "suplementacion" entera; los días \
 anteriores de esas 8 semanas llevan todo lo demás (sus kcal, macros, peso, sueño, entrenos…) pero sin sus alimentos ni \
@@ -121,7 +123,10 @@ con lo previsto en segundos, su fase si la tiene y lo hecho según Garmin, sus f
 cuenta antes de proponerle cualquier sesión; las cerradas de su plan en curso, con su lección; cada una con sus \
 visitas al fisio o al médico (fecha, quién y qué le dijo); las que no dicen estado vienen de su .md; \
 "entrenos_previstos", los entrenos previstos que tiene apuntados (con «entreno previsto») de hoy a 14 días, \
-cada día con su nombre, sus minutos y sus kcal; "macros", sus proteínas, hidratos y grasa: "hoy" con lo que \
+cada día con su nombre, sus minutos y sus kcal; "productos_suplemento", sus geles y pastillas de sal guardados con su \
+cafeína y su sodio por unidad (para apuntar uno con apuntar_toma basta su nombre y cuántos); los días después de hoy \
+con geles o sal (una carrera o una tirada que aún no ha llegado) los llevan en "planeado_despues_de_hoy", en su \
+"suplementacion"; "macros", sus proteínas, hidratos y grasa: "hoy" con lo que \
 lleva comido, su objetivo según su último peso y sus \
 horas de entreno (las hechas o las del plan, las que sean más) y "texto", lo mismo en una línea; "ayer" con su \
 veredicto por macro; y "semanas", sus últimas semanas de lunes a domingo con la media al día y los días en rango; un \
@@ -250,16 +255,27 @@ def _secciones_con_comida(registro: RegistroComidas) -> dict[str, set[str]]:
     return por_dia
 
 
+def _toma_del_contexto(t: dict) -> dict[str, Any]:
+    if t["que"] in ("gel", "sal"):  # unit 109 (R-322): its product, number, minute and sodium
+        return _limpio({"hora": t["hora"], "minuto": t.get("minuto"), "que": t["texto"],
+                        "tipo": "gel" if t["que"] == "gel" else "sal", "cantidad": _r(t.get("cantidad"), 1),
+                        "mg": _r(t["mg"], 0), "sodio_mg": _r(t.get("sodio_mg"), 0)})
+    return _limpio({"hora": t["hora"], "que": t["texto"], "mg": _r(t["mg"], 0), "mg_estimado": t["mg_estimado"]
+                    if t["mg"] is not None else None, "leche_ml": _r(t["leche_ml"], 0), "solo": t["solo"] or None})
+
+
 def _suplementacion(tomas: list[dict], leche: dict | None) -> dict[str, Any] | None:
-    """Unit 082 (R-230): the doses of a day by hour with their mg and milk, the total, the last one and the milk."""
+    """Unit 082 (R-230): the doses of a day by hour with their mg and milk, the total, the last one and the milk.
+    Unit 109 (R-322, C-410): the gels and salts by minute in `en_carrera`, the caffeine by origin and the sodium."""
     if not tomas and not leche:
         return None
     r = resumen_dia(tomas, leche)
     return _limpio({
-        "tomas": [_limpio({"hora": t["hora"], "que": t["texto"], "mg": _r(t["mg"], 0), "mg_estimado": t["mg_estimado"]
-                           if t["mg"] is not None else None, "leche_ml": _r(t["leche_ml"], 0), "solo": t["solo"] or None})
-                  for t in r["tomas"]],
+        "tomas": [_toma_del_contexto(t) for t in r["tomas"]],
+        "en_carrera": [_toma_del_contexto(t) for t in r.get("en_carrera", [])],
         "cafeina_mg": _r(r["cafeina_mg"], 0) or None, "ultima": r["ultima"],
+        "cafeina_cafe_mg": _r(r.get("cafeina_cafe_mg"), 0), "cafeina_geles_mg": _r(r.get("cafeina_geles_mg"), 0),
+        "sodio_mg": _r(r.get("sodio_mg"), 0),
         "leche": {"ml": _r(leche["ml"], 0), "kcal": _r(leche["kcal"], 0), "repartida": r["leche"]["repartida"]}
         if leche and r["leche"] else None})
 
@@ -474,7 +490,15 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
         }))
 
     # -- after today: only what is planned -----------------------------------------------------------------------------
-    planeado = [{"fecha": d, "comidas": cs} for d, cs in sorted(comidas.items()) if d > hoy.isoformat()]
+    planeado = []
+    for d_futuro in sorted({*comidas, *tomas_de}):
+        if d_futuro > hoy.isoformat():
+            futuro: dict[str, Any] = {"fecha": d_futuro, "comidas": comidas.get(d_futuro, [])}
+            # unit 109 (C-410): the gels of a race to come
+            suplementos = _suplementacion(tomas_de.get(d_futuro, []), None)
+            if suplementos:
+                futuro["suplementacion"] = suplementos
+            planeado.append(futuro)
 
     v = ajustes.vigentes(hoy)
     pulso = historial.vigente(hoy)
@@ -507,6 +531,9 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     previstos = _entrenos_previstos(ObjetivosDia(registro.db_path), hoy)  # unit 071: the same SQLite
     if previstos:
         datos_json["entrenos_previstos"] = previstos
+    productos = leer_productos(registro.db_path)  # unit 109 (R-322): read only, the same SQLite
+    if productos:
+        datos_json["productos_suplemento"] = productos
     zapatillas = zapatillas_sin_crear(registro.db_path, hoy)  # unit 102: read only, the same SQLite
     if zapatillas:
         datos_json["zapatillas"] = para_el_contexto(zapatillas)

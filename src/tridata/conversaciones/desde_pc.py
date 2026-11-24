@@ -32,6 +32,11 @@ their hour and mg, apart from the foods and without kcal: `nutricion.suplementac
 milk of the coffees of a day, logged ONCE as a food with its kcal and spread among them) and the `hora` of the section
 in `apuntar_comida_desde_pc`. The same rule as `apuntar_comida`: Andrés's «sí» first, and «Hecho» only when done.
 
+Unit 109 (REC-52, R-317, R-319, R-322, R-323): `apuntar_toma_desde_pc` also logs gels with caffeine and salt tablets
+(product, number, mg and sodium per unit, hour or minute of the race; a saved product named without its mg gives its
+own), and says their kcal were NOT logged (S-108); `guardar_producto_desde_pc` saves or changes a saved product (by
+its name, without minding capitals) with the same «sí» and «Hecho».
+
 Bug 085: when a food is logged more than once with that name, the answer shows each one with its number, and the
 change says which one with `eleccion`.
 
@@ -80,7 +85,8 @@ from ..nutricion.ajustes import DESDE_SIEMPRE
 from ..nutricion.peso import peso_valido
 from ..nutricion.recetas import ErrorDatos, normalizar
 from ..nutricion.registro import validar_seccion
-from ..nutricion.suplementacion import FALTA_LA_HORA, Suplementacion, describir, validar_hora
+from ..nutricion.suplementacion import (FALTA_HORA_O_MINUTO, FALTA_LA_HORA, Suplementacion, describir,
+                                        validar_hora)
 from ..plan import Planes
 from ..plan import rutas as perfiles
 from ..plan.importar import apartados_del_coach, confirmar as confirmar_plan, proponer_ordenado
@@ -359,8 +365,18 @@ LECHE = "leche de los cafés"
 
 
 def _toma_dicha(t: dict) -> str:
+    if t["que"] in ("gel", "sal"):  # unit 109
+        cuando = " y ".join(([f"a las {t['hora']}"] if t.get("hora") else [])
+                            + ([f"en el min {t['minuto']}"] if t.get("minuto") is not None else []))
+        valores = ([f"{numero(t['mg'])} mg de cafeína"] if t.get("mg") is not None else []) + (
+            [f"{numero(t['sodio_mg'])} mg de sodio"] if t.get("sodio_mg") is not None else [])
+        return f"{describir(t)} {cuando}" + (f" ({', '.join(valores)})" if valores else "")
     mg = f" ({numero(t['mg'])} mg{' estimados' if t.get('mg_estimado') else ''})" if t.get("mg") is not None else ""
     return f"{describir(t)} a las {t['hora']}{mg}"
+
+
+SIN_KCAL_GEL = ("Sus kcal NO se han apuntado: pregúntale a Andrés si también quiere el gel como alimento en «Nutrición "
+                "en carrera» (con apuntar_comida, seccion carrera).")
 
 
 def apuntar_toma_desde_pc(equipo: Equipo, papel: str, dia: Any, tomas: Any, texto: str = "") -> str:
@@ -382,11 +398,40 @@ def apuntar_toma_desde_pc(equipo: Equipo, papel: str, dia: Any, tomas: Any, text
     try:
         guardadas = Suplementacion(a.registro.db_path).apuntar_varias(el_dia, tomas, hoy=a.hoy(), ahora=equipo.ahora())
     except ValueError as exc:
+        if FALTA_HORA_O_MINUTO in str(exc):
+            return (f"No se ha apuntado nada: {exc}. Pregúntale a Andrés a qué hora o en qué minuto de carrera y "
+                    "apúntalo con ello.")
         if FALTA_LA_HORA in str(exc):
             return f"No se ha apuntado nada: {exc}. Pregúntale a Andrés a qué hora fue y apúntala con ella."
         return f"No se ha apuntado nada: {exc}."
     hecho = (f"Hecho: apuntado el {el_dia.isoformat()} en Suplementación (sin kcal): "
              f"{'; '.join(_toma_dicha(t) for t in guardadas)}.")
+    _apuntar(equipo, papel, texto, hecho)
+    return f"{hecho} {SIN_KCAL_GEL}" if any(t["que"] == "gel" for t in guardadas) else hecho
+
+
+def guardar_producto_desde_pc(equipo: Equipo, papel: str, nombre: Any, tipo: Any, mg_cafeina: Any = None,
+                              sodio_mg: Any = None, texto: str = "") -> str:
+    """R-319, R-322 · S-107: a gel or a salt saved as a product (mg of caffeine and of sodium per unit), or the saved
+    one with that name (without minding capitals) changed. The doses already logged never change (G-70)."""
+    if papel not in PAPELES_PC:
+        return papel_no_valido(papel)
+    sup = Suplementacion(equipo.asistente.registro.db_path)
+    dichos = {"nombre": nombre, "tipo": tipo, "mg_cafeina": mg_cafeina, "sodio_mg": sodio_mg}
+    datos = {k: v for k, v in dichos.items() if v is not None}  # what he does not say stays as it was
+    try:
+        previo = sup.buscar_producto(nombre) if isinstance(nombre, str) else None
+        if previo is not None:
+            producto = sup.cambiar_producto(previo["id"], {**datos, "nombre": previo["nombre"]})
+        else:
+            producto = sup.guardar_producto(datos, ahora=equipo.ahora())
+    except ValueError as exc:
+        return f"No se ha guardado el producto: {exc}."
+    valores = ([f"{numero(producto['mg_cafeina'])} mg de cafeína"] if producto["mg_cafeina"] is not None else []) + (
+        [f"{numero(producto['sodio_mg'])} mg de sodio"] if producto["sodio_mg"] is not None else [])
+    clase = "gel" if producto["tipo"] == "gel" else "pastilla de sal"
+    hecho = (f"Hecho: {'cambiado' if previo is not None else 'guardado'} el producto «{producto['nombre']}» ({clase}"
+             f"{', ' + ' y '.join(valores) + ' por unidad' if valores else ''}). Las tomas ya apuntadas no cambian.")
     _apuntar(equipo, papel, texto, hecho)
     return hecho
 
@@ -1208,7 +1253,8 @@ def perfil_ruta_desde_pc(equipo: Equipo, garmin: Any = None, actividad: Any = No
 
 
 __all__ = ["MAX_DIAS_COMIDAS", "comidas_desde_pc", "NADA", "PAPELES_PC", "TITULO", "Equipo", "analiticas_pendientes", "apuntar_comida_desde_pc",
-           "apuntar_peso_desde_pc", "apuntar_toma_desde_pc", "leche_cafes_desde_pc", "contexto", "conversacion_pc", "guardar_transcripcion_desde_pc", "hacer_desde_pc",
+           "apuntar_peso_desde_pc", "apuntar_toma_desde_pc", "guardar_producto_desde_pc",
+           "leche_cafes_desde_pc", "contexto", "conversacion_pc", "guardar_transcripcion_desde_pc", "hacer_desde_pc",
            "guardar_macros_desde_pc", "huella", "importar_plan_desde_pc", "montar_equipo", "papel_no_valido",
            "perfil_ruta_desde_pc", "preparar_desde_pc", "preparar_macros_desde_pc", "preparar_plan_desde_pc", "preparar_transcripcion_desde_pc", "recetario_texto",
            "rutas_desde_pc", "texto_contexto", "texto_perfil", "preparar_zapatilla_desde_pc",

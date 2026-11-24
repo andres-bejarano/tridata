@@ -83,6 +83,17 @@
                                   hand (not estimated). Answers {"toma", "dia"}; no kcal change (G-60)
     POST /api/toma/N              unit 082: changes its hour, form, details, mg or «solo»; 404 / 422, nothing changes
     DELETE /api/toma/N            unit 082: deletes it, only with {"confirmado": true} (400 otherwise, nothing deleted)
+                                  Unit 109 (REC-52, R-317..R-321): also {"que": "gel"|"sal", "producto"?,
+                                  "producto_id"? (a saved one: its kind, name and values), "mg"? and "sodio_mg"? (per
+                                  unit), "cantidad"?, "hora"? or "minuto"?} (one of the two: 422 «falta la hora o el
+                                  minuto»); a change takes the same fields. The day's `suplementacion` also carries
+                                  `en_carrera` (by minute), `cafeina_cafe_mg` / `cafeina_geles_mg` (with gels) and
+                                  `sodio_mg` (with sodium); the day carries `productos` (the saved ones)
+    GET  /api/producto            unit 109 (R-319): {"productos"}: the saved gels and salts
+    POST /api/producto[/N]        unit 109: saves / changes one {"nombre", "tipo" (gel|sal), "mg_cafeina", "sodio_mg"}
+                                  (per unit); 422 if it does not pass or the name is already saved; the doses already
+                                  logged never change (G-70). Answers {"producto", "productos"}
+    DELETE /api/producto/N        unit 109: deletes it, only with {"confirmado": true}; answers {"producto", "productos"}
     POST /api/dia/AAAA-MM-DD/hora unit 082 (R-229): {"seccion", "hora" (HH:MM, or null: the typical one again)}: the
                                   hour of that section that day; kcal and margin untouched. Every day (/api/dia and
                                   the answers above) carries `suplementacion` (the doses by hour with their share of
@@ -407,7 +418,8 @@ def crear_app(
         garmin_sync = (aviso_sync(store.estado_sync() if store is not None else None, ahora())
                        if fecha == dia_hoy else None)
         return {**resumen, "hoy": dia_hoy.isoformat(), "garmin_sync": garmin_sync,  # unit 016 (R3): midnight
-                "suplementacion": suplementacion.resumen(fecha), "horas": suplementacion.horas_del_dia(fecha)}
+                "suplementacion": suplementacion.resumen(fecha), "horas": suplementacion.horas_del_dia(fecha),
+                "productos": suplementacion.productos()}  # unit 109: for «Añadir» of the block
 
     def _al_dia() -> None:
         """Today's screen first brings the days up to date (unit 014); a failure there never hides the day."""
@@ -862,6 +874,39 @@ def crear_app(
             return _error("Esa toma ya no está.", 404)
         return JSONResponse({"toma": toma, "dia": _dia(date.fromisoformat(toma["dia"]))})
 
+    # -- unit 109 (R-319, S-107): the saved gels and salts ---------------------------------------------------------------
+
+    def _productos(producto: dict) -> JSONResponse:
+        return JSONResponse({"producto": producto, "productos": suplementacion.productos()})
+
+    async def ver_productos(request: Request) -> Response:
+        return JSONResponse({"productos": suplementacion.productos()})
+
+    async def guardar_producto(request: Request) -> Response:
+        try:
+            producto = suplementacion.guardar_producto(await _cuerpo(request) or {}, ahora=ahora())
+        except ValueError as exc:
+            return _error(f"No se ha guardado el producto: {exc}.", 422)
+        return _productos(producto)
+
+    async def cambiar_producto(request: Request) -> Response:
+        try:
+            producto = suplementacion.cambiar_producto(request.path_params["id"], await _cuerpo(request) or {})
+        except KeyError:
+            return _error("Ese producto ya no está.", 404)
+        except ValueError as exc:
+            return _error(f"No se ha cambiado el producto: {exc}.", 422)
+        return _productos(producto)
+
+    async def borrar_producto(request: Request) -> Response:
+        if (await _cuerpo(request) or {}).get("confirmado") is not True:
+            return _error("Hay que confirmar antes de borrar: no se ha borrado nada.", 400)
+        try:
+            producto = suplementacion.borrar_producto(request.path_params["id"])
+        except KeyError:
+            return _error("Ese producto ya no está.", 404)
+        return _productos(producto)
+
     async def hora_seccion(request: Request) -> Response:
         texto = request.path_params["dia"]
         try:
@@ -1162,6 +1207,10 @@ def crear_app(
         Route("/api/toma", anadir_toma, methods=["POST"]),
         Route("/api/toma/{id:int}", cambiar_toma, methods=["POST"]),
         Route("/api/toma/{id:int}", borrar_toma, methods=["DELETE"]),
+        Route("/api/producto", ver_productos),
+        Route("/api/producto", guardar_producto, methods=["POST"]),
+        Route("/api/producto/{id:int}", cambiar_producto, methods=["POST"]),
+        Route("/api/producto/{id:int}", borrar_producto, methods=["DELETE"]),
         Route("/api/dia/{dia}/hora", hora_seccion, methods=["POST"]),
         *rutas_recetas(recetario, hoy, registro),
         *rutas_coach(conversaciones),

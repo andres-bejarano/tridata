@@ -25,8 +25,14 @@
 // shared with Ajustes › Pulso y zonas.
 // Unit 097 (REC-42): a fifth button of the range, «Elegir fechas», opens «desde», «hasta» and «Aplicar»
 // (/api/fitness?desde=&hasta=): the chart and «Tus semanas» of that period. Dates that are not valid show the
-// server's reason and nothing is repainted. Under «Tus semanas», the table of this period against the one before of
-// the same days (the `comparacion` of the answer): every sport and the total, whatever sport is chosen above.
+// server's reason and nothing is repainted.
+// Unit 108 (REC-51): «Tus semanas» is a line (grafica.js) in hours, km or load, and «Por zonas» (not with load) puts
+// a bar of zones under each point. The week marked (the one tapped, or the one in course when Fitness opens) shows
+// above the chart its dates and its distance, time and climb in large, and the panel of the week carries its bar of
+// zones. «Comparar con…» asks for both periods (/api/fitness?…&otro_desde=&otro_hasta=; comparing, a «hasta» may be
+// after today): two lines aligned by week number, one sentence with the total of each (the weeks still to come of
+// one do not count in either) and, tapping a number, both weeks side by side with a sentence of what changes; tapping
+// one opens its week. «Quitar comparación» goes back to one line. The table against the period before is gone.
 // Unit 102 (REC-46): under «Recuperación», «Zapatillas» (GET /api/zapatillas): each shoe in use with its km, its cap,
 // what is left (or gone over), «toca cambiarla pronto» / «pasada» and where the km come from with its date («de Strava,
 // el 21/11» · «dicho por ti, hoy»), and why the last read of Strava failed if it did. «Cambiar km» and «Cambiar tope»
@@ -41,7 +47,8 @@
 // (GET /api/zapatillas/carrera/ID: «25/11: 12,4 km con SonicBlast» · «Cambiar», a button per shoe), shared with Hoy
 // (`lineaZapatilla`). Not a run counted here (404): no line.
 
-import { graficaCarga, graficaPulso, graficaSemanas, leyendaCarga, leyendaSemanas } from "./grafica.js";
+import { CAPAS_ZONA, delDeporte, graficaCarga, graficaPulso, graficaSemanas, leyendaCarga, leyendaSemanas, valorSemana,
+  zonasSemana } from "./grafica.js";
 
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -58,7 +65,13 @@ let peticion = 0; // drops a late answer
 let abierta = null; // id of the activity whose detail is open
 let hoyISO = null;
 let dias = 42; // unit 090: the range on screen
-let medida = "horas"; // unit 090: what «Tus semanas» shows
+let medida = "horas"; // unit 090: what «Tus semanas» shows (unit 108: horas · km · carga)
+let porZonas = false; // unit 108: «Por zonas» on (only with horas or km)
+let comparando = null; // unit 108: {desde, hasta} of the second period on screen; null without comparing
+let otraVista = null; // unit 108: the weeks of the second period of the last answer
+let periodoOtro = null; // unit 108: its `periodo`
+let historialDesde = null; // unit 108: the first activity, when a period on screen starts before it
+let numeroElegido = null; // unit 108: comparing, the week number tapped
 let deporte = "todos"; // unit 091: the sport of «Tus semanas» (todos · correr · bici · nadar · fuerza)
 let semanasVistas = []; // the weeks of the last answer, to repaint without asking again
 let semanaElegida = null; // unit 093: the Monday of the week open under the chart
@@ -116,23 +129,39 @@ export function iniciarFitness(opciones) {
   $("fitness-rango").addEventListener("click", alPulsarRango);
   $("fitness-fechas").noValidate = true; // the server says why a date does not go (R-268)
   $("fitness-fechas").addEventListener("submit", (evento) => { evento.preventDefault(); aplicarFechas(); });
-  selector("fitness-medida", "medida", (valor) => { medida = valor; pintarSemanas(semanasVistas); });
+  selector("fitness-medidas", "medida", (valor) => {
+    medida = valor;
+    if (medida === "carga") porZonas = false; // R-311: with load there is no view by zones
+    pintarMedida();
+    pintarSemanas(semanasVistas);
+  });
+  $("fitness-por-zonas").addEventListener("click", () => { porZonas = !porZonas; pintarMedida(); pintarSemanas(semanasVistas); });
+  // unit 108 (R-313): «Comparar con…», «Quitar comparación» and the two weeks of a number
+  $("fitness-comparar-abrir").addEventListener("click", () => mostrarComparar($("fitness-comparar-form").hidden));
+  $("fitness-comparar-form").noValidate = true;
+  $("fitness-comparar-form").addEventListener("submit", (evento) => { evento.preventDefault(); aplicarComparar(); });
+  $("fitness-comparar-quitar").addEventListener("click", quitarComparacion);
+  $("fitness-comparar-semana").addEventListener("click", (evento) => {
+    const boton = evento.target.closest("button.semana-comparada");
+    if (boton) abrirSemanaDe(boton.dataset.lunes);
+  });
   selector("fitness-deporte", "deporte", (valor) => {
     deporte = valor;
     pintarSemanas(semanasVistas);
-    if (semanaElegida) cargarSemana();
+    if (semanaElegida && !$("fitness-semana").hidden) cargarSemana();
   });
   // unit 093: a tap on a week (its whole column), or Enter / Space on it
   const grafica = $("fitness-grafica-semanas");
+  const tocar = (g) => (otraVista ? alternarNumero(Number(g.dataset.n)) : alternarSemana(g.dataset.lunes));
   grafica.addEventListener("click", (evento) => {
     const g = evento.target.closest("g.semana");
-    if (g) alternarSemana(g.dataset.lunes);
+    if (g) tocar(g);
   });
   grafica.addEventListener("keydown", (evento) => {
     const g = evento.target.closest("g.semana");
     if (!g || (evento.key !== "Enter" && evento.key !== " ")) return;
     evento.preventDefault();
-    alternarSemana(g.dataset.lunes);
+    tocar(g);
   });
   $("fitness-semana-cerrar").addEventListener("click", cerrarSemana);
   // unit 107 (R2): ‹ › to the week before or after among those the chart paints, as tapping its bar
@@ -155,7 +184,7 @@ function mostrarFechas(abiertas) {
   $("fitness-rango").querySelector('button[data-dias="fechas"]').setAttribute("aria-expanded", String(abiertas));
   $("fitness-fechas-error").hidden = true;
   if (!abiertas) return;
-  if (hoyISO) { $("fitness-desde").max = hoyISO; $("fitness-hasta").max = hoyISO; }
+  if (hoyISO) { $("fitness-desde").max = hoyISO; $("fitness-hasta").max = comparando ? "" : hoyISO; } // R-316
   if (periodoVisto) { $("fitness-desde").value = periodoVisto.desde; $("fitness-hasta").value = periodoVisto.hasta; }
 }
 
@@ -191,22 +220,35 @@ function textoPeriodo(desde, hasta) {
 }
 
 // `candidatas` ({desde, hasta}): dates still to be accepted; a 400 says why and leaves the screen as it was (C-337).
-export async function cargarFitness(candidatas = null) {
+// Unit 108: `otroCandidato` ({desde, hasta}) a second period still to be accepted (undefined: the one on screen).
+export async function cargarFitness(candidatas = null, otroCandidato = undefined) {
   const mia = ++peticion;
   const elegidas = candidatas ?? fechas;
-  const consulta = elegidas ? `desde=${encodeURIComponent(elegidas.desde)}&hasta=${encodeURIComponent(elegidas.hasta)}` : `dias=${dias}`;
+  const otro = otroCandidato === undefined ? comparando : otroCandidato;
+  let consulta = elegidas ? `desde=${encodeURIComponent(elegidas.desde)}&hasta=${encodeURIComponent(elegidas.hasta)}` : `dias=${dias}`;
+  if (otro) consulta += `&otro_desde=${encodeURIComponent(otro.desde)}&otro_hasta=${encodeURIComponent(otro.hasta)}`;
   const { ok, datos } = await api(`/api/fitness?${consulta}`);
   if (mia !== peticion) return;
   if (!ok) {
+    if (otroCandidato) { errorComparar(datos.error ?? "Esas fechas no valen."); return; } // R-316: as it was
     if (candidatas) { errorFechas(datos.error ?? "Esas fechas no valen."); return; }
     $("fitness-pulso").textContent = datos.error ?? "No he podido cargar Fitness.";
     return;
   }
   if (candidatas) { fechas = candidatas; marcarRango("fechas"); }
+  if (otroCandidato !== undefined) {
+    comparando = otroCandidato;
+    numeroElegido = null;
+    if (comparando) mostrarComparar(false);
+  }
   hoyISO = datos.fecha;
   periodoVisto = datos.periodo ?? null;
+  otraVista = datos.otro?.semanas ?? null;
+  periodoOtro = datos.otro?.periodo ?? null;
+  historialDesde = datos.historial_desde ?? datos.otro?.historial_desde ?? null;
+  if (otraVista && numeroElegido && numeroElegido > Math.max(otraVista.length, (datos.semanas ?? []).length)) numeroElegido = null;
+  $("fitness-comparar-quitar").hidden = !comparando;
   pintarCarga(datos.carga);
-  pintarComparacion(datos.comparacion);
   // unit 093: another range keeps the week open if it is still on the chart
   if (semanaElegida && !(datos.semanas ?? []).some((s) => s.lunes === semanaElegida)) cerrarSemana();
   pintarSemanas(datos.semanas ?? []);
@@ -510,14 +552,237 @@ function pintarPropuestas(lista) {
   })));
 }
 
+const zonasActivas = () => porZonas && medida !== "carga";
+
+// Unit 108: «Por zonas» only with hours or km, pressed or not
+function pintarMedida() {
+  const boton = $("fitness-por-zonas");
+  boton.hidden = medida === "carga";
+  boton.setAttribute("aria-pressed", String(zonasActivas()));
+}
+
 function pintarSemanas(semanas) {
   semanasVistas = semanas;
   const caja = $("fitness-grafica-semanas");
-  const enfocada = caja.contains(document.activeElement) ? document.activeElement.dataset?.lunes : null;
-  caja.replaceChildren(graficaSemanas(semanas, medida, caja.clientWidth - 8, deporte, semanaElegida),
-    leyendaSemanas(medida, deporte, semanas.some((s) => s.aproximado)));
-  if (enfocada) caja.querySelector(`g.semana[data-lunes="${enfocada}"]`)?.focus(); // the keyboard keeps its place
+  const enfocada = caja.contains(document.activeElement)
+    ? (otraVista ? `[data-n="${document.activeElement.dataset?.n}"]` : `[data-lunes="${document.activeElement.dataset?.lunes}"]`) : null;
+  // R-312: the week marked is the one open, or the one in course
+  const marcada = otraVista ? null : semanaElegida ?? semanas.find((s) => s.en_curso)?.lunes ?? semanas.at(-1)?.lunes ?? null;
+  const largo = Math.max(periodoVisto?.semanas ?? 0, periodoOtro?.semanas ?? 0);
+  const aproximado = semanas.some((s) => s.aproximado) || (otraVista ?? []).some((s) => s.aproximado);
+  caja.replaceChildren(graficaSemanas(semanas, medida, caja.clientWidth - 8, deporte, semanaElegida,
+    { porZonas: zonasActivas(), otra: otraVista, largo, marcada, numero: numeroElegido }),
+  leyendaSemanas(medida, deporte, aproximado,
+    { porZonas: zonasActivas(), periodos: otraVista ? [periodoCorto(periodoVisto), periodoCorto(periodoOtro)] : null }));
+  if (enfocada) caja.querySelector(`g.semana${enfocada}`)?.focus(); // the keyboard keeps its place
+  pintarCabecera(marcada);
+  pintarFrase();
+  pintarDoble();
   pintarFlechas();
+}
+
+// -- unit 108: the week marked in large, the comparison of two periods (R-312..R-316) -------------------------------
+
+const diaMesSinPunto = (iso) => diaMesCorto.format(new Date(`${iso}T12:00:00`)).replace(".", "");
+
+// «9 nov – 15 nov 2026» (with both years when the week goes from one to the other)
+function rangoSemana(lunes, domingo) {
+  const [a1, a2] = [lunes.slice(0, 4), domingo.slice(0, 4)];
+  return a1 === a2 ? `${diaMesSinPunto(lunes)} – ${diaMesSinPunto(domingo)} ${a2}`
+    : `${diaMesSinPunto(lunes)} ${a1} – ${diaMesSinPunto(domingo)} ${a2}`;
+}
+
+// «6h 45min», as Strava
+function tiempoStrava(horasSemana) {
+  const m = Math.round((horasSemana ?? 0) * 60);
+  return m < 60 ? `${m}min` : `${Math.floor(m / 60)}h ${m % 60}min`;
+}
+
+// Distance (2 decimals), time and climb of a week for the sport chosen; «—» where there is nothing to say
+function cifrasDe(s) {
+  const d = delDeporte(s, deporte);
+  return [["Distancia", d.km === null || d.km === undefined ? "—" : `${dosDecimales.format(d.km)} km`],
+    ["Tiempo", tiempoStrava(d.horas)],
+    ["Desnivel", d.subida_m === null || d.subida_m === undefined ? "—" : `${enteras.format(d.subida_m)} m`]];
+}
+
+const datosCabecera = (s) => el("div", { className: "datos-cabecera" }, ...cifrasDe(s).map(([titulo, valor]) =>
+  el("div", { className: "dato-cabecera" }, el("span", { textContent: titulo }), el("strong", { className: "num", textContent: valor }))));
+
+function pintarCabecera(lunes) {
+  const caja = $("fitness-semana-cabecera");
+  const s = lunes ? semanasVistas.find((x) => x.lunes === lunes) : null;
+  caja.hidden = !s;
+  if (!s) { caja.replaceChildren(); return; }
+  caja.replaceChildren(
+    el("p", { className: "fechas-cabecera" }, rangoSemana(s.lunes, s.domingo),
+      s.en_curso ? el("span", { className: "suave", textContent: " · en curso" }) : null),
+    datosCabecera(s));
+}
+
+// R-312: the bar of zones of a week, in the measure (load: hours), with its figures in text
+function barraZonasPanel(s) {
+  const en = medida === "km" ? "km" : "horas";
+  const partes = zonasSemana(s, en, deporte);
+  if (!partes.length) return el("p", { className: "suave sin-zonas-semana", textContent: "Sin zonas esta semana." });
+  const total = partes.reduce((a, [, v]) => a + v, 0);
+  const texto = (v) => (en === "km" ? `${unDecimal.format(v)} km` : minutos(v * 3600));
+  const nombre = (clave) => CAPAS_ZONA.find(([c]) => c === clave)[1];
+  const barra = el("div", { className: "barra-zona-panel", role: "img",
+    ariaLabel: `Por zonas: ${partes.map(([c, v]) => `${nombre(c)} ${texto(v)}`).join(", ")}` },
+  ...partes.map(([clave, v]) => {
+    const trozo = el("span", { className: `trozo-zona capa-${clave}`, title: `${nombre(clave)}: ${texto(v)}` });
+    trozo.style.flexGrow = String(v / total);
+    return trozo;
+  }));
+  return el("div", { className: "zonas-semana-panel" }, barra,
+    el("small", { className: "suave", textContent: `${partes.map(([c, v]) => `${nombre(c)} ${texto(v)}`).join(" · ")} · aproximado por vueltas` }));
+}
+
+// «1/9–6/12/2026» (each end with its year when they are of different years)
+function periodoCorto(p) {
+  if (!p) return "";
+  const [a1, m1, d1] = p.desde.split("-").map(Number), [a2, m2, d2] = p.hasta.split("-").map(Number);
+  return a1 === a2 ? `${d1}/${m1}–${d2}/${m2}/${a2}` : `${d1}/${m1}/${a1}–${d2}/${m2}/${a2}`;
+}
+
+// How the first period is called in the sentences: «este año» against another year, else «este periodo»
+function nombreEste() {
+  const a = periodoVisto?.desde.slice(0, 4), b = periodoOtro?.desde.slice(0, 4);
+  if (a === b) return "este periodo";
+  return a === hoyISO?.slice(0, 4) ? "este año" : `en ${a}`;
+}
+
+const UNIDAD = { horas: "h", km: "km", carga: "de carga" };
+const cantidad = (v) => `${medida === "carga" ? enteras.format(Math.round(v)) : hastaUnDecimal.format(v)} ${UNIDAD[medida]}`;
+function conSignoMedida(v) {
+  const texto = cantidad(Math.abs(v));
+  return cantidad(0) === texto ? texto : `${v > 0 ? "+" : "−"}${texto}`;
+}
+
+function minutosConSigno(segundos) {
+  const m = Math.round(Math.abs(segundos) / 60);
+  const texto = m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+  return `${segundos > 0 ? "+" : "−"}${texto}`;
+}
+
+// R-314: the total of each period and the difference in one sentence; the weeks still to come of one period do not
+// count in either (the two are compared up to the same week). R-316: the history warning.
+function pintarFrase() {
+  const frase = $("fitness-comparar-frase"), aviso = $("fitness-comparar-aviso");
+  aviso.hidden = !(otraVista && historialDesde);
+  aviso.textContent = otraVista && historialDesde
+    ? `Ojo: tu historial empieza el ${fechaLarga(historialDesde)}; antes no hay datos que comparar.` : "";
+  frase.hidden = !otraVista;
+  if (!otraVista) { frase.textContent = ""; return; }
+  if (deporte === "fuerza" && medida === "km") { frase.textContent = "La fuerza no suma km."; return; }
+  const nA = semanasVistas.length, nB = otraVista.length;
+  const corte = Math.min(nA < (periodoVisto?.semanas ?? nA) ? nA : Infinity, nB < (periodoOtro?.semanas ?? nB) ? nB : Infinity);
+  const cuentaA = Math.min(nA, corte), cuentaB = Math.min(nB, corte);
+  const suma = (lista, k) => lista.slice(0, k).reduce((a, s) => a + valorSemana(s, medida, deporte), 0);
+  const a = suma(semanasVistas, cuentaA), b = suma(otraVista, cuentaB);
+  const semanasTexto = (k) => `${k} ${k === 1 ? "semana" : "semanas"}`;
+  const pct = b ? Math.round(((a - b) / b) * 100) : null;
+  const pctTexto = pct === null ? "—" : `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${enteras.format(Math.abs(pct))} %`;
+  frase.textContent = `${periodoCorto(periodoVisto)}: ${cantidad(a)} en ${semanasTexto(cuentaA)} · `
+    + `${periodoCorto(periodoOtro)}: ${cantidad(b)} en ${semanasTexto(cuentaB)} → ${nombreEste()} ${conSignoMedida(a - b)} (${pctTexto})`;
+}
+
+function alternarNumero(n) {
+  if (!n) return;
+  numeroElegido = numeroElegido === n ? null : n;
+  pintarSemanas(semanasVistas);
+  if (numeroElegido) $("fitness-comparar-semana").scrollIntoView({ block: "nearest" });
+}
+
+function tarjetaComparada(s, etiqueta, serie) {
+  const boton = el("button", { type: "button", className: `semana-comparada serie-${serie}` },
+    el("span", { className: "periodo-comparado", textContent: etiqueta }),
+    el("strong", { className: "fechas-cabecera", textContent: rangoSemana(s.lunes, s.domingo) }),
+    datosCabecera(s), barraZonasPanel(s),
+    el("span", { className: "ver-semana-comparada", textContent: "Ver sus actividades ›" }));
+  boton.dataset.lunes = s.lunes;
+  return boton;
+}
+
+// R-315, R-316: the two weeks of the number tapped side by side, and a sentence: the difference in the measure and
+// the zone whose time changed most; a period without that week says why.
+function pintarDoble() {
+  const caja = $("fitness-comparar-semana");
+  if (!otraVista || !numeroElegido) { caja.hidden = true; caja.replaceChildren(); return; }
+  const n = numeroElegido, a = semanasVistas[n - 1], b = otraVista[n - 1];
+  const falta = (p, propio) => (n > (p?.semanas ?? 0)
+    ? (propio ? `tu periodo no llega a la sem ${n}` : `el otro periodo no llega a la sem ${n}`)
+    : `la sem ${n} ${propio ? "de tu periodo" : "del otro periodo"} aún no ha llegado`);
+  const nodos = [];
+  if (a && b) {
+    const dif = valorSemana(a, medida, deporte) - valorSemana(b, medida, deporte);
+    let texto = `sem ${n}: ${nombreEste()} ${deporte === "fuerza" && medida === "km" ? "la fuerza no suma km" : conSignoMedida(dif)}`;
+    const za = delDeporte(a, deporte).zonas ?? {}, zb = delDeporte(b, deporte).zonas ?? {};
+    const [clave, cambio] = CAPAS_ZONA.slice(0, 5).map(([c]) => [c, (za[c] ?? 0) - (zb[c] ?? 0)])
+      .reduce((m, x) => (Math.abs(x[1]) > Math.abs(m[1]) ? x : m), ["z1", 0]);
+    if (Math.abs(cambio) >= 60) texto += ` y ${minutosConSigno(cambio)} en ${clave.toUpperCase()}`;
+    nodos.push(el("p", { className: "frase-semana-comparada", textContent: texto }));
+  } else {
+    nodos.push(el("p", { className: "suave falta-semana-comparada", textContent: !a ? falta(periodoVisto, true) : falta(periodoOtro, false) }));
+  }
+  nodos.push(el("div", { className: "semanas-comparadas" },
+    a ? tarjetaComparada(a, periodoCorto(periodoVisto), "a") : null,
+    b ? tarjetaComparada(b, periodoCorto(periodoOtro), "b") : null));
+  caja.replaceChildren(...nodos);
+  caja.hidden = false;
+}
+
+// Tapping one of the two weeks opens its panel, as tapping a point (R-312)
+function abrirSemanaDe(lunes) {
+  if (!lunes) return;
+  semanaElegida = lunes;
+  pintarFlechas();
+  cargarSemana();
+  $("fitness-semana").scrollIntoView({ block: "nearest" });
+}
+
+function mostrarComparar(abierto) {
+  $("fitness-comparar-form").hidden = !abierto;
+  $("fitness-comparar-abrir").setAttribute("aria-expanded", String(abierto));
+  $("fitness-comparar-error").hidden = true;
+  if (!abierto || !periodoVisto) return;
+  $("fitness-este-desde").value = periodoVisto.desde;
+  $("fitness-este-hasta").value = periodoVisto.hasta;
+  const unAnoAntes = (iso) => `${Number(iso.slice(0, 4)) - 1}${iso.slice(4)}`.replace("-02-29", "-02-28");
+  $("fitness-otro-desde").value = comparando?.desde ?? unAnoAntes(periodoVisto.desde);
+  $("fitness-otro-hasta").value = comparando?.hasta ?? unAnoAntes(periodoVisto.hasta);
+}
+
+function errorComparar(texto) {
+  $("fitness-comparar-error").textContent = texto;
+  $("fitness-comparar-error").hidden = false;
+}
+
+async function aplicarComparar() {
+  const valor = (id) => $(id).value;
+  const este = { desde: valor("fitness-este-desde"), hasta: valor("fitness-este-hasta") };
+  const otro = { desde: valor("fitness-otro-desde"), hasta: valor("fitness-otro-hasta") };
+  if (!este.desde || !este.hasta || !otro.desde || !otro.hasta) { errorComparar("Elige las cuatro fechas."); return; }
+  $("fitness-comparar-error").hidden = true;
+  await cargarFitness(este, otro);
+}
+
+// R-313: back to one line; a «hasta» after today goes back to today (without comparing it cannot pass it)
+async function quitarComparacion() {
+  numeroElegido = null;
+  if (fechas && hoyISO && fechas.hasta > hoyISO) {
+    const largo = Math.round((new Date(`${hoyISO}T12:00:00Z`) - new Date(`${fechas.desde}T12:00:00Z`)) / 86_400_000) + 1;
+    if (largo >= 7) {
+      fechas = { desde: fechas.desde, hasta: hoyISO };
+    } else {
+      fechas = null;
+      dias = 42;
+      marcarRango("42");
+    }
+  }
+  mostrarComparar(false);
+  await cargarFitness(null, null);
 }
 
 // -- unit 093: the week tapped, its activities and the session of one ------------------------------------------------
@@ -563,6 +828,9 @@ async function cargarSemana() {
   panel.hidden = false;
   $("fitness-semana-titulo").textContent = tituloSemana(lunes, sumarDias(lunes, 6), false);
   $("fitness-semana-totales").replaceChildren();
+  // unit 108 (R-312): its bar of zones, from the weeks already on screen (of either period)
+  const semana = [...semanasVistas, ...(otraVista ?? [])].find((s) => s.lunes === lunes);
+  $("fitness-semana-zonas").replaceChildren(...(semana ? [barraZonasPanel(semana)] : []));
   $("fitness-semana-lista").replaceChildren(el("p", { className: "suave", textContent: "Cargando la semana…" }));
   const { ok, datos } = await api(`/api/fitness/semana?lunes=${encodeURIComponent(lunes)}&deporte=${encodeURIComponent(deporte)}`);
   if (mia !== peticionSemana) return;
@@ -656,47 +924,8 @@ function pintarCarga(c) {
   $("fitness-pulso").classList.toggle("aviso", !c.pulso.confirmada);
 }
 
-// -- unit 097: this period against the one before (R-264..R-267) ---------------------------------------------------
-
-const NOMBRES_TABLA = { correr: "Carrera", bici: "Bici", nadar: "Natación", fuerza: "Fuerza", otros: "Otros", total: "Total" };
-const MEDIDAS_TABLA = [["horas", "Horas", (v) => `${unDecimal.format(v)} h`], ["km", "Km", (v) => `${unDecimal.format(v)} km`],
-  ["sesiones", "Sesiones", (v) => enteras.format(v)], ["horas_semana", "Horas por semana", (v) => `${unDecimal.format(v)} h`]];
+// «1/9/2026»
 const fechaLarga = (iso) => { const [a, m, d] = iso.split("-").map(Number); return `${d}/${m}/${a}`; };
-
-// The difference with its sign, coloured «more» / «less» without judging it (no traffic lights), and its % or «—».
-function celdaDiferencia(valor, pct, formato) {
-  const td = el("td");
-  if (valor === null) { td.textContent = "—"; return td; }
-  const texto = formato(Math.abs(valor));
-  const cero = formato(0) === texto;
-  td.append(cero ? texto : `${valor > 0 ? "+" : "−"}${texto}`);
-  if (!cero) td.classList.add(valor > 0 ? "dif-mas" : "dif-menos");
-  td.append(el("span", { className: "pct", textContent: pct === null ? "—" : `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${enteras.format(Math.abs(pct))} %` }));
-  return td;
-}
-
-function pintarComparacion(c) {
-  if (!c) return;
-  $("fitness-comparar-periodos").textContent = `Este periodo, ${textoPeriodo(c.este.desde, c.este.hasta)} (${c.este.dias} días), frente al anterior, ${textoPeriodo(c.anterior.desde, c.anterior.hasta)}.`;
-  const aviso = $("fitness-comparar-aviso");
-  aviso.hidden = !c.historial_desde;
-  aviso.textContent = c.historial_desde
-    ? `Ojo: tu historial empieza el ${fechaLarga(c.historial_desde)}, así que el periodo anterior no está entero y no doy %.` : "";
-  const cabeza = el("thead", {}, el("tr", {}, el("th", { scope: "col", textContent: "" }),
-    el("th", { scope: "col", textContent: "Este periodo" }), el("th", { scope: "col", textContent: "El anterior" }),
-    el("th", { scope: "col", textContent: "Diferencia" })));
-  const cuerpos = c.filas.map((f) => {
-    const cuerpo = el("tbody", {}, el("tr", {}, el("th", { scope: "colgroup", colSpan: 4, textContent: NOMBRES_TABLA[f.deporte] ?? f.deporte })));
-    cuerpo.dataset.deporte = f.deporte;
-    for (const [clave, nombre, formato] of MEDIDAS_TABLA) {
-      const valor = (v) => (v === null ? "—" : formato(v));
-      cuerpo.append(el("tr", {}, el("td", { textContent: nombre }), el("td", { textContent: valor(f.este[clave]) }),
-        el("td", { textContent: valor(f.anterior[clave]) }), celdaDiferencia(f.diferencia[clave], f.porcentaje[clave], formato)));
-    }
-    return cuerpo;
-  });
-  $("fitness-comparar-tabla").replaceChildren(el("table", { ariaLabel: "Este periodo frente al anterior, por deporte" }, cabeza, ...cuerpos));
-}
 
 function chips(a) {
   const lista = [];

@@ -403,8 +403,9 @@ def test_semanas_por_rango_y_sin_actividades(tmp_path):  # R3, R6
     assert [fitness.SEMANAS_DE[d] for d in fitness.RANGOS_DIAS] == [2, 6, 13, 52]
     f = fitness.fitness(store, ajustes.historial_fc(), HOY, dias=365)
     assert len(f["semanas"]) == 52 and f["carga"]["serie"] == []
-    assert all(s["total"] == {"horas": 0, "km": 0, "carga": 0,
-                              "zonas": {"z1": 0, "z2": 0, "z3": 0, "z4": 0, "z5": 0, "sin_pulso": 0}}
+    ceros = {"z1": 0, "z2": 0, "z3": 0, "z4": 0, "z5": 0, "sin_pulso": 0}
+    assert all(s["total"] == {"horas": 0, "km": 0, "carga": 0, "zonas": ceros,
+                              "zonas_km": ceros, "subida_m": None}  # unit 108: km by zone and climb
                for s in f["semanas"])
     assert f["semanas"][-1]["en_curso"] is True and f["semanas"][-1]["lunes"] == LUNES.isoformat()
     assert len(fitness.fitness(store, ajustes.historial_fc(), HOY)["semanas"]) == 6

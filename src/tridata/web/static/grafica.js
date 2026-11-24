@@ -262,127 +262,176 @@ export function leyendaCarga() {
   return p;
 }
 
-// Unit 090 (R-234..R-236): the weeks of Fitness, Monday to Sunday (`semanas` of GET /api/fitness), one bar per week
-// stacked by sport (correr, bici, nadar, fuerza, otros) or, in «zonas», by zone of HR (Z1..Z5 and «sin pulso»,
-// approximated by laps). `medida`: "horas" | "km" | "carga" | "zonas" (zones in hours). Each week is a <g class="semana">
-// with its Monday; the week in course is `.en-curso` and says «en curso» under it. The total of each week is written
-// over its bar when there is room (and always in its tooltip). Strength has no km: the server sends `km` null.
-// Unit 091 (R-237, R-238): `deporte` "todos" | "correr" | "bici" | "nadar" | "fuerza". With one sport each week is only
-// that sport (one layer, or its own zones in «zonas») and its total is that sport's; a week without it is at zero and
-// stays. Strength in km draws no bar and says that strength adds no km.
-// Unit 093 (R-239, S-83): each week is a button (focusable, Enter/Space, aria-pressed) whose touch area is its whole
-// column (`.toque-semana`, under the bars), so a thin bar is still easy to tap; `elegida` (a Monday) marks that week
-// (`.elegida`). fitness.js listens to the taps on the chart and keeps the choice across repaints.
-export const CAPAS_DEPORTE = [["correr", "correr"], ["bici", "bici"], ["nadar", "nadar"], ["fuerza", "fuerza"], ["otros", "otros"]];
+// Unit 090 (R-234): the weeks of Fitness, Monday to Sunday (`semanas` of GET /api/fitness). `medida`: "horas" | "km" |
+// "carga". Each week is a <g class="semana"> with its Monday; the week in course is `.en-curso` and says «en curso» under
+// it. Strength has no km: the server sends `km` null. Unit 091 (R-237, R-238): `deporte` "todos" | "correr" | "bici" |
+// "nadar" | "fuerza": with one sport each week is that sport's figure, with «todos» the total; strength in km draws no
+// line and says that strength adds no km. Unit 093 (R-239, S-83): each week is a button (focusable, Enter/Space,
+// aria-pressed) whose touch area is its whole column (`.toque-semana`), so a small point is still easy to tap;
+// `elegida` (a Monday) is the week whose panel is open (`.elegida`). fitness.js listens to the taps on the chart.
+// Unit 108 (REC-51, R-310..R-316): no more bars stacked by sport — ONE line as Strava's: a point per week
+// (`.punto-semana`, with its `data-valor`) joined by `path.linea-semanas`, with `path.area-semanas` filled under it; a
+// week without sessions is a point at 0. `marcada` (a Monday: the panel's, or the week in course when Fitness opens)
+// carries a vertical line (`.raya-semana`). `porZonas` (hours or km, never load) puts under each point a bar of its
+// height split by zone (`.barra-zona`, Z1..Z5 and «sin pulso»: the seconds of `zonas`, or the km of `zonas_km`).
+// `otra` (the weeks of a second period) draws it as a second line (`.serie-b`: dashed, hollow points; the first is
+// `.serie-a`) aligned by week number: the X axis says «sem 1, sem 2…», each column is a <g class="semana" data-n> and
+// `largo` is how many weeks the longer period has (its weeks still to come are not drawn: the line stops); `numero`
+// (N) marks that column.
 export const CAPAS_ZONA = [["z1", "Z1"], ["z2", "Z2"], ["z3", "Z3"], ["z4", "Z4"], ["z5", "Z5"], ["sin_pulso", "sin pulso"]];
-const UNIDAD_SEMANA = { horas: "h", km: "km", carga: "carga", zonas: "h" };
+const UNIDAD_SEMANA = { horas: "h", km: "km", carga: "carga" };
 const PASOS_SEMANA = [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
-const unDecimalSemana = new Intl.NumberFormat("es-ES", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const dosDecimalesSemana = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 });
 
 // The figures of a week for `deporte`: the week's total or that sport's (unit 091).
-const delDeporte = (s, deporte) => (deporte === "todos" ? s.total : s.deportes[deporte]) ?? {};
+export const delDeporte = (s, deporte) => (deporte === "todos" ? s.total : s.deportes[deporte]) ?? {};
 
-function valorSemana(s, clave, medida, deporte = "todos") {
-  if (medida === "zonas") return (delDeporte(s, deporte).zonas?.[clave] ?? 0) / 3600;
-  return s.deportes[clave]?.[medida] ?? 0;
+// The value of a week in `medida` (0 for strength in km: it has none).
+export function valorSemana(s, medida, deporte = "todos") {
+  return delDeporte(s, deporte)[medida] ?? 0;
 }
 
-function totalSemana(s, medida, deporte = "todos") {
+// Unit 108 (R-311): the parts of the bar of zones of a week — `[[zona, valor]…]` scaled so that they add up to the
+// value of the week (hours: the seconds in each zone; km: the km in each zone).
+export function zonasSemana(s, medida, deporte = "todos") {
   const d = delDeporte(s, deporte);
-  if (medida === "zonas") return Object.values(d.zonas ?? {}).reduce((a, b) => a + b, 0) / 3600;
-  return d[medida] ?? 0;
+  const por = medida === "km" ? d.zonas_km : d.zonas;
+  const total = valorSemana(s, medida, deporte);
+  if (!por || !total) return [];
+  const suma = Object.values(por).reduce((a, b) => a + b, 0);
+  if (!suma) return [];
+  return CAPAS_ZONA.map(([clave]) => [clave, (por[clave] ?? 0) * total / suma]).filter(([, v]) => v > 0);
 }
 
-// The layers drawn: the zones, every sport, or only the one chosen (none for strength in km).
-function capasSemana(medida, deporte) {
-  if (medida === "zonas") return CAPAS_ZONA;
-  if (deporte === "todos") return CAPAS_DEPORTE;
-  if (deporte === "fuerza" && medida === "km") return [];
-  return CAPAS_DEPORTE.filter(([clave]) => clave === deporte);
-}
+const textoMedida = (v, medida) => (medida === "carga" ? enteras.format(Math.round(v)) : dosDecimalesSemana.format(v));
+const conDos = (v) => String(Math.round(v * 100) / 100);
 
-const textoMedida = (v, medida) => (medida === "carga" ? enteras.format(Math.round(v)) : unDecimalSemana.format(v));
-
-export function graficaSemanas(semanas, medida = "horas", ancho = ANCHO_POR_DEFECTO, deporte = "todos", elegida = null) {
+export function graficaSemanas(semanas, medida = "horas", ancho = ANCHO_POR_DEFECTO, deporte = "todos", elegida = null,
+  { porZonas = false, otra = null, largo = null, marcada = null, numero = null } = {}) {
   const W = Math.max(260, Math.round(ancho || ANCHO_POR_DEFECTO));
   const x0 = 34, x1 = W - 8, arriba = 24, abajo = 186;
   const H = abajo + 44; // unit 107: «en curso» goes on a second line, under the date of its week
-  const n = Math.max(semanas.length, 1);
-  const hueco = (x1 - x0) / n;
-  const capas = capasSemana(medida, deporte);
+  const comparando = Array.isArray(otra);
+  const n = comparando ? Math.max(largo ?? 0, semanas.length, otra.length) : semanas.length;
+  const hueco = (x1 - x0) / Math.max(n, 1);
   const fuerzaSinKm = deporte === "fuerza" && medida === "km";
+  const zonas = porZonas && medida !== "carga" && !fuerzaSinKm;
   const deQuien = deporte === "todos" ? "" : ` de ${deporte}`;
-  const totales = semanas.map((s) => (fuerzaSinKm ? 0 : totalSemana(s, medida, deporte)));
-  const maximo = Math.max(0, ...totales);
+  const valor = (s) => (fuerzaSinKm ? 0 : valorSemana(s, medida, deporte));
+  const valoresA = semanas.map(valor), valoresB = comparando ? otra.map(valor) : [];
+  const maximo = Math.max(0, ...valoresA, ...valoresB);
   const paso = PASOS_SEMANA.find((p) => Math.ceil(maximo / p) <= 4) ?? 10_000;
   const tope = Math.max(paso, Math.ceil(maximo / paso) * paso);
   const y = escala(0, tope, arriba, abajo);
+  const centro = (i) => x0 + (i + 0.5) * hueco;
   const partes = [`<text class="titulo-eje" x="4" y="12">${UNIDAD_SEMANA[medida]}</text>`];
   for (let v = 0; v <= tope + 1e-9; v += paso) {
     partes.push(`<line class="${v ? "rejilla" : "linea-cero"}" x1="${x0}" y1="${f1(y(v))}" x2="${x1}" y2="${f1(y(v))}"/>`,
       `<text class="eje" x="${x0 - 6}" y="${f1(y(v) + 4)}" text-anchor="end">${ejeKg.format(v)}</text>`);
   }
-  const w = Math.max(Math.min(3, hueco), hueco * 0.7);
-  const conTotal = hueco >= 20 && !fuerzaSinKm;
+  // the line (and the area of the first series) under the columns, so that the points stay on top
+  const camino = (valores) => valores.map((v, i) => `${i ? "L" : "M"}${f1(centro(i))},${f1(y(v))}`).join("");
+  if (!fuerzaSinKm && valoresA.length) {
+    const linea = camino(valoresA);
+    partes.push(`<path class="area-semanas serie-a" d="${linea}L${f1(centro(valoresA.length - 1))},${f1(y(0))}L${f1(centro(0))},${f1(y(0))}Z"/>`,
+      `<path class="linea-semanas serie-a" d="${linea}"/>`);
+  }
+  if (!fuerzaSinKm && comparando && valoresB.length) partes.push(`<path class="linea-semanas serie-b" d="${camino(valoresB)}"/>`);
   const cada = Math.max(1, Math.ceil(SEPARACION_MIN / hueco));
-  const xCurso = Math.min(Math.max(x0 + (semanas.length - 0.5) * hueco, 24), W - 24); // «en curso», kept inside
-  semanas.forEach((s, i) => {
-    const centro = x0 + (i + 0.5) * hueco;
-    const desde = etiquetaDia(s.lunes), hasta = etiquetaDia(s.domingo);
-    const total = totales[i];
-    const resumen = `Semana del ${desde} al ${hasta}${s.en_curso ? " (en curso)" : ""}${deQuien}: ${fuerzaSinKm ? "la fuerza no suma km" : `${textoMedida(total, medida)} ${UNIDAD_SEMANA[medida]}`}`;
-    const dentro = [`<title>${resumen}</title>`,
-      `<rect class="toque-semana" x="${f1(x0 + i * hueco)}" y="${arriba - 16}" width="${f1(hueco)}" height="${abajo - arriba + 40}"/>`];
+  const xCurso = (i) => Math.min(Math.max(centro(i), 24), W - 24); // «en curso», kept inside
+  const r = Math.max(2.5, Math.min(4.5, hueco / 4));
+  const ancho1 = comparando ? Math.max(1.5, Math.min(10, hueco * 0.32)) : Math.max(2, Math.min(14, hueco * 0.5));
+
+  const barraZonas = (s, xc, clase) => {
     let base = 0;
-    for (const [clave, nombre] of capas) {
-      const v = valorSemana(s, clave, medida, deporte);
-      if (!v) continue; // a sport with nothing (or strength in km) draws nothing
+    return zonasSemana(s, medida, deporte).map(([clave, v]) => {
       const top = y(base + v), bajo = y(base);
-      const atributo = medida === "zonas" ? `data-zona="${clave}"` : `data-deporte="${clave}"`;
-      dentro.push(`<rect class="barra-semana capa-${clave}" ${atributo} data-valor="${v}" x="${f1(centro - w / 2)}" y="${f1(top)}" width="${f1(w)}" height="${f1(Math.max(1, bajo - top))}"><title>${nombre}: ${textoMedida(v, medida)} ${UNIDAD_SEMANA[medida]}</title></rect>`);
       base += v;
+      const nombre = CAPAS_ZONA.find(([c]) => c === clave)[1];
+      return `<rect class="barra-zona capa-${clave}${clase}" data-zona="${clave}" data-valor="${conDos(v)}" x="${f1(xc - ancho1 / 2)}" y="${f1(top)}" width="${f1(ancho1)}" height="${f1(Math.max(0.5, bajo - top))}"><title>${nombre}: ${textoMedida(v, medida)} ${UNIDAD_SEMANA[medida]}</title></rect>`;
+    });
+  };
+  const punto = (s, i, serie) => {
+    const v = valor(s);
+    return `<circle class="punto-semana serie-${serie}" data-valor="${conDos(v)}" cx="${f1(centro(i))}" cy="${f1(y(v))}" r="${f1(r)}"/>`;
+  };
+  const resumenDe = (s) => `Semana del ${etiquetaDia(s.lunes)} al ${etiquetaDia(s.domingo)}${s.en_curso ? " (en curso)" : ""}${deQuien}: ${fuerzaSinKm ? "la fuerza no suma km" : `${textoMedida(valor(s), medida)} ${UNIDAD_SEMANA[medida]}`}`;
+
+  for (let i = 0; i < n; i++) {
+    const s = semanas[i] ?? null, o = comparando ? otra[i] ?? null : null;
+    const dentro = [`<rect class="toque-semana" x="${f1(x0 + i * hueco)}" y="${arriba - 16}" width="${f1(hueco)}" height="${abajo - arriba + 40}"/>`];
+    const conRaya = comparando ? numero === i + 1 : s && s.lunes === marcada;
+    if (conRaya) dentro.push(`<line class="raya-semana" x1="${f1(centro(i))}" y1="${arriba - 8}" x2="${f1(centro(i))}" y2="${abajo}"/>`);
+    if (zonas) {
+      const dx = comparando ? ancho1 * 0.6 : 0;
+      if (s) dentro.push(...barraZonas(s, centro(i) - dx, comparando ? " serie-a" : ""));
+      if (o) dentro.push(...barraZonas(o, centro(i) + dx, " serie-b"));
     }
-    if (conTotal) dentro.push(`<text class="total-semana" x="${f1(centro)}" y="${f1(y(total) - 4)}" text-anchor="middle">${textoMedida(total, medida)}</text>`);
-    // Unit 107 (R1): every week of the cadence keeps its date (counted back from the one in course, the one before it
-    // too); «en curso» no longer competes for that place: it goes below, on a line of its own.
-    if ((semanas.length - 1 - i) % cada === 0) {
-      const xt = Math.min(Math.max(centro, 18), W - 18);
-      dentro.push(`<text class="etiqueta-x" x="${f1(xt)}" y="${abajo + 18}" text-anchor="middle">${desde}</text>`);
+    if (!fuerzaSinKm) {
+      if (o) dentro.push(punto(o, i, "b"));
+      if (s) dentro.push(punto(s, i, "a"));
     }
-    if (s.en_curso) {
-      dentro.push(`<text class="etiqueta-x etiqueta-en-curso" x="${f1(xCurso)}" y="${abajo + 36}" text-anchor="middle">en curso</text>`);
+    let resumen;
+    if (comparando) {
+      const partesResumen = [s ? resumenDe(s) : "este periodo no tiene esta semana", o ? resumenDe(o) : "el otro periodo no llega"];
+      resumen = `Sem ${i + 1}: ${partesResumen.join(" · ")}`;
+      if (i % cada === 0) {
+        const xt = Math.min(Math.max(centro(i), 18), W - 18);
+        dentro.push(`<text class="etiqueta-x" x="${f1(xt)}" y="${abajo + 18}" text-anchor="middle">sem ${i + 1}</text>`);
+      }
+    } else {
+      resumen = resumenDe(s);
+      // Unit 107 (R1): every week of the cadence keeps its date (counted back from the one in course)
+      if ((semanas.length - 1 - i) % cada === 0) {
+        const xt = Math.min(Math.max(centro(i), 18), W - 18);
+        dentro.push(`<text class="etiqueta-x" x="${f1(xt)}" y="${abajo + 18}" text-anchor="middle">${etiquetaDia(s.lunes)}</text>`);
+      }
     }
-    const marcada = s.lunes === elegida;
-    partes.push(`<g class="semana${s.en_curso ? " en-curso" : ""}${marcada ? " elegida" : ""}" data-lunes="${s.lunes}" tabindex="0" role="button" aria-pressed="${marcada}" aria-label="${resumen}. Ver sus actividades">${dentro.join("")}</g>`);
-  });
+    if (s?.en_curso) dentro.push(`<text class="etiqueta-x etiqueta-en-curso" x="${f1(xCurso(i))}" y="${abajo + 36}" text-anchor="middle">en curso</text>`);
+    dentro.unshift(`<title>${resumen}</title>`);
+    const pulsada = comparando ? numero === i + 1 : Boolean(s) && s.lunes === elegida;
+    const atributos = comparando
+      ? `data-n="${i + 1}" data-lunes="${s?.lunes ?? ""}" data-lunes-otro="${o?.lunes ?? ""}"`
+      : `data-lunes="${s.lunes}"`;
+    const clases = `semana${s?.en_curso ? " en-curso" : ""}${pulsada ? " elegida" : ""}${conRaya ? " marcada" : ""}`;
+    partes.push(`<g class="${clases}" ${atributos} tabindex="0" role="button" aria-pressed="${pulsada}" aria-label="${resumen}. ${comparando ? "Ver las dos semanas" : "Ver sus actividades"}">${dentro.join("")}</g>`);
+  }
   if (fuerzaSinKm) {
     partes.push(`<text class="eje" x="${(x0 + x1) / 2}" y="${(arriba + abajo) / 2}" text-anchor="middle">La fuerza no suma km</text>`);
   } else if (!maximo) {
     partes.push(`<text class="eje" x="${(x0 + x1) / 2}" y="${(arriba + abajo) / 2}" text-anchor="middle">Sin entrenos${deQuien} en estas semanas</text>`);
   }
   const lienzo = document.createElement("div");
-  const que = { horas: "horas", km: "kilómetros", carga: "carga", zonas: "tiempo en cada zona de pulso" }[medida];
-  lienzo.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="group" aria-label="Tus semanas de lunes a domingo: ${que}${deQuien} por ${medida === "zonas" ? "zona" : deporte === "todos" ? "deporte" : "semana"}">${partes.join("")}</svg>`;
+  const que = { horas: "horas", km: "kilómetros", carga: "carga" }[medida];
+  lienzo.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="group" aria-label="Tus semanas de lunes a domingo: ${que}${deQuien} por semana${comparando ? ", dos periodos" : ""}${zonas ? ", por zonas" : ""}">${partes.join("")}</svg>`;
   return lienzo.firstChild;
 }
 
-// The legend of the weeks, with text and not only colour; in «zonas» it says it is approximated by laps (R-235).
-// Unit 091: with one sport, only what is drawn. Unit 094 (R-253): «aproximado por vueltas» only while `aproximado`
-// (some session of the range still without its detail second by second).
-export function leyendaSemanas(medida = "horas", deporte = "todos", aproximado = true) {
+// The legend of the weeks, with text and not only colour (unit 091: only what is drawn). Unit 094 (R-253):
+// «aproximado por vueltas» only while `aproximado`. Unit 108: the zones only «por zonas» (never with «carga»), and
+// comparing, the two periods by their dates — the first a solid line with full points, the other dashed and hollow.
+export function leyendaSemanas(medida = "horas", deporte = "todos", aproximado = true, { porZonas = false, periodos = null } = {}) {
   const p = document.createElement("p");
   p.className = "leyenda-grafica leyenda-semanas";
-  const capas = capasSemana(medida, deporte).filter(([clave]) => medida !== "km" || clave !== "fuerza");
-  capas.forEach(([clave, texto], i) => {
+  const trozos = [];
+  if (periodos) {
+    trozos.push(["ley-serie-a", "—●", periodos[0]], ["ley-serie-b", "┄○", periodos[1]]);
+  }
+  const fuerzaSinKm = deporte === "fuerza" && medida === "km";
+  if (porZonas && medida !== "carga" && !fuerzaSinKm) {
+    for (const [clave, texto] of CAPAS_ZONA) trozos.push([`ley-capa capa-${clave}`, "■", texto]);
+  }
+  if (!periodos && !trozos.length) trozos.push(["ley-serie-a", "—●", `${{ horas: "horas", km: "km", carga: "carga" }[medida]} por semana${deporte === "todos" ? "" : ` de ${deporte}`}`]);
+  trozos.forEach(([clase, marca, texto], i) => {
     if (i) p.append(" · ");
     const s = document.createElement("span");
-    s.className = `ley-capa capa-${clave}`;
-    s.textContent = "■";
+    s.className = clase;
+    s.textContent = marca;
     s.ariaHidden = "true";
     p.append(s, ` ${texto}`);
   });
-  if (medida === "km" && (deporte === "todos" || deporte === "fuerza")) p.append(capas.length ? " · la fuerza no suma km" : "la fuerza no suma km");
-  if (medida === "zonas" && aproximado) p.append(" · aproximado por vueltas");
+  if (medida === "km" && (deporte === "todos" || deporte === "fuerza")) p.append(trozos.length ? " · la fuerza no suma km" : "la fuerza no suma km");
+  if (porZonas && medida !== "carga" && !fuerzaSinKm && aproximado) p.append(" · aproximado por vueltas");
   return p;
 }
 

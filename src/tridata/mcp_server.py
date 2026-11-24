@@ -23,6 +23,8 @@ save write their message in «Desde el PC» too. None of them calls a paid AI; o
 Unit 082 (REC-34): `apuntar_toma` (coffees and B12 with their hour and mg, apart from the foods, without kcal) and
 `apuntar_leche_cafes` (the milk of the coffees of a day, once, spread among them), with the same «sí» and «Hecho» as
 `apuntar_comida`, which takes the `hora` of its section too.
+Unit 109 (REC-52, R-322): `apuntar_toma` also logs gels with caffeine and salt tablets (by hour or minute of the race),
+and `guardar_producto_suplemento` saves or changes a saved gel or salt, with the same «sí» and «Hecho».
 Unit 098 (REC-43, R-269..R-273): `preparar_macros` (read-only: what has no macros, and the table and fingerprint of the
 team's values) and `guardar_macros` (with Andrés's «sí» and that fingerprint, as «estimado»); `get_recetas` shows the
 macros of what is saved, and `apuntar_comida` asks the team to estimate those of anything not saved.
@@ -381,8 +383,8 @@ def build_server(store: DataStore, limites_fc: Callable[[], LimitesDelDia | None
 def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
     """Unit 065 (R-186) and 066 (R-190 to R-197): the tools of the team on the PC."""
     from .conversaciones.desde_pc import (PAPELES_PC, TITULO, apuntar_comida_desde_pc, apuntar_peso_desde_pc,
-                                          apuntar_toma_desde_pc, hacer_desde_pc, leche_cafes_desde_pc,
-                                          preparar_desde_pc, texto_contexto)
+                                          apuntar_toma_desde_pc, guardar_producto_desde_pc, hacer_desde_pc,
+                                          leche_cafes_desde_pc, preparar_desde_pc, texto_contexto)
     from .nutricion.suplementacion import FORMAS, HORAS_TIPICAS
     from .nutricion.asistente import texto_acciones
 
@@ -397,7 +399,10 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         also carries `suplementacion` (coffees and B12 with their hour and mg, the caffeine of the day, the last dose
         and the milk of the coffees) and `horas_comidas` (the hour of each section with food, «~» if typical), next to
         its sleep, to relate them; unit 100: only the last 14 days carry them, the earlier ones only the caffeine of
-        the day. Read-only."""
+        the day. Unit 109: `suplementacion` also carries the gels and salt tablets (by hour, and «en_carrera» by
+        minute of the race), the caffeine by origin (`cafeina_cafe_mg`, `cafeina_geles_mg`) and the sodium; the days
+        after today with gels or salt carry it in `planeado_despues_de_hoy`; `productos_suplemento`, his saved gels
+        and salts. Read-only."""
         return texto_contexto(equipo)
 
     papeles = f"papel: who you are, one of {', '.join(PAPELES_PC)}."
@@ -468,7 +473,8 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         return apuntar_comida_desde_pc(equipo, papel, dia, alimentos, texto, seccion, hora)
 
     toma_desc = (
-        "Log Andrés's coffees and B12 of one day in Nutrición › Día › «Suplementación», apart from the meals and "
+        "Log Andrés's coffees, B12, gels and salt tablets of one day in Nutrición › Día › «Suplementación», apart "
+        "from the meals and "
         "WITHOUT kcal (the total and the margin do not change; the milk goes with apuntar_leche_cafes). FIRST show him "
         "each dose with its form, its hour and the mg of caffeine you estimate, and ask; only with his «sí» call this. "
         "All of them or none; the answer says why if not.\n"
@@ -479,6 +485,16 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         "caffeine you estimate, always) and solo (true if he says it had no milk). For the B12, dosis (optional "
         "text) and nothing else. Without hora: a dose of today takes the hour it is now; of another day nothing is "
         "logged and the answer says «falta la hora»: ask him. texto (optional): what he said, in Spanish.\n"
+        "Gels with caffeine and salt tablets (also for a race or a long training on a day that has not come yet, "
+        "«la tirada del domingo»): que gel or sal, producto (its name), cantidad (how many, > 0; default 1), mg (gel: "
+        "the mg of caffeine PER GEL) and sodio_mg (the mg of sodium per unit; required for a salt tablet), and hora "
+        "(HH:MM) or minuto (the minute of the race, an integer: «en el min 60»); one dose per moment (two gels at "
+        "minutes 60 and 90 are two doses). If producto is one of his saved products (get_contexto, "
+        "productos_suplemento) and he does not say the mg, omit mg and sodio_mg: the saved ones are used, × cantidad. "
+        "Without hora or minuto nothing is logged and the answer says «falta la hora o el minuto»: ask him. Logging a "
+        "gel does NOT log its kcal: ask him whether he also wants it as a food in «Nutrición en carrera» "
+        "(apuntar_comida, seccion carrera). When a gel or a salt tablet is not saved yet, offer to save it with "
+        "guardar_producto_suplemento.\n"
         + registro)
 
     @server.tool(name="apuntar_toma", description=toma_desc,
@@ -487,6 +503,24 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
                  structured_output=False)
     def apuntar_toma_tool(papel: str, dia: str, tomas: list[dict[str, Any]], texto: str = "") -> str:
         return apuntar_toma_desde_pc(equipo, papel, dia, tomas, texto)
+
+    producto_desc = (
+        "Save one of Andrés's gels with caffeine or salt tablets as a product, so its values are used each time it "
+        "is logged with apuntar_toma (by its name), or change the saved one with that name (capitals do not matter). "
+        "FIRST show him the name, the kind and the values per unit and ask; only with his «sí» call this. Changing "
+        "or saving a product never changes the doses already logged.\n"
+        f"{papeles} nombre: its name («Gel 226 cola»). tipo: gel or sal. mg_cafeina: the mg of caffeine per gel "
+        "(required for a gel; 0 if it has none; omit it for a salt). sodio_mg: the mg of sodium per unit (required "
+        "for a salt). To change one, give its name and only what changes. texto (optional): what he said.\n"
+        + registro)
+
+    @server.tool(name="guardar_producto_suplemento", description=producto_desc,
+                 annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                             open_world_hint=False),
+                 structured_output=False)
+    def guardar_producto_suplemento_tool(papel: str, nombre: str, tipo: str, mg_cafeina: float | None = None,
+                                         sodio_mg: float | None = None, texto: str = "") -> str:
+        return guardar_producto_desde_pc(equipo, papel, nombre, tipo, mg_cafeina, sodio_mg, texto)
 
     leche_desc = (
         "Log the milk Andrés put in his coffees of one day, as he says it at the end of the day («hoy 250 ml de leche "

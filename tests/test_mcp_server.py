@@ -133,9 +133,11 @@ def test_server_with_the_team_adds_its_tools(tmp_path, store):  # unit 065 R-186
         "preparar_macros", "guardar_macros",  # unit 098: the macros of what is saved, filled in once
         "get_comidas",  # unit 100: the foods of older days, by dates (R-281)
         "preparar_zapatilla", "apuntar_zapatilla",  # unit 102: the km of a shoe said by Andrés (R-291)
+        "guardar_producto_suplemento",  # unit 109
     }  # `proponer_cambio` (065) is gone: no card is left anywhere
     escriben = {"hacer_cambio", "apuntar_comida", "apuntar_peso", "importar_plan", "guardar_transcripcion",
-                "apuntar_toma", "apuntar_leche_cafes", "guardar_macros", "apuntar_zapatilla"}
+                "apuntar_toma", "apuntar_leche_cafes", "guardar_macros", "apuntar_zapatilla",
+                "guardar_producto_suplemento"}  # unit 109
     assert {n for n, t in tools.items() if not t.annotations.read_only_hint} == escriben
     preparar = tools["preparar_cambio"]
     assert texto_acciones() in preparar.description  # the same catalogue the team of the app sees

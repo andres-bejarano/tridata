@@ -151,3 +151,13 @@ def test_cambio_no_valido_de_un_gel_no_cambia(entorno):  # R7
         r = entorno.cliente.post(f"/api/toma/{gel['id']}", json=malo)
         assert r.status_code == 422, malo
     assert Suplementacion(entorno.db).toma(gel["id"]) == gel
+
+
+@pytest.mark.parametrize("cuerpo", [
+    {"que": "gel", "mg": 1e308, "cantidad": 10, "minuto": 60},
+    {"que": "gel", "mg": 100, "cantidad": 1e308, "minuto": 60},
+])
+def test_numeros_enormes_son_422_no_500(entorno, cuerpo):  # R7 (review of the 109)
+    r = entorno.cliente.post("/api/toma", json={"dia": HOY.isoformat(), **cuerpo})
+    assert r.status_code == 422 and "como mucho" in r.json()["error"]
+    assert Suplementacion(entorno.db).tomas_del_dia(HOY) == []

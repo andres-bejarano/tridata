@@ -186,24 +186,25 @@ def test_rango_semanas_y_como_se_calcula(servidor, abrir, ir_a, capturar, oscuro
     expect(p.locator("#fitness-grafica-semanas")).to_contain_text("en curso")
     expect(p.locator("#fitness-medida button[aria-pressed=\"true\"]")).to_have_text("Horas")
 
-    # C-291, C-294: km stacked by sport, the week total, strength without km
+    # unit 108 (R-310, C-393): km as ONE line, a point per week with its value; strength without km
     p.locator("#fitness-medida").get_by_role("button", name="Km").click()
     previa = p.locator(f'#fitness-grafica-semanas svg .semana[data-lunes="{PREVIA.isoformat()}"]')
-    for deporte in ("correr", "bici", "nadar"):
-        expect(previa.locator(f'.barra-semana[data-deporte="{deporte}"]')).to_have_count(1)
-    expect(previa.locator(".total-semana")).to_have_text("116,5")  # 54 running + 60 cycling + 2,5 swimming
+    expect(p.locator("#fitness-grafica-semanas svg path.linea-semanas")).to_have_count(1)
+    expect(p.locator("#fitness-grafica-semanas svg .barra-semana")).to_have_count(0)  # no more stacked bars
+    expect(previa.locator(".punto-semana")).to_have_attribute("data-valor", "116.5")  # 54 run + 60 bike + 2,5 swim
     en_curso = p.locator("#fitness-grafica-semanas svg .semana.en-curso")
-    expect(en_curso.locator('.barra-semana[data-deporte="fuerza"]')).to_have_count(0)
-    expect(p.locator("#fitness-semanas .leyenda-grafica")).to_contain_text("correr")
+    expect(en_curso.locator(".punto-semana")).to_have_attribute("data-valor", "0")  # strength: 0 km
+    expect(p.locator("#fitness-semanas .leyenda-grafica")).to_contain_text("la fuerza no suma km")
     _sin_scroll(p, "semanas-km")
     p.locator("#fitness-semanas").scroll_into_view_if_needed()
     capturar(p, f"fitness-semanas-km{sufijo}")
 
-    # C-292, C-293: zones by laps, «aproximado por vueltas»
-    p.locator("#fitness-medida").get_by_role("button", name="Zonas").click()
+    # C-292, C-293 (unit 108: «por zonas» over the hours): zones by laps, «aproximado por vueltas»
+    p.locator("#fitness-medida").get_by_role("button", name="Horas").click()
+    p.locator("#fitness-medida").get_by_role("button", name="Por zonas").click()
     expect(p.locator("#fitness-semanas")).to_contain_text("aproximado por vueltas")
-    expect(previa.locator('.barra-semana[data-zona="sin_pulso"]')).to_have_count(1)
-    expect(previa.locator('.barra-semana[data-zona="z4"]')).to_have_count(1)
+    expect(previa.locator('.barra-zona[data-zona="sin_pulso"]')).to_have_count(1)
+    expect(previa.locator('.barra-zona[data-zona="z4"]')).to_have_count(1)
     expect(p.locator("#fitness-semanas .leyenda-grafica")).to_contain_text("sin pulso")
     capturar(p, f"fitness-semanas-zonas{sufijo}")
 
@@ -264,30 +265,29 @@ def test_semanas_de_un_deporte(servidor, abrir, ir_a, capturar, oscuro):  # E2E-
     p = abrir(servidor, "/#dia", oscuro=oscuro)
     ir_a(p, "fitness")
     grafica = p.locator("#fitness-grafica-semanas")
-    barras = grafica.locator("svg .barra-semana")
+    puntos = grafica.locator("svg .punto-semana")
+    zonas = grafica.locator("svg .barra-zona")
     deporte = p.locator("#fitness-deporte")
     medida = p.locator("#fitness-medida")
     previa, sin_bici, en_curso = _semana(p, PREVIA), _semana(p, SIN_BICI), grafica.locator("svg .semana.en-curso")
+    valor = lambda semana: semana.locator(".punto-semana")  # noqa: E731
 
-    # C-295: it opens in «Todos», the chart as before (every sport of the week stacked)
+    # C-295: it opens in «Todos» (unit 108: the line of the total of every sport)
     expect(deporte.locator('button[aria-pressed="true"]')).to_have_text("Todos")
     for nombre in ("Todos", "Correr", "Bici", "Nadar", "Fuerza"):
         expect(deporte.get_by_role("button", name=nombre)).to_be_visible()
     medida.get_by_role("button", name="Km").click()
-    expect(previa.locator(".total-semana")).to_have_text("40,0")  # 10 running + 30 cycling (the swim has no distance)
-    expect(previa.locator('.barra-semana[data-deporte="correr"]')).to_have_count(1)
+    expect(valor(previa)).to_have_attribute("data-valor", "40")  # 10 running + 30 cycling (the swim has no distance)
 
-    # C-295 (R1, the load-bearing one): «Bici» + km shows only the bike and its total; a week without bike at zero
+    # C-295 (R1, the load-bearing one): «Bici» + km shows only the bike; a week without bike is a point at zero
     deporte.get_by_role("button", name="Bici").click()
     expect(deporte.locator('button[aria-pressed="true"]')).to_have_text("Bici")
     expect(grafica.locator("svg .semana")).to_have_count(6)
-    expect(barras).to_have_count(2)
-    expect(grafica.locator('svg .barra-semana:not([data-deporte="bici"])')).to_have_count(0)
-    expect(previa.locator(".total-semana")).to_have_text("30,0")
-    expect(en_curso.locator(".total-semana")).to_have_text("15,0")
+    expect(puntos).to_have_count(6)
+    expect(valor(previa)).to_have_attribute("data-valor", "30")
+    expect(valor(en_curso)).to_have_attribute("data-valor", "15")
     expect(grafica).to_contain_text("en curso")
-    expect(sin_bici.locator(".barra-semana")).to_have_count(0)
-    expect(sin_bici.locator(".total-semana")).to_have_text("0,0")
+    expect(valor(sin_bici)).to_have_attribute("data-valor", "0")
     expect(p.locator("#fitness-semanas .leyenda-grafica")).to_contain_text("bici")
     expect(p.locator("#fitness-semanas .leyenda-grafica")).not_to_contain_text("correr")
     _sin_scroll(p, "semanas-bici-km")
@@ -297,50 +297,47 @@ def test_semanas_de_un_deporte(servidor, abrir, ir_a, capturar, oscuro):  # E2E-
     # changing the measure or the range keeps the sport
     medida.get_by_role("button", name="Horas").click()
     expect(deporte.locator('button[aria-pressed="true"]')).to_have_text("Bici")
-    expect(previa.locator(".total-semana")).to_have_text("0,5")
-    expect(en_curso.locator(".total-semana")).to_have_text("0,8")
-    expect(grafica.locator('svg .barra-semana:not([data-deporte="bici"])')).to_have_count(0)
+    expect(valor(previa)).to_have_attribute("data-valor", "0.5")
+    expect(valor(en_curso)).to_have_attribute("data-valor", "0.75")
     p.locator("#fitness-rango").get_by_role("button", name="3 meses").click()
     expect(grafica.locator("svg .semana")).to_have_count(13)
     expect(deporte.locator('button[aria-pressed="true"]')).to_have_text("Bici")
-    expect(barras).to_have_count(2)
-    expect(grafica.locator('svg .barra-semana:not([data-deporte="bici"])')).to_have_count(0)
+    expect(puntos).to_have_count(13)
     p.locator("#fitness-rango").get_by_role("button", name="6 semanas").click()
     expect(grafica.locator("svg .semana")).to_have_count(6)
 
     # C-296 (R2): «Correr» + zones: only the zones of the runs (Z2 and Z4), not the bike's Z5 nor the swim without HR
     deporte.get_by_role("button", name="Correr").click()
-    medida.get_by_role("button", name="Zonas").click()
+    medida.get_by_role("button", name="Por zonas").click()
     expect(p.locator("#fitness-semanas")).to_contain_text("aproximado por vueltas")
-    expect(previa.locator('.barra-semana[data-zona="z2"]')).to_have_count(1)
-    expect(previa.locator('.barra-semana[data-zona="z4"]')).to_have_count(1)
-    expect(previa.locator('.barra-semana[data-zona="z5"]')).to_have_count(0)
-    expect(previa.locator('.barra-semana[data-zona="sin_pulso"]')).to_have_count(0)
-    expect(previa.locator(".total-semana")).to_have_text("0,5")  # 30 min of laps of the run
-    expect(en_curso.locator(".barra-semana")).to_have_count(0)
+    expect(previa.locator('.barra-zona[data-zona="z2"]')).to_have_count(1)
+    expect(previa.locator('.barra-zona[data-zona="z4"]')).to_have_count(1)
+    expect(previa.locator('.barra-zona[data-zona="z5"]')).to_have_count(0)
+    expect(previa.locator('.barra-zona[data-zona="sin_pulso"]')).to_have_count(0)
+    expect(valor(previa)).to_have_attribute("data-valor", "0.5")  # 30 min of the run
+    expect(en_curso.locator(".barra-zona")).to_have_count(0)
     capturar(p, f"fitness-semanas-correr-zonas{sufijo}")
     # with «Todos» the zones add every sport again
     deporte.get_by_role("button", name="Todos").click()
-    expect(previa.locator('.barra-semana[data-zona="z5"]')).to_have_count(1)
-    expect(previa.locator('.barra-semana[data-zona="sin_pulso"]')).to_have_count(1)
+    expect(previa.locator('.barra-zona[data-zona="z5"]')).to_have_count(1)
+    expect(previa.locator('.barra-zona[data-zona="sin_pulso"]')).to_have_count(1)
 
-    # C-297 (R3): «Fuerza» + km: no bars, it says strength adds no km, the week in course still «en curso»
+    # C-297 (R3): «Fuerza» + km: no line, it says strength adds no km, the week in course still «en curso»
     deporte.get_by_role("button", name="Fuerza").click()
     medida.get_by_role("button", name="Km").click()
-    expect(barras).to_have_count(0)
+    expect(grafica.locator("svg path.linea-semanas")).to_have_count(0)
+    expect(zonas).to_have_count(0)
     expect(grafica).to_contain_text("la fuerza no suma km")
     expect(grafica).to_contain_text("en curso")
     expect(grafica.locator("svg .semana")).to_have_count(6)
     capturar(p, f"fitness-semanas-fuerza-km{sufijo}")
     # with hours the strength session is there
     medida.get_by_role("button", name="Horas").click()
-    expect(en_curso.locator('.barra-semana[data-deporte="fuerza"]')).to_have_count(1)
-    expect(grafica.locator('svg .barra-semana:not([data-deporte="fuerza"])')).to_have_count(0)
+    expect(valor(en_curso)).to_have_attribute("data-valor", "0.75")
 
-    # back to «Todos»: the chart of always
+    # back to «Todos»: the line of the total
     deporte.get_by_role("button", name="Todos").click()
     medida.get_by_role("button", name="Km").click()
-    expect(previa.locator(".total-semana")).to_have_text("40,0")
-    expect(previa.locator('.barra-semana[data-deporte="bici"]')).to_have_count(1)
+    expect(valor(previa)).to_have_attribute("data-valor", "40")
     expect(p.locator("#fitness-semanas .leyenda-grafica")).to_contain_text("la fuerza no suma km")
     _sin_scroll(p, "semanas-todos")

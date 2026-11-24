@@ -122,7 +122,7 @@ def test_api_fitness_por_defecto_trae_seis_semanas(web):  # R1, R3
     assert len(f["semanas"]) == 6
     s = f["semanas"][-2]
     assert set(s["deportes"]) == {"correr", "bici", "nadar", "fuerza", "otros"}
-    assert set(s["total"]) == {"horas", "km", "carga", "zonas"}
+    assert set(s["total"]) == {"horas", "km", "carga", "zonas", "zonas_km", "subida_m"}  # unit 108: km by zone, climb
 
 
 @pytest.mark.parametrize("dias", ["30", "0", "abc", "-14", "365.0"])
@@ -157,12 +157,10 @@ def test_la_pagina_trae_el_rango_la_formula_y_las_semanas(web):  # R1-R5 · the 
     assert "graficaSemanas" in web.cliente.get("/static/grafica.js").text
 
 
-# -- unit 097 (REC-42): a period with dates and its comparison with the one before -----------------------------
-
-DEPORTES_TABLA = ["correr", "bici", "nadar", "fuerza", "otros", "total"]
+# -- unit 097 (REC-42): a period with dates (unit 108: without the table against the one before, R-264) ---------
 
 
-def test_api_fitness_con_fechas(web):  # R1, R3, R5 · R-263, R-265, C-331, C-333
+def test_api_fitness_con_fechas(web):  # R1 · R-263, C-331
     r = web.cliente.get("/api/fitness?desde=2026-09-01&hasta=2026-10-15")
     assert r.status_code == 200
     f = r.json()
@@ -171,10 +169,7 @@ def test_api_fitness_con_fechas(web):  # R1, R3, R5 · R-263, R-265, C-331, C-33
     assert serie[0]["fecha"] == "2026-09-01" and serie[-1]["fecha"] == "2026-10-15" and len(serie) == 45
     assert f["carga"]["hoy"]["fecha"] == HOY.isoformat()  # today's figures do not move
     assert [s["lunes"] for s in f["semanas"]][::6] == ["2026-08-31", "2026-10-12"] and len(f["semanas"]) == 7
-    c = f["comparacion"]
-    assert c["anterior"] == {"desde": "2026-07-18", "hasta": "2026-08-31", "dias": 45}
-    assert c["historial_desde"] == "2026-08-24"  # the seeded history starts 58 days before HOY: no %
-    assert [fila["deporte"] for fila in c["filas"]] == DEPORTES_TABLA
+    assert "comparacion" not in f  # unit 108 (R-264)
 
 
 @pytest.mark.parametrize(("consulta", "texto"), [
@@ -197,26 +192,19 @@ def test_api_fitness_limites_que_valen(web, desde):  # R6
     assert web.cliente.get(f"/api/fitness?desde={desde}&hasta=2026-10-21").status_code == 200
 
 
-def test_api_fitness_tabla_con_atajo_y_todos_los_deportes(web):  # R4 · R-266, C-334
-    c = web.cliente.get("/api/fitness?dias=42").json()["comparacion"]
-    assert c["este"] == {"desde": "2026-09-10", "hasta": HOY.isoformat(), "dias": 42}
-    assert c["anterior"] == {"desde": "2026-07-30", "hasta": "2026-09-09", "dias": 42}
-    assert [fila["deporte"] for fila in c["filas"]] == DEPORTES_TABLA
-    total = c["filas"][-1]
-    assert total["este"]["sesiones"] == 21 and total["este"]["horas"] == 20.83  # 20 rides of 1 h + the run of 50 min
-
-
-def test_api_fitness_fechas_sin_garmin(tmp_path):  # app without store: the table at zero, no warning
+def test_api_fitness_fechas_sin_garmin(tmp_path):  # app without store: the weeks at zero
     db = tmp_path / "data.sqlite3"
     cliente = TestClient(crear_app(RegistroComidas(db), MagicMock(), Ajustes(db), hoy=lambda: HOY, store=None))
     f = cliente.get("/api/fitness?desde=2026-09-01&hasta=2026-10-15").json()
     assert len(f["semanas"]) == 7 and f["carga"]["serie"] == []
-    assert f["comparacion"]["historial_desde"] is None
-    assert all(fila["este"]["horas"] == 0 for fila in f["comparacion"]["filas"])
+    assert "comparacion" not in f and all(s["total"]["horas"] == 0 for s in f["semanas"])
 
 
-def test_la_pagina_trae_elegir_fechas_y_la_tabla(web):  # R1, R2 · the client
+def test_la_pagina_trae_elegir_fechas_y_comparar(web):  # R1 · the client; unit 108: «Comparar con…», no table
     html = web.cliente.get("/").text
-    for id_ in ("fitness-fechas", "fitness-desde", "fitness-hasta", "fitness-aplicar", "fitness-comparar"):
+    for id_ in ("fitness-fechas", "fitness-desde", "fitness-hasta", "fitness-aplicar", "fitness-comparar-abrir",
+                "fitness-otro-desde", "fitness-otro-hasta", "fitness-por-zonas", "fitness-semana-cabecera"):
         assert f'id="{id_}"' in html
+    assert "Frente al periodo anterior" not in html and 'id="fitness-comparar-tabla"' not in html
+    assert "pintarComparacion" not in web.cliente.get("/static/fitness.js").text
     assert "Elegir fechas" in html and 'data-dias="fechas"' in html

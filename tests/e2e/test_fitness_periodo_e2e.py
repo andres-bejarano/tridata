@@ -1,8 +1,8 @@
 """Unit 097 in a real Chromium at 390 × 844, light and dark (E2E-16 of `ver-fitness`): «Elegir fechas» from 1/9 to
-15/10 → the load chart of those 45 days, «Tus semanas» from the week of 31/8 to the one of 12/10 and, under it, the
-table of this period against the one before (18/7-31/8) with every sport and the total; dates that are not valid say
-why and leave the screen as it was; back to «6 semanas» with «Bici» chosen, the table keeps every sport. Uses the
-`conftest.py` of unit 010. Every value is invented (C-331, C-332, C-334, C-337).
+15/10 → the load chart of those 45 days and «Tus semanas» from the week of 31/8 to the one of 12/10; dates that are
+not valid say why and leave the screen as it was. Unit 108 (R-264, C-332): no table of this period against the one
+before any more, with a shortcut nor with dates. Uses the `conftest.py` of unit 010. Every value is invented (C-331,
+C-332, C-337).
 """
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from tridata.models import Activity  # noqa: E402
 
 HOY = date(2026, 10, 21)  # the `HOY` of conftest.py (a Wednesday)
 TEMAS = pytest.mark.parametrize("oscuro", [False, True], ids=["claro", "oscuro"])
-FILAS = ["correr", "bici", "nadar", "fuerza", "otros", "total"]
 
 
 def _sembrar(servidor) -> None:
@@ -53,9 +52,8 @@ def test_elegir_fechas_y_comparar(servidor, abrir, ir_a, capturar, oscuro):  # E
     ir_a(p, "fitness")
     barras = p.locator("#fitness-grafica svg .barra-tsb")
     expect(barras).to_have_count(42)  # it opens in 6 weeks, as before
-    tabla = p.locator("#fitness-comparar")
-    expect(tabla).to_be_visible()  # the table also comes with the shortcuts (R4)
-    expect(tabla.locator("tbody[data-deporte]")).to_have_count(6)
+    expect(p.locator("#fitness-forma")).not_to_contain_text("Frente al periodo anterior")  # unit 108 (C-332)
+    expect(p.locator("#fitness-forma table")).to_have_count(0)
 
     # «Elegir fechas»: from 1/9 to 15/10
     rango = p.locator("#fitness-rango")
@@ -77,13 +75,8 @@ def test_elegir_fechas_y_comparar(servidor, abrir, ir_a, capturar, oscuro):  # E
     expect(semanas.first).to_have_attribute("data-lunes", "2026-08-31")
     expect(semanas.last).to_have_attribute("data-lunes", "2026-10-12")
 
-    expect(tabla).to_contain_text("del 1/9 al 15/10")
-    expect(tabla).to_contain_text("del 18/7 al 31/8")
-    for texto in ("Este periodo", "El anterior", "Diferencia", "Carrera", "Bici", "Natación", "Fuerza", "Otros",
-                  "Total", "Horas", "Km", "Sesiones", "Horas por semana", "%"):
-        expect(tabla).to_contain_text(texto)
-    expect(tabla.locator("tbody[data-deporte]")).to_have_count(6)
-    assert tabla.locator("tbody[data-deporte]").evaluate_all("ns => ns.map(n => n.dataset.deporte)") == FILAS
+    expect(p.locator("#fitness-forma table")).to_have_count(0)  # unit 108 (C-332): with dates neither
+    expect(p.locator("#fitness-forma")).not_to_contain_text("El anterior")
     _sin_scroll(p, "fitness con fechas")
     p.locator("#fitness-semanas").scroll_into_view_if_needed()
     capturar(p, f"fitness-fechas{sufijo}", completa=True)
@@ -98,16 +91,12 @@ def test_elegir_fechas_y_comparar(servidor, abrir, ir_a, capturar, oscuro):  # E
     expect(barras).to_have_count(45)
     expect(p.locator("#fitness-rango-texto")).to_have_text("del 1/9 al 15/10")
     expect(semanas).to_have_count(7)
-    expect(tabla).to_contain_text("del 18/7 al 31/8")
     p.locator("#fitness-fechas").scroll_into_view_if_needed()
     capturar(p, f"fitness-fechas-malas{sufijo}")
 
-    # back to «6 semanas» and «Bici» in «Tus semanas»: the table keeps every sport (C-334)
+    # back to «6 semanas»
     rango.get_by_role("button", name="6 semanas").click()
     expect(barras).to_have_count(42)
     expect(p.locator("#fitness-fechas")).to_be_hidden()
-    p.locator("#fitness-deporte").get_by_role("button", name="Bici").click()
-    expect(tabla.locator("tbody[data-deporte]")).to_have_count(6)
-    expect(tabla).to_contain_text("Natación")
-    expect(tabla).to_contain_text("del 30/7 al 9/9")
+    expect(p.locator("#fitness-forma table")).to_have_count(0)
     _sin_scroll(p, "fitness 6 semanas bici")

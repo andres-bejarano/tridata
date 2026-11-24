@@ -792,9 +792,7 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .como-se-calcula[open] > summary::after { transform: rotate(90deg); }
 .como-se-calcula p { margin: 0 0 8px; font-size: .92rem; }
 .grafica-semanas { padding: 6px 0 0; }
-.grafica .total-semana { font-size: 10px; font-weight: 650; fill: var(--texto); font-variant-numeric: tabular-nums; }
 .grafica .etiqueta-en-curso { fill: var(--acento); font-weight: 700; }
-.grafica .semana.en-curso .barra-semana { opacity: .6; }
 .capa-correr { fill: var(--dep-correr); color: var(--dep-correr); }
 .capa-bici { fill: var(--dep-bici); color: var(--dep-bici); }
 .capa-nadar { fill: var(--dep-nadar); color: var(--dep-nadar); }
@@ -812,7 +810,6 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .grafica g.semana { cursor: pointer; outline: none; }
 .grafica g.semana:focus-visible .toque-semana { stroke: var(--acento); stroke-width: 2; }
 .grafica g.semana.elegida .toque-semana { fill: var(--acento-suave); }
-.grafica g.semana.elegida .barra-semana { stroke: var(--texto); stroke-width: 1; }
 .toca-semana { margin: 2px 0 0; font-size: .85rem; }
 .semana-fitness { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--borde); }
 .cab-semana-fitness { display: flex; align-items: center; gap: 8px; }
@@ -872,17 +869,6 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 #fitness-rango button[data-dias="fechas"] { flex-basis: 100%; }
 .fechas-fitness { margin: 6px 0 4px; }
 .fechas-fitness .aviso { margin: 8px 0 0; }
-.periodos-comparar { margin: 2px 0 8px; font-size: .88rem; }
-.tabla-comparar table { width: 100%; border-collapse: collapse; font-size: .86rem; font-variant-numeric: tabular-nums; table-layout: fixed; }
-.tabla-comparar th, .tabla-comparar td { padding: 5px 4px; text-align: right; overflow-wrap: anywhere; }
-.tabla-comparar thead th { color: var(--suave); font-weight: 600; font-size: .78rem; border-bottom: 1px solid var(--borde); }
-.tabla-comparar th:first-child, .tabla-comparar td:first-child { text-align: left; width: 31%; }
-.tabla-comparar tbody th[colspan] { text-align: left; padding-top: 10px; font-size: .92rem; border-bottom: 1px solid var(--borde); }
-.tabla-comparar tbody td:first-child { color: var(--suave); }
-.tabla-comparar tbody[data-deporte="total"] th, .tabla-comparar tbody[data-deporte="total"] td { font-weight: 650; }
-.tabla-comparar .dif-mas { color: var(--acento); }
-.tabla-comparar .dif-menos { color: var(--objetivo-peso); }
-.tabla-comparar .pct { display: block; font-size: .78rem; opacity: .85; }
 
 /* -- unit 102 (REC-46): the shoes — Fitness › Zapatillas (fitness.js) and their warning in Hoy (hoy.js) -- */
 .lista-zapatillas { list-style: none; margin: 0; padding: 0; display: grid; }
@@ -943,3 +929,53 @@ button.hecha[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .retiradas-zapatillas > summary::after { content: "›"; margin-left: auto; font-size: 1.3rem; transition: transform .15s; }
 .retiradas-zapatillas[open] > summary::after { transform: rotate(90deg); }
 .retiradas-zapatillas .zapatilla button { min-height: 44px; }
+
+/* -- unit 108 (REC-51): «Tus semanas» as a line, «por zonas», the week in large and two periods (fitness.js, grafica.js) */
+:root { --serie-a: var(--dep-correr); --serie-b: #5a6b80; }
+@media (prefers-color-scheme: dark) { :root { --serie-b: #b8c4d2; } }
+.grafica .area-semanas { fill: var(--serie-a); fill-opacity: .16; stroke: none; }
+.grafica .linea-semanas { fill: none; stroke: var(--serie-a); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.grafica .linea-semanas.serie-b { stroke: var(--serie-b); stroke-width: 2; stroke-dasharray: 5 4; }
+.grafica .punto-semana { fill: var(--tarjeta); stroke: var(--serie-a); stroke-width: 2; }
+.grafica .punto-semana.serie-b { fill: var(--tarjeta); stroke: var(--serie-b); stroke-dasharray: 2 1.5; }
+.grafica .semana.marcada .punto-semana.serie-a, .grafica .semana.elegida .punto-semana.serie-a { fill: var(--serie-a); }
+.grafica .semana.elegida .punto-semana.serie-b { fill: var(--serie-b); stroke-dasharray: none; }
+.grafica .raya-semana { stroke: var(--texto); stroke-width: 1.5; }
+.grafica .barra-zona { opacity: .9; }
+.grafica .barra-zona.serie-b { opacity: .55; }
+.grafica .semana.en-curso .punto-semana.serie-a { stroke-dasharray: 2 1.5; }
+.leyenda-grafica .ley-serie-a { color: var(--serie-a); font-weight: 800; }
+.leyenda-grafica .ley-serie-b { color: var(--serie-b); font-weight: 800; }
+.medida-fitness { display: flex; gap: 6px; align-items: center; }
+.medida-fitness .selector-fitness { flex: 1; min-width: 0; }
+.interruptor-zonas { flex: none; min-height: 44px; margin: 10px 0 4px; padding: 0 10px; border: 1px solid var(--borde); border-radius: 12px; background: var(--tarjeta); color: var(--texto); font: inherit; font-size: .9rem; white-space: nowrap; }
+.interruptor-zonas[aria-pressed="true"] { background: var(--acento); border-color: var(--acento); color: var(--acento-texto); font-weight: 650; }
+.acciones-comparar { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0; }
+.acciones-comparar button { min-height: 44px; padding: 0 12px; border: 1px solid var(--borde); border-radius: 12px; background: var(--tarjeta); color: var(--acento); font: inherit; font-weight: 600; }
+.comparar-form fieldset { border: 0; padding: 0; margin: 0 0 8px; min-width: 0; }
+.comparar-form legend { font-weight: 650; font-size: .9rem; margin-bottom: 4px; }
+.comparar-form .principal { min-height: 44px; }
+.cabecera-semana { margin: 8px 0 2px; }
+.cabecera-semana:empty { display: none; }
+.fechas-cabecera { display: block; margin: 0 0 6px; font-size: 1.2rem; font-weight: 750; }
+.datos-cabecera { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.dato-cabecera { display: grid; gap: 1px; min-width: 0; }
+.dato-cabecera span { color: var(--suave); font-size: .82rem; }
+.dato-cabecera strong { font-size: 1.25rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.frase-comparar { margin: 8px 0 4px; font-weight: 650; font-size: .92rem; overflow-wrap: anywhere; }
+.comparar-semana { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--borde); }
+.frase-semana-comparada { margin: 0 0 8px; font-weight: 700; }
+.semanas-comparadas { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.semana-comparada { display: grid; gap: 6px; min-width: 0; min-height: 44px; padding: 10px; border: 1px solid var(--borde); border-left: 4px solid var(--serie-a); border-radius: 12px; background: var(--tarjeta); color: var(--texto); font: inherit; text-align: left; cursor: pointer; }
+.semana-comparada.serie-b { border-left: 4px dashed var(--serie-b); }
+.semana-comparada .fechas-cabecera { font-size: 1rem; margin: 0; }
+.semana-comparada .datos-cabecera { grid-template-columns: 1fr; gap: 2px; }
+.semana-comparada .dato-cabecera { grid-template-columns: auto 1fr; gap: 6px; align-items: baseline; }
+.semana-comparada .dato-cabecera strong { font-size: 1rem; text-align: right; }
+.periodo-comparado { color: var(--suave); font-size: .8rem; }
+.ver-semana-comparada { color: var(--acento); font-size: .85rem; font-weight: 600; }
+.zonas-semana-panel { display: grid; gap: 4px; margin: 6px 0 8px; }
+.zonas-semana-panel small { font-size: .78rem; overflow-wrap: anywhere; }
+.barra-zona-panel { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--pista); }
+.trozo-zona { display: block; min-width: 2px; background: currentColor; }
+.sin-zonas-semana { margin: 6px 0; font-size: .85rem; }

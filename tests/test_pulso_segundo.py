@@ -402,7 +402,7 @@ def test_zonas_de_semanas_mixtas_y_aproximado(tmp_path):  # R7 · R-253, C-317, 
     assert mixta["aproximado"] is True  # a session of the range still by laps
     assert completa["aproximado"] is False and completa["total"]["zonas"]["z2"] == 300
     assert vacia["aproximado"] is False
-    assert {"horas", "km", "carga", "zonas"} == set(mixta["total"])  # nothing else changes in the figures
+    assert {"horas", "km", "carga", "zonas", "zonas_km", "subida_m"} == set(mixta["total"])  # unit 108: + km by zone, climb
     f = fitness.fitness(store, ajustes.historial_fc(), hoy, dias=14)
     assert [s["aproximado"] for s in f["semanas"]] == [True, False]
 

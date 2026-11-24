@@ -118,7 +118,8 @@
             dice poco del esfuerzo.</p>
         </details>
       </article>
-      <!-- unit 090 (R-234..R-236): the weeks, Monday to Sunday, stacked by sport; fitness.js + grafica.js -->
+      <!-- unit 090 (R-234): the weeks, Monday to Sunday; fitness.js + grafica.js. Unit 108 (REC-51): a line of points
+           with its area, «por zonas» a bar of zones under each point, and «Comparar con…» a second period -->
       <article id="fitness-semanas" class="tarjeta bloque-fitness" aria-labelledby="t-semanas">
         <div class="cab-hoy"><h2 id="t-semanas">Tus semanas</h2><span class="suave">de lunes a domingo</span></div>
         <!-- unit 091 (R-237, R-238): one sport or all of them; it only filters what the chart already has -->
@@ -129,14 +130,43 @@
           <button type="button" data-deporte="nadar" aria-pressed="false">Nadar</button>
           <button type="button" data-deporte="fuerza" aria-pressed="false">Fuerza</button>
         </div>
-        <div id="fitness-medida" class="segmentado selector-fitness" role="group" aria-label="Qué ver por semana">
-          <button type="button" data-medida="horas" aria-pressed="true">Horas</button>
-          <button type="button" data-medida="km" aria-pressed="false">Km</button>
-          <button type="button" data-medida="carga" aria-pressed="false">Carga</button>
-          <button type="button" data-medida="zonas" aria-pressed="false">Zonas</button>
+        <!-- unit 108 (R-311): the measure, and «por zonas» on top of hours or km (not with «carga») -->
+        <div id="fitness-medida" class="medida-fitness" role="group" aria-label="Qué ver por semana">
+          <div id="fitness-medidas" class="segmentado selector-fitness">
+            <button type="button" data-medida="horas" aria-pressed="true">Horas</button>
+            <button type="button" data-medida="km" aria-pressed="false">Km</button>
+            <button type="button" data-medida="carga" aria-pressed="false">Carga</button>
+          </div>
+          <button id="fitness-por-zonas" type="button" class="interruptor-zonas" aria-pressed="false">Por zonas</button>
         </div>
+        <!-- unit 108 (R-313, R-316): a second period to compare with; comparing, both «hasta» may be after today -->
+        <div class="acciones-comparar">
+          <button id="fitness-comparar-abrir" type="button" aria-expanded="false" aria-controls="fitness-comparar-form">Comparar con…</button>
+          <button id="fitness-comparar-quitar" type="button" hidden>Quitar comparación</button>
+        </div>
+        <form id="fitness-comparar-form" class="fechas-fitness comparar-form" hidden>
+          <fieldset class="fechas-campos">
+            <legend>Tu periodo</legend>
+            <label class="campo-fecha">Desde <input id="fitness-este-desde" type="date" required></label>
+            <label class="campo-fecha">Hasta <input id="fitness-este-hasta" type="date" required></label>
+          </fieldset>
+          <fieldset class="fechas-campos">
+            <legend>Comparar con</legend>
+            <label class="campo-fecha">Desde <input id="fitness-otro-desde" type="date" required></label>
+            <label class="campo-fecha">Hasta <input id="fitness-otro-hasta" type="date" required></label>
+          </fieldset>
+          <button id="fitness-comparar-aplicar" type="submit" class="principal">Comparar</button>
+          <p id="fitness-comparar-error" class="aviso" role="alert" hidden></p>
+        </form>
+        <!-- unit 108 (R-312): the week marked, its dates and its distance, time and climb in large -->
+        <div id="fitness-semana-cabecera" class="cabecera-semana" aria-live="polite"></div>
+        <!-- unit 108 (R-314, R-316): comparing, the totals of each period in one sentence, and the history warning -->
+        <p id="fitness-comparar-frase" class="frase-comparar" hidden></p>
+        <p id="fitness-comparar-aviso" class="aviso" hidden></p>
         <div id="fitness-grafica-semanas" class="grafica grafica-semanas"></div>
         <p class="suave toca-semana">Toca una semana para ver sus actividades.</p>
+        <!-- unit 108 (R-315): comparing, the two weeks of the number tapped side by side -->
+        <div id="fitness-comparar-semana" class="comparar-semana" aria-live="polite" hidden></div>
         <!-- unit 093 (REC-37, S-83): the week tapped, under the chart: its totals next to the mean of the 4 before,
              its activities and the session of the one tapped; fitness.js asks /api/fitness/semana -->
         <div id="fitness-semana" class="semana-fitness" aria-live="polite" hidden>
@@ -148,17 +178,10 @@
             <button id="fitness-semana-cerrar" type="button" class="cerrar-semana">Cerrar</button>
           </div>
           <div id="fitness-semana-totales" class="totales-semana"></div>
+          <div id="fitness-semana-zonas"></div>
           <div id="fitness-semana-lista"></div>
           <article id="fitness-sesion" class="detalle-fitness sesion-fitness" aria-label="Sesión" hidden></article>
         </div>
-      </article>
-      <!-- unit 097 (R-264..R-267): this period against the one before of the same days, every sport and the total,
-           whatever sport «Tus semanas» shows; fitness.js paints it from the `comparacion` of /api/fitness -->
-      <article id="fitness-comparar" class="tarjeta bloque-fitness" aria-labelledby="t-comparar">
-        <div class="cab-hoy"><h2 id="t-comparar">Frente al periodo anterior</h2></div>
-        <p id="fitness-comparar-periodos" class="suave periodos-comparar"></p>
-        <p id="fitness-comparar-aviso" class="aviso" hidden></p>
-        <div id="fitness-comparar-tabla" class="tabla-comparar"></div>
       </article>
       <h2 class="titulo-bloque">Última actividad</h2>
       <button id="fitness-ultima" type="button" class="tarjeta actividad-fitness" aria-expanded="false" aria-controls="fitness-detalle"></button>

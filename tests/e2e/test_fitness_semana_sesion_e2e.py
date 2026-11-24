@@ -91,7 +91,7 @@ def test_semana_lista_y_sesion(servidor, abrir, ir_a, capturar, oscuro):  # E2E-
     sesion = p.locator("#fitness-sesion")
     expect(sesion).to_be_visible()
     expect(sesion.locator(".vuelta")).to_have_count(3)
-    expect(sesion.locator(".vuelta").first).to_contain_text("86 ppm")
+    expect(sesion.locator(".vuelta").first).to_contain_text("cadencia 86 rpm")  # unit 107 R3: a ride's, in rpm
     expect(sesion.locator(".vuelta").first).to_contain_text("+150 m")
 
     # C-299: «Correr» leaves only the runs; C-302: a run with steps per minute, stride and climb, and the weather
@@ -136,3 +136,109 @@ def test_la_semana_se_elige_con_el_teclado(servidor, abrir, ir_a):  # R1: access
     p.keyboard.press("Enter")
     expect(p.locator("#fitness-semana")).to_be_visible()
     expect(barra).to_have_attribute("aria-pressed", "true")
+
+
+# -- unit 107 (REC-37): the date of every week on the axis, and ‹ › between the weeks ---------------------------------
+
+def _eje(grafica) -> list[dict]:
+    """Per bar of «Tus semanas»: its Monday as the chart says it («Semana del 12 oct al …»), the texts of its axis
+    labels and their boxes."""
+    return grafica.locator("svg").evaluate("""svg => [...svg.querySelectorAll("g.semana")].map(g => ({
+        desde: g.getAttribute("aria-label").match(/^Semana del (.+?) al /)[1],
+        en_curso: g.classList.contains("en-curso"),
+        textos: [...g.querySelectorAll("text.etiqueta-x")].map(t => t.textContent.trim()),
+        cajas: [...g.querySelectorAll("text.etiqueta-x")].map(t => { const r = t.getBoundingClientRect();
+            return [r.left, r.top, r.right, r.bottom]; }),
+    }))""")
+
+
+def _se_cruzan(a, b) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _sin_solapes(eje, rango: str) -> None:
+    cajas = [c for s in eje for c in s["cajas"]]
+    for i, a in enumerate(cajas):
+        for b in cajas[i + 1:]:
+            assert not _se_cruzan(a, b), f"{rango}: two labels of the axis overlap ({a} · {b})"
+
+
+@TEMAS
+def test_cada_semana_con_su_fecha_y_en_curso_aparte(servidor, abrir, ir_a, capturar, oscuro):  # unit 107 R1
+    _sembrar(servidor)
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
+    ir_a(p, "fitness")
+    grafica = p.locator("#fitness-grafica-semanas")
+    expect(grafica.locator("g.semana")).to_have_count(6)
+    eje = _eje(grafica)
+    # «6 semanas»: the six dates (the week before the one in course too) and, besides, «en curso»
+    for s in eje:
+        fechas = [t for t in s["textos"] if t != "en curso"]
+        assert fechas == [s["desde"]], f"week of {s['desde']}: {s['textos']}"
+    assert [s["en_curso"] for s in eje] == [False] * 5 + [True]
+    assert "en curso" in eje[-1]["textos"] and all("en curso" not in s["textos"] for s in eje[:-1])
+    _sin_solapes(eje, "6 semanas")
+    grafica.scroll_into_view_if_needed()
+    capturar(p, f"fitness-eje-6-semanas{'-oscuro' if oscuro else '-claro'}")
+    # 3 months and 1 year: dates skipped by the minimum separation, counted back from the week in course — never the
+    # one before it because of «en curso» — and nothing overlapping
+    rango = p.locator("#fitness-rango")
+    for boton, n in (("3 meses", 13), ("1 año", 52)):
+        rango.get_by_role("button", name=boton).click()
+        expect(grafica.locator("g.semana")).to_have_count(n)
+        eje = _eje(grafica)
+        con_fecha = [len(eje) - 1 - i for i, s in enumerate(eje) if [t for t in s["textos"] if t != "en curso"]]
+        con_fecha.reverse()
+        assert con_fecha[0] == 0, f"{boton}: the week in course without its date"
+        cada = con_fecha[1] if len(con_fecha) > 1 else len(eje)
+        assert con_fecha == list(range(0, len(eje), cada)), f"{boton}: {con_fecha}"
+        assert "en curso" in eje[-1]["textos"]
+        _sin_solapes(eje, boton)
+
+
+@TEMAS
+def test_anterior_y_siguiente_entre_semanas(servidor, abrir, ir_a, capturar, oscuro):  # unit 107 R2
+    _sembrar(servidor)
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
+    ir_a(p, "fitness")
+    grafica = p.locator("#fitness-grafica-semanas")
+    p.locator("#fitness-deporte").get_by_role("button", name="Bici").click()  # unit 091's filter is kept
+    grafica.locator(f'g.semana[data-lunes="{LUNES.isoformat()}"]').click()
+    semana = p.locator("#fitness-semana")
+    titulo = p.locator("#fitness-semana-titulo")
+    anterior = semana.get_by_role("button", name="Semana anterior")
+    siguiente = semana.get_by_role("button", name="Semana siguiente")
+    expect(anterior).to_have_text("‹")
+    expect(siguiente).to_have_text("›")
+    expect(semana.get_by_role("button", name="Cerrar")).to_be_visible()
+    expect(titulo).to_have_text("Semana del 12 oct al 18 oct")
+    expect(semana.locator(".actividad-semana")).to_have_count(1)
+    expect(semana.locator(".actividad-semana")).to_contain_text("Salida en bici")
+    elegida = grafica.locator("g.semana.elegida")
+    semana.scroll_into_view_if_needed()
+    capturar(p, f"fitness-semana-anterior-siguiente{'-oscuro' if oscuro else '-claro'}", completa=True)
+
+    anterior.click()  # the week before: its title, its totals and its list (no ride), marked on the chart
+    expect(titulo).to_have_text("Semana del 5 oct al 11 oct")
+    expect(elegida).to_have_attribute("data-lunes", (LUNES - timedelta(weeks=1)).isoformat())
+    expect(semana).to_contain_text("sin actividades esta semana")
+    expect(semana.locator(".totales-semana")).to_contain_text("sesiones")
+    siguiente.click()
+    expect(titulo).to_have_text("Semana del 12 oct al 18 oct")
+    expect(semana.locator(".actividad-semana")).to_contain_text("Salida en bici")
+    siguiente.click()  # the week in course: the last one, «›» off
+    expect(titulo).to_contain_text("en curso")
+    expect(elegida).to_have_attribute("data-lunes", (LUNES + timedelta(weeks=1)).isoformat())
+    expect(siguiente).to_be_disabled()
+    expect(anterior).to_be_enabled()
+    for _ in range(5):
+        anterior.click()
+    expect(titulo).to_have_text("Semana del 14 sept al 20 sept")
+    expect(elegida).to_have_attribute("data-lunes", (LUNES - timedelta(weeks=4)).isoformat())
+    expect(anterior).to_be_disabled()  # the first week of the range
+    expect(siguiente).to_be_enabled()
+    expect(grafica.locator("g.semana.elegida")).to_have_count(1)
+    _sin_scroll(p, "semana con ‹ ›")
+    # tapping the bar marked still closes it
+    elegida.click()
+    expect(semana).to_be_hidden()

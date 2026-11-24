@@ -197,15 +197,20 @@ def _redondo(valor: float | None) -> int | None:
 
 def _cadencia_y_desnivel(v: dict, tipo: str | None) -> dict[str, Any]:
     """Unit 093 (R-242): only the keys of the lap's sport — run: steps per minute, stride (m) and climb (m); ride:
-    pedal strokes per minute and climb; swim: arm strokes per minute and SWOLF; any other sport, none."""
+    pedal strokes per minute and climb; swim: arm strokes per minute and SWOLF; any other sport, none. Unit 107
+    (R-130): `cadencia_unidad` says which, by the sport («ppm», «rpm», «brazadas/min»). Also over an activity (the
+    summary of the detail): what it does not carry (a ride's cadence) is None."""
     if tipo in RUNNING_TYPES:
         zancada = v.get("avg_stride_length_cm") or None
-        return {"cadencia": _redondo(v.get("avg_cadence")), "zancada_m": round(zancada / 100, 2) if zancada else None,
+        return {"cadencia": _redondo(v.get("avg_cadence")), "cadencia_unidad": "ppm",
+                "zancada_m": round(zancada / 100, 2) if zancada else None,
                 "subida_m": _redondo(v.get("elevation_gain_m"))}
     if tipo in CYCLING_TYPES:
-        return {"cadencia": _redondo(v.get("avg_bike_cadence")), "subida_m": _redondo(v.get("elevation_gain_m"))}
+        return {"cadencia": _redondo(v.get("avg_bike_cadence")), "cadencia_unidad": "rpm",
+                "subida_m": _redondo(v.get("elevation_gain_m"))}
     if tipo in SWIMMING_TYPES:
-        return {"cadencia": _redondo(v.get("avg_swim_cadence")), "swolf": _redondo(v.get("avg_swolf"))}
+        return {"cadencia": _redondo(v.get("avg_swim_cadence")), "cadencia_unidad": "brazadas/min",
+                "swolf": _redondo(v.get("avg_swolf"))}
     return {}
 
 
@@ -234,7 +239,8 @@ def detalle_actividad(store: DataStore, historial: HistorialFC | None, actividad
     """`{actividad, vueltas, clima, zonas, pulso, curva, zonas_deporte}` of one activity (R3), or None if it does not
     exist. `zonas` says whether zones were confirmed for its day (without them no lap gets a zone); `clima` None: none
     synced. Unit 094: `curva` (see `_curva`), None without detail second by second (not brought yet, or tried, R-254).
-    Unit 096: every zone with its sport's of that day; `zonas_deporte` says which and whether estimated."""
+    Unit 096: every zone with its sport's of that day; `zonas_deporte` says which and whether estimated. Unit 107
+    (R-130): `actividad` also carries the cadence and climb of its sport (`_cadencia_y_desnivel`), for Plan's summary."""
     a = store.get_activity(actividad_id)
     if a is None:
         return None
@@ -242,7 +248,8 @@ def detalle_actividad(store: DataStore, historial: HistorialFC | None, actividad
     zonas, estimadas = zonas_sesion(pulso, a.get("activity_type"))
     vueltas = [_vuelta(i, v, a.get("activity_type"), zonas)
                for i, v in enumerate(store.get_laps(actividad_id), start=1)]
-    return {"actividad": _resumen(store, historial, a), "vueltas": vueltas, "clima": store.get_weather(actividad_id),
+    actividad = {**_resumen(store, historial, a), **_cadencia_y_desnivel(a, a.get("activity_type"))}
+    return {"actividad": actividad, "vueltas": vueltas, "clima": store.get_weather(actividad_id),
             "zonas": zonas is not None, "pulso": texto_pulso(pulso),
             "curva": _curva(store.leer_detalle(actividad_id), vueltas, zonas),
             "zonas_deporte": _zonas_deporte(a.get("activity_type"), zonas, estimadas)}

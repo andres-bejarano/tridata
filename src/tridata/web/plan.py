@@ -4,8 +4,6 @@
                                       404 if it is not there) as `plan.semanas.vista` paints it, or None without
                                       plans; `planes` every plan with `en_curso`
     GET  /api/plan/semana/N           one week of that plan (?id= too) with its seven days (404 without it)
-    GET  /api/plan/actividad/ID       the detail of a done session: the one of Fitness (`fitness.detalle_actividad`)
-                                      plus the cadence and the climb of the activity and of each lap (R4)
     GET  /api/plan/N.md               the plan as a document (`plan.markdown.escribir`), to download
     POST /api/plan/sesion/ID/garmin   unit 042: {tarjeta} «Voy a mandar a tu Garmin» for that session (nothing goes to
                                       Garmin here, G-55); 422 with why if it cannot be sent (a block it cannot read, a
@@ -85,7 +83,6 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from ..fitness import detalle_actividad
 from ..nutricion.ajustes import Ajustes
 from ..nutricion.asistente import CAMBIADO, Cambiado, Contexto, NoValida, TarjetaMal, confirmar, descartar
 from ..plan import ABIERTA, CONSERVA, Planes, semanas
@@ -472,26 +469,6 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, contexto: C
         return Response(fichero, media_type="application/octet-stream",
                         headers={"Content-Disposition": f'attachment; filename="{nombre or "sesion"}.fit"'})
 
-    def _detalle(ident: str) -> dict | None:
-        if store is None:
-            return None
-        detalle = detalle_actividad(store, ajustes.historial_fc(), ident)
-        if detalle is None:
-            return None
-        actividad = store.get_activity(ident) or {}
-        laps = store.get_laps(ident)
-        detalle["actividad"] = {**detalle["actividad"], "cadencia": actividad.get("avg_cadence"),
-                                "desnivel_m": actividad.get("elevation_gain_m")}
-        detalle["vueltas"] = [{**v, "cadencia": lap.get("avg_cadence"), "desnivel_m": lap.get("elevation_gain_m")}
-                              for v, lap in zip(detalle["vueltas"], laps, strict=True)]
-        return detalle
-
-    async def ver_actividad(request: Request) -> Response:
-        detalle = await run_in_threadpool(_detalle, request.path_params["id"])
-        if detalle is None:
-            return _error("Esa actividad no está.", 404)
-        return JSONResponse(detalle)
-
     async def bajar(request: Request) -> Response:
         plan = await run_in_threadpool(planes.leer, request.path_params["id"])
         if plan is None:
@@ -503,7 +480,6 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, contexto: C
     return [
         Route("/api/plan", ver),
         Route("/api/plan/semana/{n:int}", ver_semana),
-        Route("/api/plan/actividad/{id}", ver_actividad),
         Route("/api/plan/{id:int}.md", bajar),
         Route("/api/plan/sesion/{id:int}/garmin", tarjeta_reloj, methods=["POST"]),
         Route("/api/plan/sesion/{id:int}/garmin/confirmar", confirmar_reloj, methods=["POST"]),

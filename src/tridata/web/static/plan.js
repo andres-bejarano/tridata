@@ -4,8 +4,8 @@
 //   weeks with the planned time and key sessions next to what was done (running in time in movement and km, from
 //   Garmin, or what was accepted from the plan), today's week marked; «Bajar .md»;
 // - one week (GET /api/plan/semana/N): each day with its session by blocks and, below, what was done; a past day
-//   without anything says «no hecho», never a 0. Tapping a done session opens its laps (GET /api/plan/actividad/ID:
-//   the detail of Fitness plus cadence and climb);
+//   without anything says «no hecho», never a 0. Tapping a done session opens its laps (unit 107: GET /api/actividad/ID,
+//   the same detail as Fitness, with the cadence of its sport and the climb);
 // Unit 080 (R-131 goes to the coach): importing a .md is gone from the app; the coach imports it from the PC.
 // Unit 042 (REC-26): each session of today or a day to come has «Mandar a mi Garmin» (POST
 // /api/plan/sesion/ID/garmin): the card «Voy a mandar a tu Garmin» with its blocks and their margin of pace, confirmed
@@ -38,10 +38,11 @@
 // Unit 076 (R-218): adding or changing a session also takes its hour (optional, «HH:MM»; empty removes it), and a
 // session with one is shown «20:00 · Rodaje»; the server says how it goes if it is not an hour («25:00»).
 
+import { filaVuelta } from "./fitness.js"; // unit 107: the laps painted as in Fitness
+
 const $ = (id) => document.getElementById(id);
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
 const unDecimal = new Intl.NumberFormat("es-ES", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-const dosDecimales = new Intl.NumberFormat("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
 let api = null; // app.js's `api` (it keeps the «sin conexión» notice)
@@ -713,35 +714,18 @@ async function alternarDetalle(id, boton, caja) {
   boton.setAttribute("aria-expanded", "true");
   caja.hidden = false;
   caja.replaceChildren(el("p", { className: "suave", textContent: "Cargando las vueltas…" }));
-  const { ok, datos } = await api(`/api/plan/actividad/${encodeURIComponent(id)}`);
+  const { ok, datos } = await api(`/api/actividad/${encodeURIComponent(id)}`); // unit 107: Fitness's detail
   if (!ok) { caja.replaceChildren(el("p", { className: "aviso", textContent: datos.error ?? "No he podido cargarla." })); return; }
   pintarDetalle(caja, datos);
 }
 
-function ritmo(v) {
-  if (v.velocidad_kmh !== null) return `${unDecimal.format(v.velocidad_kmh)} km/h`;
-  if (v.ritmo_s_100m !== null) return `${mmss(v.ritmo_s_100m)} /100 m`;
-  if (v.ritmo_s_km !== null) return `${mmss(v.ritmo_s_km)} /km`;
-  return null;
-}
-
-function filaVuelta(v) {
-  const datos = [v.distancia_m ? (v.distancia_m >= 1000 ? `${dosDecimales.format(v.distancia_m / 1000)} km` : `${enteras.format(v.distancia_m)} m`) : null,
-    v.duracion_s ? mmss(v.duracion_s) : null, ritmo(v),
-    v.pulso_medio ? `❤ ${enteras.format(Math.round(v.pulso_medio))}` : "sin pulso",
-    v.cadencia ? `${enteras.format(Math.round(v.cadencia))} ppm` : null,
-    v.desnivel_m ? `↗ ${enteras.format(Math.round(v.desnivel_m))} m` : null].filter(Boolean);
-  return el("li", { className: "vuelta" },
-    el("span", { className: "n-vuelta", textContent: String(v.n) }),
-    el("span", { className: "datos-vuelta", textContent: datos.join(" · ") }),
-    el("span", { className: `zona-vuelta${v.zona ? ` z${v.zona}` : ""}`, textContent: v.zona ? `Z${v.zona}` : "—" }));
-}
-
+// Unit 107 (R-130): the laps of a done session are Fitness's (`filaVuelta`: the cadence of its sport, «rpm» on a ride,
+// the stride and the climb), from the same GET /api/actividad/ID; above, the HR, cadence and climb of the activity.
 function pintarDetalle(caja, d) {
   const a = d.actividad;
   const resumen = [a.pulso_medio ? `pulso medio ${enteras.format(Math.round(a.pulso_medio))}` : null,
-    a.cadencia ? `cadencia ${enteras.format(Math.round(a.cadencia))} ppm` : null,
-    a.desnivel_m ? `desnivel ${enteras.format(Math.round(a.desnivel_m))} m` : null].filter(Boolean).join(" · ");
+    a.cadencia ? `cadencia ${enteras.format(a.cadencia)} ${a.cadencia_unidad}` : null,
+    a.subida_m ? `subida +${enteras.format(a.subida_m)} m` : null].filter(Boolean).join(" · ");
   caja.replaceChildren(el("h3", { textContent: `Vueltas de ${a.nombre}` }),
     resumen ? el("p", { className: "suave", textContent: resumen }) : null,
     d.vueltas.length ? el("ol", { className: "vueltas" }, ...d.vueltas.map(filaVuelta))

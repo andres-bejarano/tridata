@@ -132,6 +132,13 @@ def test_api_fitness_rango_que_no_vale(web, dias):  # R1
     assert "14, 42, 91 o 365" in r.json()["error"]
 
 
+@pytest.mark.parametrize("dias", ["²", "٤٢", "１４", "abc"])
+def test_api_fitness_digitos_no_ascii_son_400(web, dias):  # unit 107 R5 · REC-35 (`int("²")` was a 500)
+    r = web.cliente.get("/api/fitness", params={"dias": dias})
+    assert r.status_code == 400
+    assert r.json()["error"] == "El rango de Fitness es de 14, 42, 91 o 365 días."
+
+
 def test_api_fitness_sin_garmin_abre_igual(tmp_path):  # R6
     db = tmp_path / "data.sqlite3"
     ajustes = Ajustes(db)

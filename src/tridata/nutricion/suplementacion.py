@@ -146,6 +146,15 @@ def _entero(n: float) -> float | int:
     return int(n) if float(n).is_integer() else n
 
 
+# R7 (review of the 109): a reasonable ceiling per unit, so a total is never infinite nor too big for SQLite
+TOPES = {"cantidad": 50, "mg": 1000, "sodio_mg": 5000, "minuto": 2880}
+
+
+def _sin_pasar(numero: float | None, clave: str, nombre: str) -> None:
+    if numero is not None and numero > TOPES[clave]:
+        raise ValueError(f"{nombre}: {numero:g} es demasiado (como mucho {TOPES[clave]})")
+
+
 def _campos_carrera(que: str, datos: dict, base: dict) -> dict[str, Any]:
     """R1, R4, R7: a gel or a salt: product, number (> 0), mg of caffeine (gel) and sodium PER UNIT kept × the
     number, and its minute of the race (an integer >= 0). Every number is checked before anything is missing."""
@@ -153,6 +162,7 @@ def _campos_carrera(que: str, datos: dict, base: dict) -> dict[str, Any]:
     for clave, nombre in (("cantidad", "el número"), ("mg", "los mg de cafeína"), ("sodio_mg", "los mg de sodio"),
                           ("minuto", "el minuto")):
         numeros[clave] = _numero(datos, clave, nombre, positivo=clave == "cantidad") if clave in datos else None
+        _sin_pasar(numeros[clave], clave, nombre)
     cantidad = numeros["cantidad"] if "cantidad" in datos and numeros["cantidad"] is not None else (
         base.get("cantidad") or 1)
     campos: dict[str, Any] = {"que": que, "forma": None, "gramos": None, "fraccion": None, "cucharadas": None,
@@ -179,6 +189,9 @@ def _campos_carrera(que: str, datos: dict, base: dict) -> dict[str, Any]:
     if que == "sal" and sodio is None:
         raise ValueError("faltan los mg de sodio de la pastilla de sal: dilos o elige uno de sus productos")
     campos["sodio_mg"] = None if sodio is None else _entero(sodio * cantidad)
+    for clave, nombre in (("mg", "los mg de cafeína"), ("sodio_mg", "los mg de sodio")):
+        if campos[clave] is not None and not math.isfinite(campos[clave]):  # the total too, never only its parts
+            raise ValueError(f"{nombre} de la toma no dan un número finito")
     return campos
 
 
@@ -360,6 +373,7 @@ def campos_producto(datos: dict, previo: dict | None = None) -> dict[str, Any]:
     valores = {}
     for clave, nombre_valor in (("mg_cafeina", "los mg de cafeína"), ("sodio_mg", "los mg de sodio")):
         valores[clave] = _numero(datos, clave, nombre_valor) if clave in datos else base.get(clave)
+        _sin_pasar(valores[clave], "mg" if clave == "mg_cafeina" else clave, nombre_valor)
     if tipo == "sal":
         valores["mg_cafeina"] = None
         if valores["sodio_mg"] is None:

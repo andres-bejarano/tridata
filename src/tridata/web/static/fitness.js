@@ -135,6 +135,9 @@ export function iniciarFitness(opciones) {
     alternarSemana(g.dataset.lunes);
   });
   $("fitness-semana-cerrar").addEventListener("click", cerrarSemana);
+  // unit 107 (R2): ‹ › to the week before or after among those the chart paints, as tapping its bar
+  $("fitness-semana-anterior").addEventListener("click", () => moverSemana(-1));
+  $("fitness-semana-siguiente").addEventListener("click", () => moverSemana(1));
   $("fitness-semana-lista").addEventListener("click", (evento) => {
     const boton = evento.target.closest("button.actividad-semana");
     if (boton) alternarSesion(boton.dataset.id);
@@ -514,6 +517,7 @@ function pintarSemanas(semanas) {
   caja.replaceChildren(graficaSemanas(semanas, medida, caja.clientWidth - 8, deporte, semanaElegida),
     leyendaSemanas(medida, deporte, semanas.some((s) => s.aproximado)));
   if (enfocada) caja.querySelector(`g.semana[data-lunes="${enfocada}"]`)?.focus(); // the keyboard keeps its place
+  pintarFlechas();
 }
 
 // -- unit 093: the week tapped, its activities and the session of one ------------------------------------------------
@@ -524,6 +528,23 @@ function alternarSemana(lunes) {
   semanaElegida = lunes;
   pintarSemanas(semanasVistas);
   cargarSemana();
+}
+
+// Unit 107 (R2): the week `paso` places away from the open one, among `semanasVistas`; at an end, nothing.
+function moverSemana(paso) {
+  const i = semanasVistas.findIndex((s) => s.lunes === semanaElegida);
+  const otra = i < 0 ? null : semanasVistas[i + paso];
+  if (!otra) return;
+  semanaElegida = otra.lunes;
+  pintarSemanas(semanasVistas);
+  cargarSemana();
+}
+
+// ‹ off on the first week of the range, › on the last (the one in course)
+function pintarFlechas() {
+  const i = semanasVistas.findIndex((s) => s.lunes === semanaElegida);
+  $("fitness-semana-anterior").disabled = i <= 0;
+  $("fitness-semana-siguiente").disabled = i < 0 || i >= semanasVistas.length - 1;
 }
 
 function cerrarSemana() {
@@ -763,7 +784,7 @@ function extrasVuelta(v) {
   const partes = [];
   const falta = (titulo) => `${titulo} —`;
   if ("cadencia" in v) {
-    const unidad = "swolf" in v ? "brazadas/min" : "ppm";
+    const unidad = v.cadencia_unidad ?? ("swolf" in v ? "brazadas/min" : "ppm"); // unit 107: a ride's is «rpm»
     partes.push(v.cadencia !== null ? `cadencia ${enteras.format(v.cadencia)} ${unidad}` : falta("cadencia"));
   }
   if ("zancada_m" in v) partes.push(v.zancada_m !== null ? `zancada ${dosDecimales.format(v.zancada_m)} m` : falta("zancada"));
@@ -772,7 +793,7 @@ function extrasVuelta(v) {
   return partes.length ? el("small", { className: "extra-vuelta", textContent: partes.join(" · ") }) : null;
 }
 
-function filaVuelta(v) {
+export function filaVuelta(v) {
   const datos = [v.distancia_m ? distanciaVuelta(v.distancia_m) : null, v.duracion_s ? mmss(v.duracion_s) : null, ritmo(v),
     v.pulso_medio ? `❤ ${enteras.format(Math.round(v.pulso_medio))}` : "sin pulso"].filter(Boolean);
   const fila = el("li", { className: "vuelta" },

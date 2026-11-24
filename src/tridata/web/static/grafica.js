@@ -306,7 +306,7 @@ const textoMedida = (v, medida) => (medida === "carga" ? enteras.format(Math.rou
 export function graficaSemanas(semanas, medida = "horas", ancho = ANCHO_POR_DEFECTO, deporte = "todos", elegida = null) {
   const W = Math.max(260, Math.round(ancho || ANCHO_POR_DEFECTO));
   const x0 = 34, x1 = W - 8, arriba = 24, abajo = 186;
-  const H = abajo + 26;
+  const H = abajo + 44; // unit 107: «en curso» goes on a second line, under the date of its week
   const n = Math.max(semanas.length, 1);
   const hueco = (x1 - x0) / n;
   const capas = capasSemana(medida, deporte);
@@ -343,11 +343,14 @@ export function graficaSemanas(semanas, medida = "horas", ancho = ANCHO_POR_DEFE
       base += v;
     }
     if (conTotal) dentro.push(`<text class="total-semana" x="${f1(centro)}" y="${f1(y(total) - 4)}" text-anchor="middle">${textoMedida(total, medida)}</text>`);
-    if (s.en_curso) {
-      dentro.push(`<text class="etiqueta-x etiqueta-en-curso" x="${f1(xCurso)}" y="${abajo + 18}" text-anchor="middle">en curso</text>`);
-    } else if ((semanas.length - 1 - i) % cada === 0 && xCurso - centro >= SEPARACION_MIN + 8) {
+    // Unit 107 (R1): every week of the cadence keeps its date (counted back from the one in course, the one before it
+    // too); «en curso» no longer competes for that place: it goes below, on a line of its own.
+    if ((semanas.length - 1 - i) % cada === 0) {
       const xt = Math.min(Math.max(centro, 18), W - 18);
       dentro.push(`<text class="etiqueta-x" x="${f1(xt)}" y="${abajo + 18}" text-anchor="middle">${desde}</text>`);
+    }
+    if (s.en_curso) {
+      dentro.push(`<text class="etiqueta-x etiqueta-en-curso" x="${f1(xCurso)}" y="${abajo + 36}" text-anchor="middle">en curso</text>`);
     }
     const marcada = s.lunes === elegida;
     partes.push(`<g class="semana${s.en_curso ? " en-curso" : ""}${marcada ? " elegida" : ""}" data-lunes="${s.lunes}" tabindex="0" role="button" aria-pressed="${marcada}" aria-label="${resumen}. Ver sus actividades">${dentro.join("")}</g>`);

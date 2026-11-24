@@ -1078,7 +1078,7 @@ def crear_app(
                 return _error(str(exc), 400)
             return JSONResponse(await run_in_threadpool(_fitness, None, desde, hasta))
         texto = consulta.get("dias", str(DIAS_POR_DEFECTO))
-        dias = int(texto) if texto.isdigit() else -1
+        dias = int(texto) if texto.isascii() and texto.isdigit() else -1  # unit 107: «²» is a digit for isdigit
         if dias not in RANGOS_DIAS:
             return _error("El rango de Fitness es de 14, 42, 91 o 365 días.", 400)
         desde, hasta = periodo(hoy(), dias=dias)

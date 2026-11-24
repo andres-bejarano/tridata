@@ -20,6 +20,7 @@ from playwright.sync_api import expect  # noqa: E402
 
 from datetime import datetime  # noqa: E402
 
+from tridata.models import Activity, ActivityLap  # noqa: E402
 from tridata.plan import Planes  # noqa: E402
 from tridata.plan.importar import confirmar, proponer  # noqa: E402
 
@@ -263,3 +264,52 @@ def test_la_hora_de_una_sesion_a_mano(servidor, abrir, capturar, oscuro):  # uni
     dias.nth(5).get_by_role("button", name="Guardar cambios").click()
     expect(dias.nth(5)).to_contain_text("Sáb 24/10 · Rodaje")
     expect(dias.nth(5)).not_to_contain_text("19:30")
+
+
+@TEMAS
+def test_la_bici_hecha_con_su_cadencia(servidor, abrir, ir_a, capturar, oscuro):  # unit 107 R3, R4 · R-130
+    """Fitness › Plan opens a done session with Fitness's own detail (GET /api/actividad/ID): a ride shows its pedal
+    cadence in rpm and its climb; a run, its steps in ppm and its stride."""
+    doble.sembrar_garmin(servidor.store)
+    servidor.store.save_activities([Activity(activity_id="b-jue", activity_date=datetime(2026, 10, 15).date(),
+                                             activity_type="road_biking", name="Bici de prueba",
+                                             duration_seconds=5400, distance_meters=45000, avg_hr=132,
+                                             elevation_gain_m=380)])
+    servidor.store.save_activity_laps([ActivityLap("b-jue", i, distance_meters=15000, duration_seconds=1800,
+                                                   avg_hr=130 + i, avg_bike_cadence=84 + i, elevation_gain_m=120 + i)
+                                       for i in range(1, 4)])
+    servidor.store.save_activity_laps([ActivityLap("r-vie", 1, distance_meters=6200, duration_seconds=2100,
+                                                   avg_pace_seconds_per_km=339, avg_hr=148, avg_cadence=172,
+                                                   avg_stride_length_cm=102, elevation_gain_m=15)])
+    _importado_por_el_coach(servidor)
+    sufijo = "-oscuro" if oscuro else "-claro"
+    p = abrir(servidor, "/#dia", oscuro=oscuro)
+    ir_a(p, "fitness")
+    p.locator("#fitness-partes").locator("a", has_text="Plan").click()
+    p.locator("#plan-semanas .semana").filter(has_text="S8").click()
+    semana = p.locator("#plan-semana")
+    dias = semana.locator(".dia-plan")
+    expect(dias).to_have_count(7)
+
+    # the ride of Thursday: its own cadence in rpm (it was the run's, empty), and the climb of each lap
+    dias.nth(3).locator("button.hecha", has_text="Bici de prueba").click()
+    bici = dias.nth(3).locator(".detalle-sesion")
+    vueltas = bici.locator(".vuelta")
+    expect(vueltas).to_have_count(3)
+    expect(vueltas.first).to_contain_text("cadencia 85 rpm")
+    expect(vueltas.first).to_contain_text("subida +121 m")
+    expect(vueltas.first).to_contain_text("30,0 km/h")
+    expect(bici).not_to_contain_text("ppm")
+    expect(bici).to_contain_text("pulso medio 132")
+    _sin_scroll(p, "bici")
+    bici.scroll_into_view_if_needed()
+    capturar(p, f"plan-sesion-bici{sufijo}", completa=True)
+
+    # the run of Friday: as always, its steps per minute, its stride and its climb
+    dias.nth(4).locator("button.hecha").click()
+    carrera = dias.nth(4).locator(".detalle-sesion")
+    expect(carrera.locator(".vuelta")).to_have_count(1)
+    expect(carrera.locator(".vuelta").first).to_contain_text("cadencia 172 ppm")
+    expect(carrera.locator(".vuelta").first).to_contain_text("zancada 1,02 m")
+    expect(carrera.locator(".vuelta").first).to_contain_text("subida +15 m")
+    expect(carrera.locator(".vuelta").first).to_contain_text("5:39 /km")

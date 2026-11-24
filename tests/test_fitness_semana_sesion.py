@@ -211,5 +211,38 @@ def test_la_sesion_de_una_actividad_de_la_lista(web):  # R3, R4 · C-302, C-308
     d = web.cliente.get("/api/actividad/c2").json()
     (v,) = d["vueltas"]
     assert (v["zona"], v["cadencia"], v["zancada_m"], v["subida_m"]) == (3, 172, 1.05, 12)
-    # Fitness › Plan reads the same detail: same or better
-    assert web.cliente.get("/api/plan/actividad/c2").json()["vueltas"][0]["cadencia"] == 172
+    # Fitness › Plan reads the same detail (unit 107 R4: /api/actividad, its own route is gone)
+    assert web.cliente.get("/api/actividad/c2").json()["vueltas"][0]["cadencia"] == 172
+    assert web.cliente.get("/api/plan/actividad/c2").status_code == 404
+
+
+# -- unit 107 R3 · R-130: the unit of the cadence is the sport's -----------------------------------------------------
+
+@pytest.mark.parametrize("tipo, vuelta, unidad", [
+    ("running", {"avg_cadence": 172}, "ppm"),
+    ("trail_running", {"avg_cadence": 160}, "ppm"),
+    ("road_biking", {"avg_bike_cadence": 85}, "rpm"),
+    ("cycling", {"avg_bike_cadence": None}, "rpm"),
+    ("lap_swimming", {"avg_swim_cadence": 28}, "brazadas/min"),
+])
+def test_la_unidad_de_la_cadencia_la_decide_el_deporte(tipo, vuelta, unidad):  # unit 107 R3
+    v = fitness._vuelta(1, {"distance_meters": 1000, "duration_seconds": 300, **vuelta}, tipo, None)
+    assert v["cadencia_unidad"] == unidad
+
+
+def test_otros_deportes_no_llevan_unidad_de_cadencia():  # unit 107 R3
+    v = fitness._vuelta(1, {"duration_seconds": 600, "avg_cadence": 50}, "strength_training", None)
+    assert "cadencia_unidad" not in v
+
+
+def test_el_detalle_de_una_bici_lleva_su_cadencia_en_rpm(web):  # unit 107 R3 · R-130
+    web.store.save_activities([Activity(activity_id="b9", activity_date=LUNES, activity_type="road_biking",
+                                        name="Bici", duration_seconds=3600, distance_meters=30000, avg_hr=130,
+                                        avg_cadence=None, elevation_gain_m=210)])
+    web.store.save_activity_laps([ActivityLap("b9", 1, distance_meters=30000, duration_seconds=3600, avg_hr=130,
+                                              avg_cadence=None, avg_bike_cadence=85, elevation_gain_m=210)])
+    d = web.cliente.get("/api/actividad/b9").json()
+    (v,) = d["vueltas"]
+    assert (v["cadencia"], v["cadencia_unidad"], v["subida_m"]) == (85, "rpm", 210)
+    # the activity itself, with the keys of its sport (the summary line of Plan)
+    assert (d["actividad"]["cadencia_unidad"], d["actividad"]["subida_m"]) == ("rpm", 210)

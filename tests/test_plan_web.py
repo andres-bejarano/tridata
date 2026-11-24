@@ -77,13 +77,21 @@ def test_la_semana_y_el_detalle_de_lo_hecho(web):  # R3, R4 · C-171, C-172
     # the same detail as Fitness: its 12 laps, with pace and HR…
     detalle = web.cliente.get(f"/api/actividad/{hecha['actividad_id']}").json()
     assert len(detalle["vueltas"]) == 12 and detalle["vueltas"][0]["ritmo_s_km"] == 310
-    # …and, for the plan, the cadence and the climb of each lap too
-    plan = web.cliente.get(f"/api/plan/actividad/{hecha['actividad_id']}").json()
+    # …and, for the plan, the cadence and the climb of each lap too (unit 107 R4: from Fitness's own detail)
+    plan = web.cliente.get(f"/api/actividad/{hecha['actividad_id']}").json()
     assert len(plan["vueltas"]) == 12
-    assert plan["vueltas"][0]["cadencia"] == 171 and plan["vueltas"][0]["desnivel_m"] == 3
+    assert plan["vueltas"][0]["cadencia"] == 171 and plan["vueltas"][0]["subida_m"] == 3
     assert plan["vueltas"][0]["pulso_medio"] == 141
-    assert (plan["actividad"]["cadencia"], plan["actividad"]["desnivel_m"]) == (176, 40)
+    assert (plan["actividad"]["cadencia"], plan["actividad"]["subida_m"]) == (176, 40)
     assert web.cliente.get("/api/plan/semana/99").status_code == 404
+    r = web.cliente.get("/api/actividad/no-existe")
+    assert r.status_code == 404 and r.json()["error"] == "Esa actividad no está."
+
+
+def test_la_ruta_vieja_del_detalle_ya_no_existe(web):  # unit 107 R4 · R-130
+    web.confirmar(web.importar())
+    assert web.cliente.get("/api/actividad/r-mie").status_code == 200
+    assert web.cliente.get("/api/plan/actividad/r-mie").status_code == 404
     assert web.cliente.get("/api/plan/actividad/no-existe").status_code == 404
 
 

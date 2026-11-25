@@ -93,7 +93,9 @@ from ..nutricion.recetas import ErrorDatos, normalizar
 from ..nutricion.registro import validar_seccion
 from ..nutricion.suplementacion import (FALTA_HORA_O_MINUTO, FALTA_LA_HORA, Suplementacion, describir,
                                         validar_hora)
+from ..garmin_client import GarminRateLimitError
 from ..plan import Planes
+from ..plan.acciones import OFRECER_RELOJ
 from ..plan import rutas as perfiles
 from ..plan.importar import apartados_del_coach, confirmar as confirmar_plan, proponer_ordenado
 from ..storage import DataStore
@@ -302,10 +304,13 @@ def hacer_desde_pc(equipo: Equipo, papel: str, entrada: Any, huella_vista: str, 
         return f"{exc} {NADA}"
     except TarjetaMal as exc:
         return f"No se ha podido: {exc}. {NADA}"
-    hecho = f"Hecho: {resultado['hecho']}. Era: «{tarjeta['texto']}»."
+    lo_hecho, oferta = str(resultado["hecho"]), ""
+    if lo_hecho.endswith(OFRECER_RELOJ):  # unit 114 (R2): the offer of the watch is the last thing said
+        lo_hecho, oferta = lo_hecho[:-len(OFRECER_RELOJ)].rstrip(" ."), f" {OFRECER_RELOJ}"
+    hecho = f"Hecho: {lo_hecho}. Era: «{tarjeta['texto']}»."
     aviso = _calendario(equipo)
-    _apuntar(equipo, papel, texto, hecho)
-    return hecho + aviso
+    _apuntar(equipo, papel, texto, hecho + oferta)
+    return hecho + aviso + oferta
 
 
 def apuntar_comida_desde_pc(equipo: Equipo, papel: str, dia: Any, alimentos: Any, texto: str = "",
@@ -1159,8 +1164,16 @@ GPX_SIN_CARPETA = ("No sé cuál es tu carpeta de deporte: falta TRIDATA_DOCS en
                    "de deporte.")
 
 
+# unit 114 (R3): a 429 is Garmin asking to wait, not Garmin down: a GPX is not asked for in vain
+GARMIN_FRENA = "Garmin está frenando las peticiones: espera unos minutos y vuelve a pedírmelo."
+
+
 class _GarminCaido(Exception):
-    pass
+    """Garmin did not give the route; its text is what the coach is told (`NO_GARMIN` or `GARMIN_FRENA`)."""
+
+    def __init__(self, texto: str = NO_GARMIN) -> None:
+        super().__init__(texto)
+        self.texto = texto
 
 
 def _de_garmin(equipo: Equipo, llamada: Callable[[Any], Any]) -> Any:
@@ -1169,6 +1182,9 @@ def _de_garmin(equipo: Equipo, llamada: Callable[[Any], Any]) -> Any:
         if planes is None:
             raise RuntimeError("no plans, no Garmin")
         return llamada(planes.garmin())
+    except GarminRateLimitError:
+        log.warning("route from the PC: Garmin is limiting the requests (429)")
+        raise _GarminCaido(GARMIN_FRENA) from None
     except Exception as exc:  # noqa: BLE001 - the unofficial way fails at times: said, and a GPX asked for (R-153)
         log.warning("route from the PC: Garmin did not answer (%s)", type(exc).__name__)
         raise _GarminCaido from None
@@ -1179,7 +1195,9 @@ def rutas_desde_pc(equipo: Equipo) -> str:
     lineas: list[str] = []
     try:
         guardadas = _de_garmin(equipo, lambda g: g.rutas_guardadas())
-    except _GarminCaido:
+    except _GarminCaido as exc:
+        if exc.texto == GARMIN_FRENA:  # unit 114 (R3): wait, and nothing else of Garmin is offered meanwhile
+            return GARMIN_FRENA
         lineas.append(NO_GARMIN)
     else:
         lineas.append("Rutas guardadas en Garmin (get_perfil_ruta con garmin = su id):" if guardadas
@@ -1252,8 +1270,8 @@ def perfil_ruta_desde_pc(equipo: Equipo, garmin: Any = None, actividad: Any = No
             p = perfiles.perfil(perfiles.puntos_gpx(datos), hecha.get("name") or "Carrera", "actividad")
         else:
             return "Dime qué ruta: garmin (su id de get_rutas), actividad (su id) o gpx (la ruta del fichero en el PC)."
-    except _GarminCaido:
-        return NO_GARMIN
+    except _GarminCaido as exc:
+        return exc.texto
     except perfiles.SinAltitud:
         return f"{perfiles.SIN_ALTITUD} Pide a Andrés un GPX con altitud."
     except perfiles.RutaMal as exc:

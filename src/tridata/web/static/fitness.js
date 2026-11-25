@@ -1098,6 +1098,8 @@ function pintarDetalle(d, caja = $("fitness-detalle")) {
   // unit 094 (R-250, R-254): above the laps, the curve of the HR, or that there is none
   const nodos = [d.curva ? curvaPulso(d.curva, caja.clientWidth - 30, lista)
     : el("p", { className: "suave sin-curva", textContent: "sin curva de pulso para esta sesión" })];
+  // unit 110 (R7, C-420): one imported from Strava's export says so
+  if (d.actividad.fuente === "strava") nodos.unshift(el("p", { className: "suave fuente-sesion", textContent: "de Strava" }));
   nodos.push(el("h3", { textContent: `Vueltas de ${d.actividad.nombre}` }));
   // unit 096 (C-329): which sport's zones colour this session, and whether they are estimated from the run
   if (d.zonas && d.zonas_deporte) {

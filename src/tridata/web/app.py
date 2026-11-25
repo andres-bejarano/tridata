@@ -9,6 +9,9 @@
                                   from the saved ones (`guardado`, see below), same row and section
     POST /api/alimento/N/borrar   delete a saved food; only with {"confirmado": true} (R-11)
     POST /api/alimento/N/comido   mark a planned food as eaten (today or a past day only)
+    POST /api/alimento/N/postre   unit 112 (R-343, S-116): {"postre": true|false} marks (or unmarks) it as dessert; only
+                                  the mark changes (its section, kcal and state stay). Anything but true or false is a
+                                  422 and nothing changes
     GET  /api/dia                 the day table, total, expenditure, margins and plan (?fecha=AAAA-MM-DD),
                                   all with the settings in force THAT day, plus the weight block (weight,
                                   7-day mean, basal and projection) and the objective of the day.
@@ -191,6 +194,9 @@ its day stays (and, in a change, its row and section).
 Gone is 422 «"…" ya no está guardado», one that cannot be worked out is 422 with why, a malformed one is 400, and
 nothing is saved. A `guardado` that is not an object is not a choice and is ignored as before.
 
+Unit 112 (R-341): `guardado` may also be {"tipo": "variante", "id": N}, a variant of a recipe, only by grams: the food
+is «Receta · variante» with ITS kcal/100 g. A food may carry `postre` (true or false) when it is added.
+
 Every /api/alimento route answers {"alimento": ..., "dia": ...}, where `dia` is the day the food
 was in BEFORE the action (the screen being looked at; for an added food, its day).
 404 if the food does not exist, 400 malformed data, 422 a business rule. A settings value that
@@ -315,8 +321,8 @@ def _con_lo_guardado(recetario: Recetario, crudo: Any) -> Any:
     tipo, ident = elegido.get("tipo"), elegido.get("id")
     nombre = crudo.get("nombre") if isinstance(crudo.get("nombre"), str) and crudo["nombre"].strip() else "lo elegido"
     try:
-        if tipo not in ("receta", "fijo") or isinstance(ident, bool) or not isinstance(ident, int):
-            raise ErrorDatos(f"«{nombre}» no es una receta ni un ingrediente guardado")
+        if tipo not in ("receta", "fijo", "variante") or isinstance(ident, bool) or not isinstance(ident, int):
+            raise ErrorDatos(f"«{nombre}» no es una receta, una variante ni un ingrediente guardado")
         unidad = crudo.get("unidad")
         if unidad is not None and not isinstance(unidad, str):
             raise ErrorDatos(f"{nombre}: unidad no válida")
@@ -838,6 +844,19 @@ def crear_app(
             return _error(f"No se ha cambiado nada: {exc}.", 422)
         return JSONResponse({"alimento": movido, "dia": _dia(date.fromisoformat(movido["dia"]))})
 
+    async def postre(request: Request) -> Response:
+        """Unit 112 (R-343, S-116): only the mark of dessert of a food changes; the day goes back recomputed."""
+        cuerpo = await _cuerpo(request)
+        if cuerpo is None or "postre" not in cuerpo:
+            return _error("No se ha cambiado nada: falta si es postre (true o false).", 422)
+        try:
+            marcado = registro.marcar_postre(request.path_params["id"], cuerpo["postre"])
+        except KeyError:
+            return _error(f"No se ha cambiado nada: {NO_ESTA[0].lower()}{NO_ESTA[1:]}", 404)
+        except ValueError as exc:
+            return _error(f"No se ha cambiado nada: {exc}.", 422)
+        return JSONResponse({"alimento": marcado, "dia": _dia(date.fromisoformat(marcado["dia"]))})
+
     # -- unit 082: the block «Suplementación» and the hour of each section ---------------------------------------------
 
     async def anadir_toma(request: Request) -> Response:
@@ -1204,6 +1223,7 @@ def crear_app(
         Route("/api/alimento/{id:int}/borrar", borrar, methods=["POST"]),
         Route("/api/alimento/{id:int}/comido", comido, methods=["POST"]),
         Route("/api/alimento/{id:int}/seccion", seccion, methods=["POST"]),
+        Route("/api/alimento/{id:int}/postre", postre, methods=["POST"]),
         Route("/api/toma", anadir_toma, methods=["POST"]),
         Route("/api/toma/{id:int}", cambiar_toma, methods=["POST"]),
         Route("/api/toma/{id:int}", borrar_toma, methods=["DELETE"]),

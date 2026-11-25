@@ -16,10 +16,17 @@ estimated one the team's. A recipe adds them up (`macros_total`) and spreads the
 line with kcal and without macros leaves it without (`sin_macros` says how many). What is logged from a saved thing
 carries them in proportion to its kcal (`para_apuntar`). `macros_que_faltan` / `validar_macros` / `guardar_macros`
 fill in, once, what is missing, only as «estimado» and only what Andrés accepts; what was logged never changes.
+
+Unit 112 (REC-55, R-340..R-342, G-75, S-115): a recipe may have variants (`receta_variante`: «sin chorizo» with its own
+kcal/100 g and, if given, its macros per 100 g; no ingredients nor weighing). Their names are unique inside their
+recipe without minding capitals or accents. What is logged from one is «Receta · variante» with ITS kcal/100 g
+(`para_apuntar("variante", …)`, origin «de tu receta «X» · variante»); saving, changing or deleting one never changes
+its recipe nor anything logged, and deleting a recipe takes its variants with it.
 """
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 import unicodedata
@@ -39,6 +46,8 @@ MACROS = ("proteina_g", "hidratos_g", "grasa_g")  # unit 098: grams in a line, a
 ORIGENES_MACROS = ("estimado", "etiqueta")
 NO_CUADRA = 0.2  # unit 098 (R3): 4·P + 4·H + 9·G more than 20 % away from the kcal is warned, never blocked
 _DE_ORIGEN = re.compile(r"^de tu (?:ingrediente|receta) «(.+?)»")  # unit 101: the `origen` of what was logged
+_DE_VARIANTE = re.compile(r"^de tu receta «(.+?)» · (.+)$")  # unit 112: the `origen` of a variant
+SEPARADOR_VARIANTE = " · "  # unit 112: «Receta · variante», the name of what is logged from a variant
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS receta (
@@ -86,6 +95,16 @@ CREATE TABLE IF NOT EXISTS olla (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL,
     tara_g REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS receta_variante (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    receta_id INTEGER NOT NULL REFERENCES receta(id),
+    nombre TEXT NOT NULL,
+    kcal_100g REAL NOT NULL,
+    proteina REAL,
+    hidratos REAL,
+    grasa REAL,
+    creado TEXT NOT NULL
 );
 """
 
@@ -181,6 +200,8 @@ def _alias(datos: dict) -> list[str]:
 def _kcal_100g_valida(valor: float | None, que: str = "las kcal/100 g") -> None:
     if valor is None:
         return
+    if math.isnan(valor):  # unit 112 (R6): «nan» is not a number of kcal (an infinite one passes the cap below)
+        raise ValueError(f"{que} tienen que ser un número")
     if valor < 0:
         raise ValueError(f"{que} no pueden ser negativas")
     if valor > KCAL_100G_MAX:
@@ -276,6 +297,32 @@ def _macros_validos(valores: dict[str, float | None], por: str | None, quien: st
     if por == "100g" and suma > 100:
         raise ValueError(f"{de}proteína + hidratos + grasa suman {suma:g} g por 100 g, y no pueden pasar de 100 g")
     return {k: float(v) for k, v in valores.items() if v is not None}
+
+
+# -- unit 112: the variants of a recipe -----------------------------------------------------------------------------
+
+def nombre_variante(receta: str, variante: str) -> str:
+    """«Garbanzos de la abuela · sin chorizo»: the name of what is logged from a variant (R-341)."""
+    return f"{receta}{SEPARADOR_VARIANTE}{variante}"
+
+
+def datos_variante(datos: dict) -> dict:
+    """Unit 112 (R6): the name, the kcal/100 g (required, finite, from 0 to 900) and the macros per 100 g (all three
+    or none) of a variant. `ErrorDatos` if malformed, `ValueError` with the words for Andrés otherwise."""
+    nombre = _texto(datos, "nombre", obligatorio=True)
+    try:
+        kcal = _numero(datos, "kcal_100g", "las kcal/100 g")
+        valores = {k: _numero(datos, k, f"{nombre}: {k}") for k in MACROS_FIJO}
+    except OverflowError:
+        raise ValueError("las kcal/100 g tienen que ser un número finito") from None
+    if kcal is None:
+        raise ValueError(f"faltan las kcal/100 g de la variante «{nombre}»")
+    if not math.isfinite(kcal):
+        raise ValueError("las kcal/100 g tienen que ser un número finito")
+    _kcal_100g_valida(kcal)
+    if any(v is not None and not math.isfinite(v) for v in valores.values()):
+        raise ValueError(f"«{nombre}»: los macros tienen que ser números finitos")
+    return {"nombre": nombre, "kcal_100g": kcal, "macros": _macros_validos(valores, "100g", nombre or "")}
 
 
 def no_cuadra(kcal: float | None, proteina: float, hidratos: float, grasa: float) -> str | None:
@@ -504,13 +551,25 @@ class Recetario:
                 return por_100 / v["kcal_total"]
         return None
 
+    @staticmethod
+    def _variante_fila(v: sqlite3.Row) -> dict:
+        """Unit 112: a variant with its kcal/100 g and its macros per 100 g (as a recipe's `macros_100g`), or None."""
+        macros = None if any(v[k] is None for k in MACROS_FIJO) else {
+            g: v[k] for k, g in zip(MACROS_FIJO, MACROS, strict=True)}
+        return {"id": v["id"], "receta_id": v["receta_id"], "nombre": v["nombre"], "kcal_100g": v["kcal_100g"],
+                "macros_100g": macros}
+
+    def _variantes(self, conn: sqlite3.Connection, receta_id: int) -> list[dict]:
+        return [self._variante_fila(v) for v in conn.execute(
+            "SELECT * FROM receta_variante WHERE receta_id = ? ORDER BY nombre COLLATE NOCASE, id", (receta_id,))]
+
     def _receta_de(self, conn: sqlite3.Connection, r: sqlite3.Row) -> dict:
         versiones = [self._version_fila(v, r["version_en_uso"]) for v in conn.execute(
             "SELECT * FROM receta_version WHERE receta_id = ? ORDER BY numero", (r["id"],))]
         en_uso = next((v for v in versiones if v["en_uso"]), versiones[-1] if versiones else None)
         return {"id": r["id"], "nombre": r["nombre"], "alias": json.loads(r["alias"]), "nota": r["nota"],
                 "por_revisar": bool(r["por_revisar"]), "version_en_uso": r["version_en_uso"], "en_uso": en_uso,
-                "versiones": versiones}
+                "versiones": versiones, "variantes": self._variantes(conn, r["id"])}
 
     def recetas(self) -> list[dict]:
         with self._connect() as conn:
@@ -896,9 +955,98 @@ class Recetario:
             receta = self._receta_de(conn, self._leer(conn, "receta", receta_id))
             if confirmado is not True:
                 raise ValueError("hay que confirmar antes de borrar: no se ha borrado nada")
+            conn.execute("DELETE FROM receta_variante WHERE receta_id = ?", (receta_id,))  # unit 112 (S-115)
             conn.execute("DELETE FROM receta_version WHERE receta_id = ?", (receta_id,))
             conn.execute("DELETE FROM receta WHERE id = ?", (receta_id,))
         return receta
+
+    # -- unit 112 (R-340..R-342, G-75, S-115): the variants of a recipe -------------------------------------------------
+
+    @staticmethod
+    def _repetida(conn: sqlite3.Connection, receta_id: int, nombre: str, propia: int | None) -> str | None:
+        """The name of another variant of that recipe with the same name, without capitals nor accents."""
+        for v in conn.execute("SELECT id, nombre FROM receta_variante WHERE receta_id = ?", (receta_id,)):
+            if v["id"] != propia and normalizar(v["nombre"]) == normalizar(nombre):
+                return v["nombre"]
+        return None
+
+    def _comprobada(self, conn: sqlite3.Connection, receta_id: int, datos: dict, propia: int | None) -> dict:
+        limpio = datos_variante(datos)
+        receta = self._leer(conn, "receta", receta_id)
+        repetida = self._repetida(conn, receta_id, limpio["nombre"], propia)
+        if repetida is not None:
+            raise ValueError(f"«{receta['nombre']}» ya tiene la variante «{repetida}»")
+        return limpio
+
+    def comprobar_variante(self, receta_id: int, datos: dict, variante_id: int | None = None) -> dict:
+        """What `crear_variante` (or `cambiar_variante` of `variante_id`) would save, checked; writes nothing."""
+        with self._connect() as conn:
+            if variante_id is not None:
+                antes = self._leer(conn, "receta_variante", variante_id)
+                datos = self._con_lo_de_antes(antes, datos)
+            return self._comprobada(conn, receta_id, datos, variante_id)
+
+    @staticmethod
+    def _con_lo_de_antes(antes: sqlite3.Row, datos: dict) -> dict:
+        """A change keeps the name and the macros it does not send (the three go together)."""
+        completo = {"nombre": antes["nombre"], "kcal_100g": antes["kcal_100g"], **datos}
+        if not any(k in datos for k in MACROS_FIJO):
+            completo.update({k: antes[k] for k in MACROS_FIJO})
+        return completo
+
+    def variante(self, variante_id: int) -> dict:
+        """One variant with the name of its recipe (`receta`); KeyError if it does not exist."""
+        with self._connect() as conn:
+            v = self._leer(conn, "receta_variante", variante_id)
+            return {**self._variante_fila(v), "receta": self._leer(conn, "receta", v["receta_id"])["nombre"]}
+
+    def crear_variante(self, receta_id: int, datos: dict) -> dict:
+        """R-340: a variant of that recipe; the recipe and what was logged do not change (G-75). KeyError without the
+        recipe; ValueError if its kcal are impossible (R6) or the recipe already has one with that name (R3)."""
+        with self._connect() as conn:
+            limpio = self._comprobada(conn, receta_id, datos, None)
+            macros = limpio["macros"]
+            cur = conn.execute(
+                "INSERT INTO receta_variante (receta_id, nombre, kcal_100g, proteina, hidratos, grasa, creado) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (receta_id, limpio["nombre"], limpio["kcal_100g"], *(macros[k] if macros else None for k in MACROS_FIJO),
+                 datetime.now().isoformat(timespec="seconds")))
+            return self._variante_fila(self._leer(conn, "receta_variante", int(cur.lastrowid or 0)))
+
+    def cambiar_variante(self, variante_id: int, datos: dict) -> dict:
+        """R-342: its kcal/100 g (and its name or macros if sent; the macros not sent stay as they were). What was
+        logged with it keeps its kcal."""
+        with self._connect() as conn:
+            antes = self._leer(conn, "receta_variante", variante_id)
+            limpio = self._comprobada(conn, antes["receta_id"], self._con_lo_de_antes(antes, datos), variante_id)
+            macros = limpio["macros"]
+            conn.execute("UPDATE receta_variante SET nombre = ?, kcal_100g = ?, proteina = ?, hidratos = ?, grasa = ? "
+                         "WHERE id = ?", (limpio["nombre"], limpio["kcal_100g"],
+                                          *(macros[k] if macros else None for k in MACROS_FIJO), variante_id))
+            return self._variante_fila(self._leer(conn, "receta_variante", variante_id))
+
+    def borrar_variante(self, variante_id: int, confirmado: bool = False) -> dict:
+        """R-342: only with `confirmado`; what was logged with it keeps its kcal and origin."""
+        return self._borrar("receta_variante", variante_id, confirmado, self._variante_fila)
+
+    @staticmethod
+    def _para_apuntar_variante(fila: sqlite3.Row, receta: str) -> dict:
+        """A variant as `_calcular` takes it: «Receta · variante» with its kcal/100 g and macros per 100 g."""
+        return {**Recetario._variante_fila(fila), "nombre": nombre_variante(receta, fila["nombre"]), "receta": receta,
+                "variante": fila["nombre"]}
+
+    def variante_por_nombre(self, nombre: str | None) -> int | None:
+        """The id of the variant called «Receta · variante» (its recipe by name or alias, without capitals, accents nor
+        the dot: «garbanzos de la abuela sin chorizo» too), or None."""
+        clave = normalizar(nombre)
+        if not clave:
+            return None
+        with self._connect() as conn:
+            for v in conn.execute("SELECT v.id, v.nombre, r.nombre AS receta, r.alias FROM receta_variante v "
+                                  "JOIN receta r ON r.id = v.receta_id ORDER BY r.id, v.id").fetchall():
+                if clave in {normalizar(nombre_variante(n, v["nombre"])) for n in [v["receta"], *json.loads(v["alias"])]}:
+                    return int(v["id"])
+        return None
 
     # -- G-31: what was dictated --------------------------------------------------------------------------
 
@@ -918,6 +1066,14 @@ class Recetario:
     @staticmethod
     def _calcular(tipo: str, cosa: dict, cantidad: float | None, unidad: str | None) -> dict:
         """kcal and origin of `cantidad` of a saved thing, or `problema` (and `dudoso`) if it cannot be done."""
+        if tipo == "variante":  # unit 112 (R-341): by grams, with ITS kcal/100 g and macros per 100 g
+            if cantidad is None or unidad != "g":
+                return {"problema": f"«{cosa['nombre']}» está guardada por 100 g: dilo en gramos", "dudoso": False}
+            macros = cosa.get("macros_100g")
+            return {"kcal": _redondear(cantidad * cosa["kcal_100g"] / 100), "provisional": False,
+                    "origen": f"de tu receta «{cosa['receta']}»{SEPARADOR_VARIANTE}{cosa['variante']}",
+                    **({k: _redondear(macros[k] * cantidad / 100) for k in MACROS} if macros
+                       else dict.fromkeys(MACROS))}
         if tipo == "fijo":
             kcal = _kcal_de_fijo(cosa, cantidad, unidad)
             if kcal is None:
@@ -960,6 +1116,8 @@ class Recetario:
     def para_apuntar(self, tipo: str, ident: int, cantidad: float | None, unidad: str | None = None) -> dict:
         """Units 013 and 019 (R-57, R-58): what is logged for `cantidad` of a saved recipe or fixed food.
 
+        Unit 112 (R-341): or of a variant (`tipo` «variante»), only by grams: «Receta · variante» with its kcal/100 g.
+
         `unidad` None is the thing's own: grams for a recipe and for a fixed food per 100 g, units for one per
         unit. A recipe also goes by fractions (`unidad="receta"`, `cantidad` > 0: ½ is 0.5), weighed or not: not
         weighed it is provisional; only by grams does it need its weight or approximate kcal/100 g. The kcal
@@ -973,6 +1131,10 @@ class Recetario:
                 unidad = unidad or ("g" if cosa["por"] == "100g" else "unidad")
             elif tipo == "receta":
                 cosa = self._receta_de(conn, self._leer(conn, "receta", ident))
+                unidad = unidad or "g"
+            elif tipo == "variante":  # unit 112 (R-341)
+                fila = self._leer(conn, "receta_variante", ident)
+                cosa = self._para_apuntar_variante(fila, self._leer(conn, "receta", fila["receta_id"])["nombre"])
                 unidad = unidad or "g"
             else:
                 raise KeyError(tipo)
@@ -1070,6 +1232,11 @@ class Recetario:
             receta = self._receta_de(conn, r)
             for n in [receta["nombre"], *receta["alias"]]:
                 guardados[normalizar(n)] = ("receta", receta)
+        for v in conn.execute("SELECT v.*, r.nombre AS receta, r.alias FROM receta_variante v JOIN receta r "
+                              "ON r.id = v.receta_id ORDER BY r.id, v.id").fetchall():  # unit 112: a recipe wins
+            variante = self._para_apuntar_variante(v, v["receta"])
+            for n in [v["receta"], *json.loads(v["alias"])]:
+                guardados.setdefault(normalizar(nombre_variante(n, v["nombre"])), ("variante", variante))
         return guardados
 
     @staticmethod
@@ -1077,7 +1244,9 @@ class Recetario:
         """Unit 101 (R-284, C-358): the macros of a logged food worked out from the saved thing it comes from — by its
         `origen` («de tu ingrediente «X»», «de tu receta «X»»), or by its name without capitals nor accents — for its
         quantity, as `para_apuntar` does; (None, None) if that thing has none or it is not on the same base."""
-        nombres = [m.group(1) for m in [_DE_ORIGEN.match(apuntado.get("origen") or "")] if m]
+        de_variante = _DE_VARIANTE.match(apuntado.get("origen") or "")  # unit 112: never its recipe's macros
+        nombres = ([nombre_variante(de_variante.group(1), de_variante.group(2))] if de_variante
+                   else [m.group(1) for m in [_DE_ORIGEN.match(apuntado.get("origen") or "")] if m])
         for nombre in [*nombres, apuntado["nombre"]]:
             guardado = guardados.get(normalizar(nombre))
             if guardado is None:
@@ -1090,6 +1259,8 @@ class Recetario:
                 return None, None
             if tipo == "receta":
                 de = f"de tu receta «{cosa['nombre']}»"
+            elif tipo == "variante":
+                de = calculo["origen"]
             else:
                 de = f"de la lista de comunes («{cosa['nombre']}»)" if cosa["comun"] else f"de tu ingrediente «{cosa['nombre']}»"
             return {k: calculo[g] for k, g in zip(MACROS_FIJO, MACROS, strict=True)}, de

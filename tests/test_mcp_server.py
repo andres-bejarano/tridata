@@ -212,3 +212,15 @@ def test_preparar_cambio_nombra_hasta(tmp_path, store):  # unit 111 (R-334): the
     descripcion = tools["preparar_cambio"].description
     forma = descripcion[descripcion.index("cambio: an object"):descripcion.index("texto (optional)")]
     assert "hasta" in forma and "eleccion" in forma and "whole number" in forma
+
+
+def test_recetas_y_comida_nombran_variantes_y_postre(tmp_path, store):  # unit 112 (R-341, R-343, R-344)
+    from tridata.conversaciones.desde_pc import montar_equipo
+
+    equipo = montar_equipo(tmp_path / "test.sqlite3", store=store, token=tmp_path / "google-token.json")
+    tools = {t.name: t for t in asyncio.run(build_server(store, equipo=equipo).list_tools())}
+    recetas = tools["get_recetas"].description
+    assert "variantes" in recetas and "Receta · variante" in recetas
+    comida = tools["apuntar_comida"].description
+    assert "tipo: receta, fijo or variante" in comida and "postre: true" in comida
+    assert "Receta · variante" in comida

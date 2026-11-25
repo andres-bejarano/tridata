@@ -21,6 +21,8 @@
                                       thing's own): one that does not fit is a 422 and nothing is saved
 
 Unit 026: every fixed food carries `comun` (true for one of the app's common foods, `nutricion/comunes.py`).
+Unit 112: every recipe carries `variantes` (id, nombre, kcal_100g, macros_100g), what the search box of Nutrición ›
+Día offers as «Receta · variante»; they are saved, changed and deleted by the coach, not here.
 
 Every other route answers the whole listing plus the thing touched ("receta", "fijo" or "olla").
 400 malformed data, 422 a business rule (its text says why), 404 it does not exist. The kcal of

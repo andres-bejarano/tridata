@@ -7,7 +7,7 @@
 // change it when the list below changes (v11: unit 032, the chat; v12: unit 035, the sections of the day; v13:
 // unit 040, plan.js; v14: unit 080, the app without the paid AI: the queue, the dictation, the cards and the chat
 // are gone, and the new version makes the phone let go of the old cache and its pages; v15: unit 082, suplementacion.js)
-const VERSION = "tridata-cascaron-v17";  // unit 109: gels and salt in suplementacion.js
+const VERSION = "tridata-cascaron-v18";  // unit 112: variants in buscador.js, the dessert in app.js
 const CASCARON = [
   "/", "/static/app.js", "/static/estilos.css",
   // unit 010: the Peso tab, the settings page and the home-screen icon

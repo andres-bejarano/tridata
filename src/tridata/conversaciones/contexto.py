@@ -52,6 +52,10 @@ Unit 111 (R-336, C-428): each day of "dias" carries its `objetivo` (its % and wh
 «mantenimiento por la carrera <nombre>», «cambiado a mano» or «sin plan en Ajustes», `margen.origen_del_objetivo`), and
 `objetivos_no_de_ajustes` the days from today to `DIAS_OBJETIVOS` ahead whose objective does not come from Ajustes.
 
+Unit 112 (R-344, C-438): a food marked as dessert carries `postre: true` (only that one); `variantes_de_recetas`, the
+variants of each saved recipe with their kcal/100 g and macros per 100 g, only when there are some (read without
+creating anything).
+
 None of it carries the hour: with the same data it is the same text byte to byte. It changes only when a datum
 changes (a food, a weight, a sync) or the day does. Read only: nothing here writes.
 """
@@ -198,19 +202,46 @@ def _r(valor: float | None, decimales: int = 1) -> float | int | None:
 
 
 def _comidas(registro: RegistroComidas) -> dict[str, list[dict[str, Any]]]:
-    """Every logged food, by day, in the order it was logged."""
+    """Every logged food, by day, in the order it was logged; unit 112: a dessert says so (`postre: true`)."""
     conn = sqlite3.connect(registro.db_path)
     conn.row_factory = sqlite3.Row
     try:
-        filas = conn.execute("SELECT dia, nombre, cantidad, unidad, kcal, estado FROM alimento_apuntado "
-                             "ORDER BY dia, id").fetchall()
+        columnas = {f[1] for f in conn.execute("PRAGMA table_info(alimento_apuntado)")}
+        postre = "postre" if "postre" in columnas else "0 AS postre"
+        filas = conn.execute(f"SELECT dia, nombre, cantidad, unidad, kcal, estado, {postre} "  # noqa: S608
+                             "FROM alimento_apuntado ORDER BY dia, id").fetchall()
     finally:
         conn.close()
     por_dia: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for f in filas:
         por_dia[f["dia"]].append(_limpio({"nombre": f["nombre"], "cantidad": _r(f["cantidad"]), "unidad": f["unidad"],
-                                          "kcal": _r(f["kcal"], 0), "estado": f["estado"]}))
+                                          "kcal": _r(f["kcal"], 0), "estado": f["estado"],
+                                          "postre": True if f["postre"] else None}))
     return por_dia
+
+
+def _variantes_de_recetas(registro: RegistroComidas) -> list[dict[str, Any]]:
+    """Unit 112 (R-344): the variants of each saved recipe (name, kcal/100 g and macros per 100 g if they have them),
+    by recipe; read only, and nothing if the table does not exist yet."""
+    conn = sqlite3.connect(registro.db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'receta_variante'").fetchone() \
+                is None:
+            return []
+        filas = conn.execute("SELECT r.id AS receta_id, r.nombre AS receta, v.nombre, v.kcal_100g, v.proteina, "
+                             "v.hidratos, v.grasa FROM receta_variante v JOIN receta r ON r.id = v.receta_id "
+                             "ORDER BY r.nombre COLLATE NOCASE, r.id, v.nombre COLLATE NOCASE, v.id").fetchall()
+    finally:
+        conn.close()
+    por_receta: dict[int, dict[str, Any]] = {}
+    for f in filas:
+        receta = por_receta.setdefault(f["receta_id"], {"receta": f["receta"], "variantes": []})
+        macros = None if any(f[k] is None for k in ("proteina", "hidratos", "grasa")) else {
+            "proteina_g": _r(f["proteina"]), "hidratos_g": _r(f["hidratos"]), "grasa_g": _r(f["grasa"])}
+        receta["variantes"].append(_limpio({"nombre": f["nombre"], "kcal_100g": _r(f["kcal_100g"]),
+                                            "macros_100g": macros}))
+    return list(por_receta.values())
 
 
 def _macros(registro: RegistroComidas) -> dict[str, dict[str, Any]]:
@@ -563,6 +594,9 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     no_de_ajustes = _objetivos_no_de_ajustes(objetivos, ajustes, hoy)  # unit 111 (R-336)
     if no_de_ajustes:
         datos_json["objetivos_no_de_ajustes"] = no_de_ajustes
+    variantes = _variantes_de_recetas(registro)  # unit 112 (R-344): read only, the same SQLite
+    if variantes:
+        datos_json["variantes_de_recetas"] = variantes
     productos = leer_productos(registro.db_path)  # unit 109 (R-322): read only, the same SQLite
     if productos:
         datos_json["productos_suplemento"] = productos

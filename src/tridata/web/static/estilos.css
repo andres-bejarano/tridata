@@ -210,6 +210,15 @@ button.signo { min-width: 48px; font-size: 1.1rem; padding: 0 12px; }
 .lista > .seccion-cab.destino, .lista > .fila.destino { background: var(--acento-suave); }
 .lista > .seccion-cab.destino .seccion-nombre, .lista > .seccion-cab.destino .seccion-kcal { color: var(--acento); }
 .pie-secciones { display: grid; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--borde); }
+/* -- unit 112: «Postre», apart at the end of its section, and its box on the card of a food -------------------- */
+.lista > .postre-cab {
+  padding: 8px 14px 4px 38px; border-top: 1px dashed var(--borde); font-size: .95rem; font-weight: 600;
+  font-variant-caps: all-small-caps; letter-spacing: .06em; color: var(--suave);
+}
+.lista > .postre-cab + .fila { border-top: 0; }
+.lista > .postre-cab.destino { background: var(--acento-suave); color: var(--acento); }
+.casilla-postre { display: flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 600; cursor: pointer; }
+.casilla-postre input { width: 22px; height: 44px; margin: 0; accent-color: var(--acento); flex-shrink: 0; }
 .pie-secciones p { margin: 0; }
 .pie-secciones button.anadir-seccion { border-style: dashed; color: var(--acento); }
 .opciones-seccion { display: flex; flex-wrap: wrap; gap: 8px; }

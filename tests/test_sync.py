@@ -429,7 +429,9 @@ def test_sin_plan_en_curso_no_se_pregunta_el_calendario(tmp_path) -> None:
 @pytest.mark.parametrize("donde", ["calendario", "detalle"])
 @pytest.mark.parametrize("error", [GarminRateLimitError("Garmin Connect is limiting the requests (429)"),
                                    RuntimeError("no answer")], ids=["429", "fallo"])
-def test_si_garmin_frena_o_falla_lo_demas_termina_y_el_plan_no_cambia(tmp_path, donde, error) -> None:  # R6
+def test_si_garmin_frena_o_falla_lo_demas_termina_y_el_plan_no_cambia(tmp_path, donde, error,
+                                                                       monkeypatch) -> None:  # R6
+    monkeypatch.setattr("tridata.sync.ESPERA_429", 0)  # unit 113: a 429 on a detail waits and tries once more
     store = DataStore(tmp_path / "t.db")
     Planes(store.db_path).crear(PLAN_061, datetime(2026, 10, 20, 9))
     client = _cliente_061(**({"falla": error} if donde == "calendario" else {"falla_detalle": error}))

@@ -187,8 +187,11 @@ _DESDE_GARMIN = (("garmin_actualizado", "TEXT"), ("garmin_aviso", "TEXT"))
 _EN_GARMIN = (("garmin_fecha", "TEXT"),)
 # unit 076: the hour a session starts («HH:MM»), NULL without one
 _HORA = (("hora", "TEXT"),)
+# unit 113: the sport of a session (`carrera|bici|natacion|fuerza|otro`, NULL: from its title) and the day its workout
+# was last read from Garmin (a paired workout is read at most once a day)
+_DEPORTE = (("deporte", "TEXT"), ("garmin_revisado", "TEXT"))
 _COLUMNAS_GARMIN = {"titulo", "bloques", "fecha", "garmin_workout_id", "garmin_schedule_id", "garmin_actualizado",
-                    "garmin_texto"}
+                    "garmin_texto", "deporte", "garmin_revisado"}
 # unit 044: the columns of a live incident, added to an older base without them
 _VIVA = (("zona", "TEXT"), ("lado", "TEXT"), ("que_paso", "TEXT"), ("estado", "TEXT"), ("leccion", "TEXT"),
          ("cerrada", "TEXT"), ("abierta", "TEXT"))
@@ -237,7 +240,7 @@ class Planes:
             conn.executescript(_SCHEMA)
             for tabla, columnas in (("plan_sesion", _RELOJ), ("plan_incidencia", _VIVA), ("plan_carrera", _ESTRATEGIA),
                                     ("plan_carrera", _RESULTADO), ("plan_sesion", _DESDE_GARMIN),
-                                    ("plan_sesion", _EN_GARMIN), ("plan_sesion", _HORA)):
+                                    ("plan_sesion", _EN_GARMIN), ("plan_sesion", _HORA), ("plan_sesion", _DEPORTE)):
                 tiene = {f["name"] for f in conn.execute(f"PRAGMA table_info({tabla})")}
                 for columna, tipo in columnas:
                     if columna not in tiene:
@@ -361,13 +364,14 @@ class Planes:
 
     def marcar_garmin(self, ident: int, workout_id: int | None, schedule_id: int | None,
                       enviada: datetime | None = None, texto: str | None = None) -> None:
-        """What is in Garmin of that session now (all None: nothing)."""
+        """What is in Garmin of that session now (all None: nothing). Sent to the watch, it is a run (unit 113: only
+        runs are sent)."""
         with self._connect() as conn:
             conn.execute("UPDATE plan_sesion SET garmin_workout_id = ?, garmin_schedule_id = ?, garmin_enviada = ?, "
-                         "garmin_texto = ?, garmin_fecha = CASE WHEN ? IS NULL THEN NULL ELSE fecha END "
-                         "WHERE rowid = ?",
+                         "garmin_texto = ?, garmin_fecha = CASE WHEN ? IS NULL THEN NULL ELSE fecha END, "
+                         "deporte = CASE WHEN ? IS NULL THEN deporte ELSE 'carrera' END WHERE rowid = ?",
                          (workout_id, schedule_id, enviada.isoformat(timespec="seconds") if enviada else None,
-                          texto, workout_id, ident))
+                          texto, workout_id, workout_id, ident))
 
     # -- unit 061: «Garmin manda» --------------------------------------------------------------------------------
 
@@ -381,15 +385,24 @@ class Planes:
                 (plan_id, plan_id, plan_id)).fetchone()
         return date.fromisoformat(fin) if fin else None
 
-    def sesiones_garmin(self, plan_id: int, desde: date, hasta: date) -> list[dict[str, Any]]:
+    def sesiones_garmin(self, plan_id: int, desde: date, hasta: date, *, fuera: bool = False) -> list[dict[str, Any]]:
         """The sessions of a plan from `desde` to `hasta`, in its order, as `plan.desde_garmin.cambios` pairs them:
-        `{id, fecha, titulo, bloques, garmin_workout_id, garmin_schedule_id, garmin_actualizado, garmin_texto}`."""
+        `{id, fecha, titulo, bloques, garmin_workout_id, garmin_schedule_id, garmin_actualizado, garmin_texto,
+        deporte, garmin_revisado, garmin_fecha, garmin_enviada}`. With `fuera` (unit 113), after them the sessions
+        out of the window that have ids of Garmin, marked `fuera: True` (only paired by their ids)."""
         with self._connect() as conn:
             filas = conn.execute("SELECT rowid AS id, * FROM plan_sesion WHERE plan_id = ? AND fecha BETWEEN ? AND ? "
                                  "ORDER BY orden", (plan_id, desde.isoformat(), hasta.isoformat())).fetchall()
+            otras = conn.execute(
+                "SELECT rowid AS id, * FROM plan_sesion WHERE plan_id = ? AND fecha NOT BETWEEN ? AND ? "
+                "AND (garmin_workout_id IS NOT NULL OR garmin_schedule_id IS NOT NULL) ORDER BY orden",
+                (plan_id, desde.isoformat(), hasta.isoformat())).fetchall() if fuera else []
         return [{"id": f["id"], "fecha": f["fecha"], "titulo": f["titulo"], "bloques": json.loads(f["bloques"]),
                  "garmin_workout_id": f["garmin_workout_id"], "garmin_schedule_id": f["garmin_schedule_id"],
-                 "garmin_actualizado": f["garmin_actualizado"], "garmin_texto": f["garmin_texto"]} for f in filas]
+                 "garmin_actualizado": f["garmin_actualizado"], "garmin_texto": f["garmin_texto"],
+                 "deporte": f["deporte"], "garmin_revisado": f["garmin_revisado"], "garmin_fecha": f["garmin_fecha"],
+                 "garmin_enviada": f["garmin_enviada"], **({"fuera": True} if i >= len(filas) else {})}
+                for i, f in enumerate([*filas, *otras])]
 
     def aplicar_garmin(self, plan_id: int, cambios: Cambios) -> dict[str, int]:
         """Writes a pass of «Garmin manda» in one transaction: the changed sessions in place, the new ones at the end
@@ -429,7 +442,8 @@ class Planes:
             for ident, aviso in cambios.avisos.items():
                 conn.execute("UPDATE plan_sesion SET garmin_aviso = ? WHERE rowid = ? AND plan_id = ?",
                              (aviso, ident, plan_id))
-        return {"cambiadas": len(cambios.actualizar), "anadidas": len(cambios.anadir),
+        return {"cambiadas": sum(1 for c in cambios.actualizar.values() if set(c) - {"garmin_revisado"}),
+                "anadidas": len(cambios.anadir),
                 "avisos": sum(1 for a in cambios.avisos.values() if a)}
 
     def garmin(self) -> Any:

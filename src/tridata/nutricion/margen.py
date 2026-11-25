@@ -125,6 +125,17 @@ def objetivo_del_dia(objetivo_dia: Mapping[str, Any] | None, plan: Mapping[str, 
             "texto": "Sin plan en Ajustes: el objetivo de hoy es mantenimiento."}
 
 
+def origen_del_objetivo(objetivo_dia: Mapping[str, Any] | None, plan: Mapping[str, Any] | None) -> str:
+    """Unit 111 (R-336): where the % of the day comes from, in short, with the same rule as `objetivo_del_dia`:
+    «cambiado a mano», «mantenimiento por la carrera <nombre>», «de Ajustes» or «sin plan en Ajustes»."""
+    if objetivo_dia and objetivo_dia.get("porcentaje") is not None:
+        return "cambiado a mano"
+    if plan and plan.get("objetivo_pct") is not None:
+        motivo = plan.get("motivo") or "ajuste"
+        return f"mantenimiento por la {motivo}" if motivo.startswith("carrera ") else "de Ajustes"
+    return "sin plan en Ajustes"
+
+
 def limite_saludable(gasto: float, objetivo_pct: float, limite_pct: float | None) -> dict | None:
     """Mark of the healthy limit on the bar: gasto × (1 − limit) in a deficit (or maintenance),
     gasto × (1 + limit) in a surplus; warns if the objective goes past it (R-23, C-39). None without limit."""

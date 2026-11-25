@@ -48,6 +48,10 @@ Unit 100 (R-280..R-282): only the last `DIAS_CON_ALIMENTOS` days (today and the 
 else but, of the supplementation, only the caffeine of the day. Their detail is asked by dates (`detalle_dias`, the
 tool `get_comidas` of the MCP), built by the same `_detalle` as the recent days.
 
+Unit 111 (R-336, C-428): each day of "dias" carries its `objetivo` (its % and where it comes from: «de Ajustes»,
+«mantenimiento por la carrera <nombre>», «cambiado a mano» or «sin plan en Ajustes», `margen.origen_del_objetivo`), and
+`objetivos_no_de_ajustes` the days from today to `DIAS_OBJETIVOS` ahead whose objective does not come from Ajustes.
+
 None of it carries the hour: with the same data it is the same text byte to byte. It changes only when a datum
 changes (a food, a weight, a sync) or the day does. Read only: nothing here writes.
 """
@@ -67,8 +71,10 @@ from ..hoy import _deporte
 from ..metrics import compute_pmc, daily_tss, pmc_hasta
 from ..nutricion.ajustes import DESDE_SIEMPRE, Ajustes
 from ..nutricion.asistente import texto_acciones
+from ..nutricion.dia import plan_del_dia
 from ..nutricion.macros import texto as texto_macros
 from ..nutricion.macros import vista as vista_macros
+from ..nutricion.margen import objetivo_del_dia, origen_del_objetivo
 from ..nutricion.objetivo_dia import ObjetivosDia
 from ..nutricion.peso import RegistroPeso
 from ..nutricion.registro import DIAS_MACROS, MACROS, SECCIONES, RegistroComidas, sin_macros_desde
@@ -115,7 +121,9 @@ anteriores de esas 8 semanas llevan todo lo demás (sus kcal, macros, peso, sue�
 sus horas de comida, y de su suplementación solo la cafeína del día. Si necesitas saber qué comió un día de esos, \
 pídelo por fechas con la herramienta get_comidas (desde y hasta, como mucho 31 días cada vez): te los da con el mismo \
 detalle. "semanas", lo anterior resumido por \
-semanas; "ajustes", sus objetivos de hoy; "carreras", sus carreras; "pulso", su frecuencia cardiaca máxima, de reposo \
+semanas; "ajustes", sus objetivos de hoy; cada día de "dias" lleva su "objetivo": su % y de dónde sale («de \
+Ajustes», «mantenimiento por la carrera …» o «cambiado a mano»); "objetivos_no_de_ajustes", de hoy a 60 días, los días \
+cuyo objetivo no sale de Ajustes (mantenimiento por una carrera o cambiado a mano) con su %; "carreras", sus carreras; "pulso", su frecuencia cardiaca máxima, de reposo \
 y sus zonas, y de dónde salen; "plan", su plan de entrenamiento en curso (sus carreras con su objetivo, su resultado —"a mano" si lo escribió él, \
 "garmin" si sale de su actividad de ese día— y la estrategia por tramos que guardó, tal cual; sus semanas \
 con lo previsto en segundos, su fase si la tiene y lo hecho según Garmin, sus fases con las semanas que abarcan, sus sesiones por día con su id, sus bloques y su hora de empezar (HH:MM) si la tiene, y la nutrición en carrera); \
@@ -398,6 +406,25 @@ def _incidencias(planes: Planes, plan_id: int) -> list[dict]:
 
 
 DIAS_PREVISTOS = 14  # unit 071: the planned trainings from today to two weeks ahead
+DIAS_OBJETIVOS = 60  # unit 111 (R-336): the days ahead whose objective does not come from Ajustes
+
+
+def _objetivo(objetivos: ObjetivosDia, ajustes: Ajustes, dia: date) -> dict[str, Any]:
+    """Unit 111 (R-336): the % of the day and where it comes from, with the rule of the screen of the day."""
+    propio, plan = objetivos.del_dia(dia), plan_del_dia(ajustes.vigentes(dia))
+    pct = objetivo_del_dia(propio, plan)["porcentaje"]
+    return {"pct": int(pct) if float(pct).is_integer() else pct, "origen": origen_del_objetivo(propio, plan)}
+
+
+def _objetivos_no_de_ajustes(objetivos: ObjetivosDia, ajustes: Ajustes, hoy: date) -> list[dict[str, Any]]:
+    """From `hoy` to `DIAS_OBJETIVOS` ahead, the days whose objective is maintenance for a race or changed by hand."""
+    salida = []
+    for i in range(DIAS_OBJETIVOS + 1):
+        dia = hoy + timedelta(days=i)
+        objetivo = _objetivo(objetivos, ajustes, dia)
+        if objetivo["origen"] not in ("de Ajustes", "sin plan en Ajustes"):
+            salida.append({"fecha": dia.isoformat(), "dia": _dia(dia.isoformat()), **objetivo})
+    return salida
 
 
 def _entrenos_previstos(objetivos: ObjetivosDia, hoy: date) -> list[dict[str, Any]]:
@@ -425,6 +452,7 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     tomas_de, horas_de, leche_de = leer_todo(registro.db_path)  # unit 082: read only, nothing created
     peso_de = {p["dia"]: p for p in pesos.entre(DESDE_SIEMPRE, hoy)}
     historial = ajustes.historial_fc()
+    objetivos = ObjetivosDia(registro.db_path)  # the same SQLite (unit 071, unit 111)
 
     stats: dict[str, dict] = {}
     noches: dict[str, dict] = {}
@@ -464,7 +492,8 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     dias = []
     for i in range(DIAS_DIA_A_DIA):
         dia = (desde + timedelta(days=i)).isoformat()
-        fila = {"fecha": dia, "dia": _dia(dia), **del_dia(dia)}
+        fila = {"fecha": dia, "dia": _dia(dia), **del_dia(dia),
+                "objetivo": _objetivo(objetivos, ajustes, date.fromisoformat(dia))}  # unit 111 (R-336)
         dias.append(_limpio(fila if dia >= con_alimentos else _sin_alimentos(fila)))
 
     # -- before the 8 weeks: by week (Monday), only sums and means ---------------------------------------------------
@@ -528,9 +557,12 @@ def montar(*, registro: RegistroComidas, pesos: RegistroPeso, ajustes: Ajustes, 
     sin_macros = _sin_macros(registro, hoy)  # unit 101 (R-285)
     if sin_macros:
         datos_json["alimentos_sin_macros"] = sin_macros
-    previstos = _entrenos_previstos(ObjetivosDia(registro.db_path), hoy)  # unit 071: the same SQLite
+    previstos = _entrenos_previstos(objetivos, hoy)  # unit 071: the same SQLite
     if previstos:
         datos_json["entrenos_previstos"] = previstos
+    no_de_ajustes = _objetivos_no_de_ajustes(objetivos, ajustes, hoy)  # unit 111 (R-336)
+    if no_de_ajustes:
+        datos_json["objetivos_no_de_ajustes"] = no_de_ajustes
     productos = leer_productos(registro.db_path)  # unit 109 (R-322): read only, the same SQLite
     if productos:
         datos_json["productos_suplemento"] = productos

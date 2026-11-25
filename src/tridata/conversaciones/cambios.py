@@ -8,16 +8,20 @@ the lines of a change (`LineaInterpretada`), the reading of what comes as text (
 the answer when a change does not validate (it was in `web/conversaciones.py`).
 
 Bug 085: `eleccion`, the number (id) of the one meant when what is named is there more than once (R-210 for foods).
+
+Unit 111 (R-334, R-339): `hasta`, the last day of a change of several days in a row (the levels or the % of the
+objective); `eleccion` only takes a whole number (`true`, «1» or 1,5 are not one, P-20261115-52eaa3db).
 """
 from __future__ import annotations
 
 from datetime import date
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictInt, model_validator
 
 _FORMA = {"dia": "una fecha AAAA-MM-DD", "desde": "una fecha AAAA-MM-DD", "fecha": "una fecha AAAA-MM-DD",
-          "accion": "un id de la lista de cambios, u «otra»"}
+          "hasta": "una fecha AAAA-MM-DD", "accion": "un id de la lista de cambios, u «otra»",
+          "eleccion": "un número entero"}
 
 
 def cambio_no_entendido(campos: list[str]) -> str:
@@ -87,10 +91,12 @@ class CambioInterpretado(BaseModel):
     lineas: list[LineaInterpretada] | None = Field(default=None, description="Líneas, si la acción las pide; o null")
     dia: date | None = Field(default=None, description="Día del que habla (AAAA-MM-DD), o null si no dice ninguno")
     desde: date | None = Field(default=None, description="Desde qué día vale (AAAA-MM-DD), o null")
+    hasta: date | None = Field(
+        default=None, description="Hasta qué día, si habla de varios días seguidos (AAAA-MM-DD); o null")
     fecha: date | None = Field(default=None, description="Otra fecha que dice (AAAA-MM-DD), o null")
     antes_dicho: str | None = Field(default=None, description="El valor de antes, solo si la persona lo dice; o null")
     hora: str | None = Field(default=None, description="Una hora que dice (HH:MM), si la acción la pide; o null")
-    eleccion: int | None = Field(
+    eleccion: StrictInt | None = Field(
         default=None, description="Bug 085: el número de cuál es, si hay más de uno con ese nombre; o null")
     falta: str | None = Field(
         default=None, description="Si no entiendes una parte o falta un dato, una frase corta que lo diga; o null")

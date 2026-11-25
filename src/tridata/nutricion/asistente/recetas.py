@@ -15,13 +15,19 @@ saved ingredient are always the saved ones, what is not saved is «estimado» wi
 for that line, and a line without them is not proposed (G-40). It is applied with `crear_receta`, `otra_tanda`,
 `corregir`, `borrar_receta(…, True)` and `borrar_fijo(…, True)`, as the Recetas tab does; what was logged keeps
 its own kcal (G-33, R-85). Pots and tares are not changed saying it (G-43).
+
+Unit 112 (REC-55, R-340, R-342, G-75, S-115): `variante_nueva`, `variante_cambiar` and `variante_borrar`, the variants
+of a saved recipe («sin chorizo», with its own kcal/100 g and, if said, its macros per 100 g). The card says the
+recipe does not change (with its kcal/100 g) and neither does what was logged; the checks are `Recetario`'s
+(`comprobar_variante`: impossible kcal, a name the recipe already has), and nothing is written until the «sí».
+`borrar_receta` says which variants go with the recipe.
 """
 from __future__ import annotations
 
 import sqlite3
 from typing import Any
 
-from ..recetas import Recetario, normalizar
+from ..recetas import Recetario, nombre_variante, normalizar
 from . import Accion, Contexto, Peticion, TarjetaMal, campo, no, numero, tarjeta
 from .fuera import _DONDE, NO_LO_CAMBIO
 
@@ -603,9 +609,11 @@ def _rehacer_borrar(parametros: dict, valores: dict, ctx: Contexto, peticion: Pe
         if receta is None:
             return no(NO_ESTA_RECETA)
         tandas = len(receta["versiones"])
+        variantes = [f"«{v['nombre']}»" for v in receta.get("variantes") or []]  # unit 112 (S-115)
+        avisos = [f"se borran también sus variantes: {', '.join(variantes)}"] if variantes else []
         return tarjeta(accion="borrar_receta", parametros=parametros, peticion=peticion,
                        texto=f"Voy a borrar {receta['nombre']} de Recetas; {CON_ELLA}", antes=receta["nombre"],
-                       donde=f"{RECETAS}, con {'su tanda' if tandas == 1 else f'sus {tandas} tandas'}")
+                       donde=f"{RECETAS}, con {'su tanda' if tandas == 1 else f'sus {tandas} tandas'}", avisos=avisos)
     fijo = next((f for f in ctx.recetario.fijos() if f["id"] == ident), None)
     if fijo is None:
         return no("Ese ingrediente ya no está en Ingredientes")
@@ -620,6 +628,190 @@ def _aplicar_borrar(parametros: dict, ctx: Contexto) -> str:
         return f"he borrado {receta['nombre']} de Recetas; {CON_ELLA}"
     fijo = ctx.recetario.borrar_fijo(parametros["id"], confirmado=True)
     return f"he borrado {fijo['nombre']} de Ingredientes; {CON_EL}"
+
+
+# -- unit 112: the variants of a recipe ----------------------------------------------------------------------------------
+
+NO_ESTA_VARIANTE = "Esa variante ya no está en Recetas"
+NADA_APUNTADO = "lo ya apuntado no cambia"
+_MACROS = ("proteina", "hidratos", "grasa")
+
+
+def _nombres_variante(cambio: Any) -> tuple[str, str]:
+    """(the recipe, the variant): `objeto` and `texto`, or «Receta · variante» said whole in `objeto`."""
+    receta = " ".join((cambio.objeto or "").split())
+    variante = " ".join((cambio.texto or "").split())
+    if not variante and "·" in receta:
+        receta, _, variante = (x.strip() for x in receta.partition("·"))
+    return receta, variante
+
+
+def _macros_dichos(valores: Any) -> tuple[dict, str | None]:
+    """`valores`: protein, carbs and fat per 100 g, in that order, or nothing."""
+    if valores is None:
+        return {}, None
+    if not isinstance(valores, list) or len(valores) != len(_MACROS):
+        return {}, "Los macros de la variante van los tres: proteína, hidratos y grasa por cada cien gramos"
+    return dict(zip(_MACROS, valores, strict=True)), None
+
+
+def _kcal_receta(receta: dict) -> str:
+    v = receta.get("en_uso") or {}
+    if v.get("kcal_100g") is not None:
+        return f"{numero(v['kcal_100g'])} kcal/100 g"
+    if v.get("kcal_100g_aprox") is not None:
+        return f"unas {numero(v['kcal_100g_aprox'])} kcal/100 g"
+    return "sus kcal de siempre"
+
+
+def _kcal_variante(kcal: Any, macros: dict | None) -> str:
+    texto = f"{numero(kcal)} kcal/100 g"
+    if macros:
+        texto += (f" (proteína {numero(macros['proteina'])} g, hidratos {numero(macros['hidratos'])} g, "
+                  f"grasa {numero(macros['grasa'])} g por 100 g)")
+    return texto
+
+
+def _macros_de(v: dict) -> dict | None:
+    m = v.get("macros_100g")
+    return {"proteina": m["proteina_g"], "hidratos": m["hidratos_g"], "grasa": m["grasa_g"]} if m else None
+
+
+def _variante_de(ctx: Contexto, receta_nombre: str, variante: str) -> tuple[dict | None, dict | None]:
+    """(the variant with its recipe's name, None) or (None, the `no` that says why not)."""
+    receta, rechazo = _receta(ctx, receta_nombre)
+    if receta is None:
+        return None, rechazo or no(NO_ESTA_RECETA)
+    hallada = next((v for v in receta["variantes"] if normalizar(v["nombre"]) == normalizar(variante)), None)
+    if hallada is None:
+        return None, no(f"{receta['nombre']} no tiene ninguna variante «{variante}»")
+    return {**hallada, "receta": receta["nombre"]}, None
+
+
+def _proponer_variante_nueva(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
+    receta_nombre, variante = _nombres_variante(cambio)
+    if not receta_nombre:
+        return no("No sé de qué receta es la variante")
+    if not variante:
+        return no(f"No sé cómo se llama la variante de {receta_nombre}")
+    receta, rechazo = _receta(ctx, receta_nombre)
+    if receta is None:
+        return rechazo or no(NO_ESTA_RECETA)
+    macros, problema = _macros_dichos(cambio.valores)
+    if problema is not None:
+        return no(problema)
+    return _rehacer_variante_nueva({"receta_id": receta["id"], "nombre": variante, "kcal_100g": cambio.valor,
+                                    **macros}, {}, ctx, peticion)
+
+
+def _rehacer_variante_nueva(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
+    receta = _leer_receta(ctx, parametros["receta_id"])
+    if receta is None:
+        return no(NO_ESTA_RECETA)
+    kcal = _como_numero(valores.get("kcal_100g", parametros.get("kcal_100g")))
+    datos = {"nombre": parametros.get("nombre"), "kcal_100g": kcal, **{k: parametros[k] for k in _MACROS
+                                                                         if k in parametros}}
+    try:
+        limpio = ctx.recetario.comprobar_variante(receta["id"], datos)
+    except ValueError as exc:
+        return no(str(exc))
+    despues = _kcal_variante(limpio["kcal_100g"], limpio["macros"])
+    return tarjeta(accion="variante_nueva", parametros={**parametros, "kcal_100g": kcal}, peticion=peticion,
+                   texto=f"Voy a guardar la variante «{limpio['nombre']}» de {receta['nombre']}: {despues}",
+                   despues=despues, donde=f"{RECETAS}, junto a {receta['nombre']}",
+                   avisos=[f"{receta['nombre']} no cambia: sigue con {_kcal_receta(receta)}", NADA_APUNTADO],
+                   campos=[campo("kcal_100g", "kcal/100 g", "numero", kcal)])
+
+
+def _aplicar_variante_nueva(parametros: dict, ctx: Contexto) -> str:
+    datos = {"nombre": parametros["nombre"], "kcal_100g": parametros["kcal_100g"],
+             **{k: parametros[k] for k in _MACROS if k in parametros}}
+    v = ctx.recetario.crear_variante(parametros["receta_id"], datos)
+    receta = ctx.recetario.receta(parametros["receta_id"])
+    return (f"{nombre_variante(receta['nombre'], v['nombre'])} está en Recetas con {numero(v['kcal_100g'])} kcal/100 g; "
+            f"{receta['nombre']} sigue con {_kcal_receta(receta)}")
+
+
+def _proponer_variante_cambiar(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
+    receta_nombre, variante = _nombres_variante(cambio)
+    if not receta_nombre or not variante:
+        return no("No sé qué variante quieres cambiar: di la receta y el nombre de la variante")
+    v, rechazo = _variante_de(ctx, receta_nombre, variante)
+    if v is None:
+        return rechazo or no(NO_ESTA_VARIANTE)
+    macros, problema = _macros_dichos(cambio.valores)
+    if problema is not None:
+        return no(problema)
+    if cambio.valor is None and not macros:
+        return no(f"No sé qué cambia de la variante «{v['nombre']}»: di sus kcal por cada cien gramos")
+    return _rehacer_variante_cambiar({"variante_id": v["id"], "kcal_100g": cambio.valor, **macros}, {}, ctx, peticion)
+
+
+def _leer_variante(ctx: Contexto, ident: Any) -> dict | None:
+    if isinstance(ident, bool) or not isinstance(ident, int):
+        raise TarjetaMal("la tarjeta no dice qué variante")
+    try:
+        return ctx.recetario.variante(ident)
+    except KeyError:
+        return None
+
+
+def _rehacer_variante_cambiar(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
+    v = _leer_variante(ctx, parametros["variante_id"])
+    if v is None:
+        return no(NO_ESTA_VARIANTE)
+    kcal = _como_numero(valores.get("kcal_100g", parametros.get("kcal_100g")))
+    datos = {"kcal_100g": v["kcal_100g"] if kcal is None else kcal,
+             **{k: parametros[k] for k in _MACROS if k in parametros}}
+    try:
+        limpio = ctx.recetario.comprobar_variante(v["receta_id"], datos, variante_id=v["id"])
+    except ValueError as exc:
+        return no(str(exc))
+    antes = _kcal_variante(v["kcal_100g"], _macros_de(v))
+    despues = _kcal_variante(limpio["kcal_100g"], limpio["macros"])
+    if antes == despues:
+        return no(f"La variante «{v['nombre']}» de {v['receta']} ya tiene {antes}")
+    receta = ctx.recetario.receta(v["receta_id"])
+    return tarjeta(accion="variante_cambiar", parametros={**parametros, "kcal_100g": kcal}, peticion=peticion,
+                   texto=f"Voy a cambiar la variante «{v['nombre']}» de {v['receta']}: {numero(v['kcal_100g'])} → "
+                         f"{despues}",
+                   antes=antes, despues=despues, donde=f"{RECETAS}, junto a {v['receta']}",
+                   avisos=[f"{v['receta']} no cambia: sigue con {_kcal_receta(receta)}", f"{CON_ELLA}"],
+                   campos=[campo("kcal_100g", "kcal/100 g", "numero", limpio["kcal_100g"])])
+
+
+def _aplicar_variante_cambiar(parametros: dict, ctx: Contexto) -> str:
+    antes = ctx.recetario.variante(parametros["variante_id"])
+    datos = {"kcal_100g": antes["kcal_100g"] if parametros.get("kcal_100g") is None else parametros["kcal_100g"],
+             **{k: parametros[k] for k in _MACROS if k in parametros}}
+    v = ctx.recetario.cambiar_variante(parametros["variante_id"], datos)
+    return f"{nombre_variante(antes['receta'], v['nombre'])} queda en {numero(v['kcal_100g'])} kcal/100 g; {CON_ELLA}"
+
+
+def _proponer_variante_borrar(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
+    receta_nombre, variante = _nombres_variante(cambio)
+    if not receta_nombre or not variante:
+        return no("No sé qué variante quieres borrar: di la receta y el nombre de la variante")
+    v, rechazo = _variante_de(ctx, receta_nombre, variante)
+    if v is None:
+        return rechazo or no(NO_ESTA_VARIANTE)
+    return _rehacer_variante_borrar({"variante_id": v["id"]}, {}, ctx, peticion)
+
+
+def _rehacer_variante_borrar(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
+    v = _leer_variante(ctx, parametros["variante_id"])
+    if v is None:
+        return no(NO_ESTA_VARIANTE)
+    return tarjeta(accion="variante_borrar", parametros=parametros, peticion=peticion,
+                   texto=f"Voy a borrar la variante «{v['nombre']}» de {v['receta']}; {CON_ELLA}",
+                   antes=f"{nombre_variante(v['receta'], v['nombre'])} · {numero(v['kcal_100g'])} kcal/100 g",
+                   donde=f"{RECETAS}, junto a {v['receta']}", avisos=[f"{v['receta']} no cambia"])
+
+
+def _aplicar_variante_borrar(parametros: dict, ctx: Contexto) -> str:
+    antes = ctx.recetario.variante(parametros["variante_id"])
+    ctx.recetario.borrar_variante(parametros["variante_id"], confirmado=True)  # the card was the confirmation
+    return f"he borrado la variante «{antes['nombre']}» de {antes['receta']}; {CON_ELLA}"
 
 
 ACCIONES = [
@@ -645,4 +837,17 @@ ACCIONES = [
            _proponer_borrar, _rehacer_borrar, _aplicar_borrar),
     Accion("borrar_ingrediente", "borrar un ingrediente guardado. objeto: su nombre.",
            _proponer_borrar, _rehacer_borrar, _aplicar_borrar),
+    Accion("variante_nueva", "guardar una variante de una receta guardada, con su nombre y sus kcal por cada cien "
+           "gramos («los garbanzos de la abuela sin chorizo tienen tantas por cada cien»); la receta no cambia. objeto: "
+           "la receta; texto: el nombre de la variante («sin chorizo»); valor: sus kcal por cada cien gramos; valores: "
+           "sus macros por cada cien gramos en este orden, proteína, hidratos y grasa, solo si los dice; o null.",
+           _proponer_variante_nueva, _rehacer_variante_nueva, _aplicar_variante_nueva),
+    Accion("variante_cambiar", "cambiar las kcal por cada cien gramos (o los macros) de una variante guardada de una "
+           "receta; la receta no cambia. objeto: la receta; texto: el nombre de la variante; valor: sus kcal nuevas "
+           "por cada cien gramos, o null; valores: sus macros nuevos por cada cien gramos (proteína, hidratos y "
+           "grasa), solo si los dice; o null.",
+           _proponer_variante_cambiar, _rehacer_variante_cambiar, _aplicar_variante_cambiar),
+    Accion("variante_borrar", "borrar una variante guardada de una receta; la receta se queda. objeto: la receta; "
+           "texto: el nombre de la variante.",
+           _proponer_variante_borrar, _rehacer_variante_borrar, _aplicar_variante_borrar),
 ]

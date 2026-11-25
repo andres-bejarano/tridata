@@ -1,4 +1,8 @@
-"""Saved foods and interpretations, in their own tables of the TriData SQLite store."""
+"""Saved foods and interpretations, in their own tables of the TriData SQLite store.
+
+Unit 112 (R-343, S-116): a food may be marked as dessert (`postre`, `marcar_postre`): it stays in its section and adds
+up as always; moving it to another section keeps the mark.
+"""
 from __future__ import annotations
 
 import json
@@ -42,7 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_alimento_apuntado_dia ON alimento_apuntado(dia);
 
 _COLUMNAS = (
     "id, dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, grasa_g, estado, estimado, "
-    "supuestos, pendiente_cantidad, creado, origen, provisional, seccion"
+    "supuestos, pendiente_cantidad, creado, origen, provisional, seccion, postre"
 )
 # unit 011 (D8): where the kcal came from («de tu receta …») and whether they were provisional;
 # added to an existing store with ALTER TABLE, saved on confirming and never recomputed.
@@ -50,8 +54,10 @@ _COLUMNAS = (
 # NULL («Sin sección») for everything logged and for what was already in the store.
 # unit 101 (R-284): `macros_origen`, «estimado» or «etiqueta» when the team filled in the macros of a logged food with
 # Andrés's «sí» (`poner_macros`); NULL otherwise. Not in `_COLUMNAS`: what the day shows does not change.
+# unit 112 (R-343, S-116): `postre`, a food shown apart at the end of its section; it stays in its section, adds up as
+# always and keeps the mark when moved. 0 for everything already in the store.
 _COLUMNAS_NUEVAS = (("origen", "TEXT"), ("provisional", "INTEGER NOT NULL DEFAULT 0"), ("seccion", "TEXT"),
-                    ("macros_origen", "TEXT"))
+                    ("macros_origen", "TEXT"), ("postre", "INTEGER NOT NULL DEFAULT 0"))
 # unit 074 (R-212, S-71): «Nutrición en carrera» (`carrera`), the sixth one, after dinner
 SECCIONES = ("desayuno", "media_manana", "comida", "merienda", "cena", "carrera")
 
@@ -60,6 +66,13 @@ def validar_seccion(seccion: object) -> None:
     """One of `SECCIONES` or None («Sin sección»); otherwise ValueError saying which ones are valid."""
     if seccion is not None and not (isinstance(seccion, str) and seccion in SECCIONES):
         raise ValueError(f"«{seccion}» no es una sección: tiene que ser una de {', '.join(SECCIONES)}")
+
+
+def validar_postre(postre: object) -> bool:
+    """Unit 112 (R-343): the mark of dessert is true or false; anything else is a ValueError."""
+    if not isinstance(postre, bool):
+        raise ValueError("postre tiene que ser true o false")
+    return postre
 
 
 def _estado(dia: date, hoy: date) -> str:
@@ -147,6 +160,7 @@ class Alimento:
     supuestos: list[str] = field(default_factory=list)
     origen: str | None = None
     provisional: bool = False
+    postre: bool = False  # unit 112 (R-343)
 
     @property
     def pendiente_cantidad(self) -> bool:
@@ -179,11 +193,14 @@ class Alimento:
         origen = datos.get("origen")
         if origen is not None and not isinstance(origen, str):
             raise ValueError(f"{nombre}: origen no válido")
+        postre = datos.get("postre")
+        if postre is not None and not isinstance(postre, bool):
+            raise ValueError(f"{nombre}: postre tiene que ser true o false")
         return cls(
             nombre=nombre.strip(), dia=dia, unidad=(unidad or "").strip() or None,
             estimado=bool(datos.get("estimado", False)), dudoso=bool(datos.get("dudoso", False)),
             supuestos=supuestos, origen=(origen or "").strip() or None,
-            provisional=bool(datos.get("provisional", False)), **numeros,
+            provisional=bool(datos.get("provisional", False)), postre=bool(postre), **numeros,
         )
 
 
@@ -248,12 +265,12 @@ class RegistroComidas:
                 conn.execute(
                     "INSERT INTO alimento_apuntado (dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, "
                     "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado, origen, "
-                    "provisional, seccion) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "provisional, seccion, postre) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         a.dia.isoformat(), a.nombre, a.cantidad, a.unidad, a.kcal, a.proteina_g, a.hidratos_g,
                         a.grasa_g, _estado(a.dia, hoy), int(a.estimado),
                         json.dumps(a.supuestos, ensure_ascii=False), int(a.pendiente_cantidad),
-                        interpretacion_id, ahora, a.origen, int(a.provisional), seccion,
+                        interpretacion_id, ahora, a.origen, int(a.provisional), seccion, int(a.postre),
                     ),
                 )
             filas = conn.execute(
@@ -342,6 +359,16 @@ class RegistroComidas:
             conn.execute("UPDATE alimento_apuntado SET seccion = ? WHERE id = ?", (seccion, alimento_id))
             return self._fila(self._leer(conn, alimento_id))
 
+    def marcar_postre(self, alimento_id: int, postre: object) -> dict:
+        """Unit 112 (R-343, S-116): mark a food as dessert (or not). Only the mark changes: its section, kcal and state
+        stay as they were. ValueError if `postre` is not true or false, KeyError if the food does not exist; in both
+        cases nothing changes."""
+        valor = validar_postre(postre)
+        with self._connect() as conn:
+            self._leer(conn, alimento_id)
+            conn.execute("UPDATE alimento_apuntado SET postre = ? WHERE id = ?", (int(valor), alimento_id))
+            return self._fila(self._leer(conn, alimento_id))
+
     def cerrar_planeados(self, dia: date, conn: sqlite3.Connection | None = None) -> int:
         """Unit 014 (R-24): what is still planned for `dia` counts as eaten when its food is closed.
 
@@ -365,9 +392,10 @@ class RegistroComidas:
             cur = conn.execute(
                 "INSERT INTO alimento_apuntado (dia, nombre, cantidad, unidad, kcal, proteina_g, hidratos_g, "
                 "grasa_g, estado, estimado, supuestos, pendiente_cantidad, interpretacion_id, creado, origen, "
-                "provisional) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', ?, NULL, ?, ?, ?)",
+                "provisional, postre) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', ?, NULL, ?, ?, ?, ?)",
                 (a.dia.isoformat(), a.nombre, a.cantidad, a.unidad, a.kcal, a.proteina_g, a.hidratos_g,
-                 a.grasa_g, _estado(a.dia, hoy), int(a.pendiente_cantidad), ahora, a.origen, int(a.provisional)),
+                 a.grasa_g, _estado(a.dia, hoy), int(a.pendiente_cantidad), ahora, a.origen, int(a.provisional),
+                 int(a.postre)),
             )
             if cur.lastrowid is None:  # sqlite always sets it after an INSERT
                 raise RuntimeError("no se ha podido apuntar el alimento")
@@ -478,5 +506,6 @@ class RegistroComidas:
         # recomputed on reading (R-8, unit 013): a row saved before with kcal and no quantity counts too
         datos["pendiente_cantidad"] = datos["cantidad"] is None and datos["kcal"] is None
         datos["provisional"] = bool(datos["provisional"])
+        datos["postre"] = bool(datos["postre"])  # unit 112
         datos["supuestos"] = json.loads(datos["supuestos"])
         return datos

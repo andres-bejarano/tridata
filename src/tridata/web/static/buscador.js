@@ -8,6 +8,9 @@
 // The list is what GET /api/recetas brings, asked once (and again from Recetas); without the PC it is empty
 // and the field is written by hand. `cuenta()` (from unit 013) shows the kcal of what is chosen, the same in
 // every screen; only to SHOW them: the server works them out again with what is saved when it is logged (R-57).
+// Unit 112 (R-341, C-434): each variant of a recipe («sin chorizo», with its own kcal/100 g) is one more option,
+// «Receta · variante», right after its recipe (never in the lines of a recipe: those are only ingredients); chosen,
+// it goes by grams only and is logged with `guardado: {tipo: "variante", id}`.
 
 const numero = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1, useGrouping: "always" });
 const enteras = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0, useGrouping: "always" });
@@ -52,8 +55,17 @@ export function cargarGuardado({ otraVez = false } = {}) {
   return pidiendo;
 }
 
+// Unit 112: a variant as the list shows it, with its recipe's name and aliases in front («Receta · variante»).
+const SEPARADOR = " · ";
+function comoVariante(receta, v) {
+  return { id: v.id, nombre: `${receta.nombre}${SEPARADOR}${v.nombre}`, alias: (receta.alias ?? []).map((a) => `${a}${SEPARADOR}${v.nombre}`),
+    receta: receta.nombre, variante: v.nombre, kcal_100g: v.kcal_100g, macros_100g: v.macros_100g ?? null };
+}
+const variantes = () => guardado.recetas.flatMap((r) => (r.variantes ?? []).map((v) => comoVariante(r, v)));
+
 export function cosaGuardada(elegido) {
   if (!elegido || typeof elegido !== "object") return null;
+  if (elegido.tipo === "variante") return variantes().find((c) => c.id === elegido.id) ?? null;
   const lista = elegido.tipo === "receta" ? guardado.recetas : guardado.fijos;
   return lista.find((c) => c.id === elegido.id) ?? null;
 }
@@ -65,6 +77,10 @@ export const unidadPropia = (fijo) => (fijo.por === "unidad" ? "unidad" : "g");
 
 // `unidad`: null is the thing's own (grams, or units for a fixed food per unit); "receta" a fraction of it.
 export function cuenta(tipo, cosa, n, unidad = null) {
+  if (tipo === "variante") {
+    if (unidad && unidad !== "g") return { problema: "Está guardada por 100 g: pon gramos." };
+    return { kcal: redondear(n * cosa.kcal_100g / 100), provisional: false };
+  }
   if (tipo === "fijo") {
     const propia = unidadPropia(cosa);
     if (unidad && unidad !== propia) return { problema: `Está guardado por ${propia === "g" ? "100 g: pon gramos" : "unidad: pon unidades"}.` };
@@ -81,6 +97,7 @@ export function cuenta(tipo, cosa, n, unidad = null) {
 
 // What the server will write as origin (Recetario._calcular), to show it before saving.
 export function origenDe(tipo, cosa) {
+  if (tipo === "variante") return `de tu receta «${cosa.receta}»${SEPARADOR}${cosa.variante}`;
   if (tipo === "fijo") return cosa.comun ? "de la lista de comunes" : `de tu ingrediente «${cosa.nombre}»`;
   const tanda = cosa.versiones && cosa.versiones.length > 1 && cosa.en_uso ? ` (tanda ${cosa.en_uso.numero})` : "";
   return `de tu receta «${cosa.nombre}»${tanda}`;
@@ -99,6 +116,7 @@ export function textoReceta(n) {
 // -- the list -------------------------------------------------------------------------------------
 
 function describir(tipo, cosa) {
+  if (tipo === "variante") return { detalle: `Variante · ${numero.format(cosa.kcal_100g)} kcal/100 g`, elegible: true };
   if (tipo === "fijo") {
     const que = cosa.comun ? "común" : "Ingrediente";
     return { detalle: `${que} · ${numero.format(cosa.kcal)} kcal/${cosa.por === "unidad" ? "unidad" : "100 g"}`, elegible: true };
@@ -113,7 +131,8 @@ function describir(tipo, cosa) {
 function candidatos(texto, solo) {
   const q = normalizar(texto);
   const todos = [
-    ...(solo === "fijo" ? [] : guardado.recetas.map((cosa) => ({ tipo: "receta", cosa }))),
+    ...(solo === "fijo" ? [] : guardado.recetas.flatMap((cosa) => [{ tipo: "receta", cosa },
+      ...(cosa.variantes ?? []).map((v) => ({ tipo: "variante", cosa: comoVariante(cosa, v) }))])),
     ...(solo === "receta" ? [] : guardado.fijos.map((cosa) => ({ tipo: "fijo", cosa }))),
   ];
   const salida = [];
@@ -124,7 +143,7 @@ function candidatos(texto, solo) {
   }
   // the whole list, recipes, ingredients, then the common ones (the server puts them after his)
   if (!q) return salida;
-  const peso = (c) => [c.cosa.comun ? 1 : 0, c.empieza ? 0 : 1, c.elegible ? 0 : 1, c.tipo === "receta" ? 0 : 1];
+  const peso = (c) => [c.cosa.comun ? 1 : 0, c.empieza ? 0 : 1, c.elegible ? 0 : 1, c.tipo === "fijo" ? 1 : 0];
   return salida.sort((a, b) => {
     const [x, y] = [peso(a), peso(b)];
     for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return x[i] - y[i];
@@ -186,7 +205,7 @@ export function buscador({ entrada, solo = null, alElegir }) {
     const nodos = [];
     let grupo = null;
     opciones = encontrados.map((c, i) => {
-      const suyo = c.cosa.comun ? "comun" : c.tipo;
+      const suyo = c.cosa.comun ? "comun" : c.tipo === "variante" ? "receta" : c.tipo; // a variant, with its recipe
       if (vacio && suyo !== grupo) {
         grupo = suyo;
         const titulo = el("li", { className: "grupo", textContent: { receta: "Recetas", fijo: "Ingredientes", comun: "Comunes" }[suyo] });
@@ -270,7 +289,7 @@ export function cajaElegida({ tipo, cosa, cantidad = null, unidad = null, alCamb
   const partes = [el("p", { className: "origen-elegido", textContent: origenDe(tipo, cosa) })];
   let entrada = null;
   let fr = null;
-  const conGramos = tipo === "fijo" || gramosPosibles(cosa);
+  const conGramos = tipo === "fijo" || tipo === "variante" || gramosPosibles(cosa);
   const unidadCantidad = tipo === "fijo" ? unidadPropia(cosa) : "g";
   if (tipo === "receta") {
     fr = fracciones((f) => { estado.cantidad = f; estado.unidad = "receta"; if (entrada) entrada.value = ""; recalcular(); });

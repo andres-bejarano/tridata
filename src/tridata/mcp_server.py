@@ -452,9 +452,13 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         f"{papeles} dia: YYYY-MM-DD. alimentos: a list of objects with nombre, cantidad (> 0), unidad "
         "(g, ml or unidad), kcal (>= 0; required with a quantity), proteina_g, hidratos_g, grasa_g (grams for that "
         "quantity) and estimado (true if you estimated it). A food that is one of his saved recipes or fixed foods (by "
-        "its name or an alias, see get_recetas), or with guardado: {tipo: receta or fijo, id}, takes its kcal, its "
+        "its name or an alias, see get_recetas), a variant of a recipe named «Receta · variante» («Garbanzos de la "
+        "abuela · sin chorizo», by grams), or with guardado: {tipo: receta, fijo or variante, id}, takes its kcal, its "
         "macros and its origin from what is saved (yours are ignored): show him those, worked out from get_recetas "
-        "(macros_100g of a recipe, the macros of a fixed food), as its kcal. For anything else, estimate its protein, "
+        "(macros_100g of a recipe or a variant, the macros of a fixed food), as its kcal. If he names a change of a "
+        "saved recipe that is not saved as a variant («sin chorizo»), offer to save it first (preparar_cambio, "
+        "variante_nueva) instead of logging it as a loose food. postre: true on a food he says is the dessert («de "
+        "postre un yogur»): it goes in the same section, shown apart at the end of it, and adds up as always. For anything else, estimate its protein, "
         "carbs and fat (proteina_g, hidratos_g, grasa_g) together with its kcal and show them to Andrés in the same "
         "confirmation, before his «sí»; it is logged as you give it, as estimated (estimado true). If it only looks "
         "like a saved one, ask him first. texto (optional): what he said, in Spanish.\n"
@@ -648,7 +652,10 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
         "with proteina, hidratos, grasa on the base of its kcal and macros_origen (estimado or etiqueta); a recipe "
         "with macros_100g and macros_receta (the whole recipe), or sin_macros (how many ingredients have none: then "
         "it has no macros). A portion carries them in proportion to its kcal. Missing ones: preparar_macros. "
-        "Read-only."))
+        "Unit 112: a recipe may have variantes (id, nombre such as «sin chorizo», kcal_100g and macros_100g if they "
+        "have them): log one as «Receta · variante» by grams (or guardado tipo variante with its id), never with the "
+        "recipe's kcal; save, change or delete one with preparar_cambio (variante_nueva, variante_cambiar, "
+        "variante_borrar). Read-only."))
     def get_recetas_tool() -> str:
         return recetario_texto(equipo)
 

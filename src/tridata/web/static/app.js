@@ -40,6 +40,9 @@
 // Unit 082 (REC-34): on top of the day, apart from the meals, the block «Suplementación» (suplementacion.js); each
 // section of the day shows its hour, the one Andrés put or the typical one with «~» (S-79), and tapping it changes it
 // for that day (POST /api/dia/AAAA-MM-DD/hora). «Sin sección» has no hour.
+// Unit 112 (R-343, S-116, C-436, C-437): a food marked as dessert stays in its section, under a «Postre» part at the
+// end of it (its kcal add up in the section as always); the change card has the box «Postre», which saves only that
+// (POST /api/alimento/N/postre) and closes the card. Dragging a dessert to another section keeps the mark there.
 
 import { pintarBalance } from "./balance.js";
 import { buscador, cajaElegida, cargarGuardado, leerOrigen, textoReceta } from "./buscador.js";
@@ -411,7 +414,9 @@ function pintarLista(dia) {
   const visibles = [...SECCIONES.map(([clave]) => clave), ""].filter((c) => conAlgo.has(c) || seccionesNuevas.has(c));
   for (const clave of visibles) {
     const alimentos = de(clave);
-    nodos.push(cabeceraSeccion(clave, alimentos), ...alimentos.map(filaAlimento));
+    const postres = alimentos.filter((a) => a.postre); // unit 112: the dessert, apart at the end of its section
+    nodos.push(cabeceraSeccion(clave, alimentos), ...alimentos.filter((a) => !a.postre).map(filaAlimento));
+    if (postres.length) nodos.push(cabeceraPostre(clave), ...postres.map(filaAlimento));
   }
   nodos.push(pieSecciones(SECCIONES.filter(([clave]) => !visibles.includes(clave))));
   nodos.push(el("div", { id: "con-planeado", className: "total", hidden: true }));
@@ -431,6 +436,13 @@ function pintarLista(dia) {
 }
 
 // -- unit 035: the sections of the day ------------------------------------------------------------
+
+// Unit 112: «Postre», the part at the end of a section with its desserts (dropping a food on it moves it there).
+function cabeceraPostre(clave) {
+  const cabecera = el("div", { className: "postre-cab", textContent: "Postre" });
+  cabecera.dataset.seccion = clave;
+  return cabecera;
+}
 
 // The name of a section and its eaten kcal (the ones that count, as the total: never the planned or a pending one).
 function cabeceraSeccion(clave, alimentos) {
@@ -1048,8 +1060,23 @@ function fichaCambio(a) {
     mensaje(`Borrado: ${datos.alimento.nombre}.`, "bien");
     pintarDia(datos.dia);
   });
-  tarjeta.append(borrar, pregunta);
+  tarjeta.append(casillaPostre(a, avisar), borrar, pregunta);
   return tarjeta;
+}
+
+// Unit 112 (R-343): the box «Postre» of a food's card; it saves only the mark and the day comes back painted.
+function casillaPostre(a, avisar) {
+  const casilla = el("input", { type: "checkbox", checked: Boolean(a.postre) });
+  casilla.addEventListener("change", async () => {
+    casilla.disabled = true;
+    const { ok, datos } = await api(`/api/alimento/${a.id}/postre`, { postre: casilla.checked });
+    casilla.disabled = false;
+    if (!ok) { casilla.checked = Boolean(a.postre); avisar(`No se ha podido cambiar. ${datos.error ?? ""}`.trim()); return; }
+    editando = null;
+    mensaje(datos.alimento.postre ? `De postre: ${datos.alimento.nombre}.` : `Ya no es postre: ${datos.alimento.nombre}.`, "bien");
+    pintarDia(datos.dia);
+  });
+  return el("label", { className: "casilla-postre" }, casilla, el("span", { textContent: "Postre" }));
 }
 
 // Empty card under the table to add a food by hand, without the AI, on the day being looked at.

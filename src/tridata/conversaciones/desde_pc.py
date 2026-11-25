@@ -59,6 +59,12 @@ in use would leave (before and after, «dicho por ti» with its date) and its fi
 Unit 103 (REC-47, R-292, R-294): the same two with `accion` «alta» (a shoe given here, with its km, cap and use) and
 «carrera» (the shoe of a run counted here, by its date or id), with the same fingerprint.
 
+Unit 112 (REC-55, R-340..R-344): `recetario_texto` gives the variants of each recipe (`variantes`, with their
+kcal/100 g and macros); in `apuntar_comida_desde_pc` a food named «Receta · variante» (or chosen with `guardado: {tipo:
+"variante", id}`) takes ITS kcal/100 g, never the recipe's, and a food with `postre: true` is logged as dessert in its
+section. The variants are saved, changed and deleted with `preparar_desde_pc` / `hacer_desde_pc` (the actions
+`variante_*` of `nutricion.asistente.recetas`).
+
 Each save leaves its message in «Desde el PC» (R-196). Nothing here calls a paid AI.
 
 What a tool answers never carries a value of Andrés beyond what the card says; the logs carry ids and counts only.
@@ -333,7 +339,7 @@ def apuntar_comida_desde_pc(equipo: Equipo, papel: str, dia: Any, alimentos: Any
     guardados = a.registro.guardar(lista, hoy=a.hoy(), texto=texto.strip() or f"{TITULO} ({papel})",
                                    sin_cambios=False, seccion=seccion)
     que = "; ".join(descripcion_alimento({**g, "creado": None}) + (f" {g['origen']}" if g.get("origen") else "")
-                    for g in guardados)
+                    + (" de postre" if g.get("postre") else "") for g in guardados)
     if la_hora is not None:
         Suplementacion(a.registro.db_path).poner_hora_seccion(el_dia, seccion, la_hora)
     donde = f" en la sección {seccion}" if seccion else ""
@@ -528,7 +534,10 @@ def recetario_texto(equipo: Equipo) -> str:
             "estado": "por_revisar" if r["por_revisar"] else v.get("estado"), "kcal_100g": v.get("kcal_100g"),
             "kcal_100g_aprox": v.get("kcal_100g_aprox") if v.get("kcal_100g") is None else None,
             "kcal_receta": v.get("kcal_total"), "macros_100g": v.get("macros_100g"),
-            "macros_receta": v.get("macros_total"), "sin_macros": v.get("sin_macros") or None}.items()
+            "macros_receta": v.get("macros_total"), "sin_macros": v.get("sin_macros") or None,
+            "variantes": [{k2: x2 for k2, x2 in {"id": var["id"], "nombre": var["nombre"], "kcal_100g": var["kcal_100g"],
+                                                 "macros_100g": var["macros_100g"]}.items() if x2 is not None}
+                          for var in r.get("variantes") or []]}.items()  # unit 112 (R-344)
             if x not in (None, [])})
     ingredientes = [{k: x for k, x in {"id": f["id"], "nombre": f["nombre"], "alias": f["alias"], "kcal": f["kcal"],
                                          "por": f["por"], "comun": f["comun"] or None, "proteina": f["proteina"],
@@ -539,7 +548,8 @@ def recetario_texto(equipo: Equipo) -> str:
 
 
 def _guardado_por_nombre(recetario: Recetario, nombre: Any) -> tuple[str, int] | None:
-    """The usable recipe (not to review) or fixed food whose name or an alias is `nombre`, as the dictation matches."""
+    """The usable recipe (not to review) or fixed food whose name or an alias is `nombre`, as the dictation matches;
+    unit 112: else the variant «Receta · variante» (a recipe or a fixed food with that very name wins)."""
     clave = normalizar(nombre if isinstance(nombre, str) else "")
     if not clave:
         return None
@@ -549,13 +559,15 @@ def _guardado_por_nombre(recetario: Recetario, nombre: Any) -> tuple[str, int] |
     for f in recetario.fijos():
         if clave in {normalizar(n) for n in [f["nombre"], *f["alias"]]}:
             return "fijo", int(f["id"])
-    return None
+    variante = recetario.variante_por_nombre(clave)
+    return ("variante", variante) if variante is not None else None
 
 
 def _de_lo_guardado(recetario: Recetario, crudo: dict) -> dict:
     """R3: a food chosen by its id (`guardado: {tipo, id}`) or named as a saved one takes the name, kcal, origin and
     provisional of `Recetario.para_apuntar` (never the coach's kcal), as the app with a food chosen from the saved ones
-    (unit 019), and since unit 098 (R-271) its macros for that quantity (never the coach's either); any other one goes
+    (unit 019), and since unit 098 (R-271) its macros for that quantity (never the coach's either); unit 112: a variant
+    too, with ITS kcal/100 g; its `postre` goes as it came; any other one goes
     as it came, with the macros the coach estimated (R-43, R-272). ValueError, with why, if the saved one cannot be
     worked out with that quantity and unit: nothing is logged with another number in silence."""
     nombre = crudo.get("nombre") if isinstance(crudo.get("nombre"), str) and crudo["nombre"].strip() else "lo elegido"
@@ -563,9 +575,9 @@ def _de_lo_guardado(recetario: Recetario, crudo: dict) -> dict:
     elegido = crudo.get("guardado")
     if isinstance(elegido, dict):
         tipo, ident = elegido.get("tipo"), elegido.get("id")
-        if tipo not in ("receta", "fijo") or isinstance(ident, bool) or not isinstance(ident, int):
-            raise ValueError(f"«{nombre}» no es una receta ni un ingrediente guardado (guardado: tipo receta o fijo y "
-                             "su id de get_recetas)")
+        if tipo not in ("receta", "fijo", "variante") or isinstance(ident, bool) or not isinstance(ident, int):
+            raise ValueError(f"«{nombre}» no es una receta, una variante ni un ingrediente guardado (guardado: tipo "
+                             "receta, fijo o variante y su id de get_recetas)")
     else:
         hallado = _guardado_por_nombre(recetario, crudo.get("nombre"))
         if hallado is None:

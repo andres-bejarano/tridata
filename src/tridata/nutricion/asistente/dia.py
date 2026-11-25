@@ -30,6 +30,13 @@ Bug 085: when a name is logged more than once that day, each candidate carries i
 and the change says which one with `eleccion` (as R-210 with the activities); a number that is not one of them is a
 `no`, never another food.
 
+Unit 111 (REC-54, R-334..R-339, G-74, S-113, S-114): `niveles_dia` and `objetivo_dia` with `hasta` prepare ONE card
+for several days in a row (from today or a day to come, at most `RANGO_MAX`): the days that change with what they
+had and where their objective came from, and apart the ones that do not (they already have it, or they are
+maintenance for a race: those are asked one by one, as before). One «sí» saves them all with
+`ObjetivosDia.cambiar_varios`, or none. Every card of the levels or the % says where the objective of the day comes
+from (`margen.origen_del_objetivo`). Without `hasta`, or with `hasta` the same day, the card of one day as before.
+
 Bug 086 (R-229): `hora_seccion` puts the hour of a section of a day that has food (the same `poner_hora_seccion` as
 the app); kcal, foods and margin do not change. «Sin sección» has no hour; a section with nothing that day is a `no`.
 """
@@ -39,12 +46,14 @@ import re
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
-from ..dia import _retraso, plan_del_dia
+from ..dia import DIAS_RETRASO_MAX, _retraso, plan_del_dia
 from ..gasto import kcal_previstas
-from ..margen import NIVELES_POR_DEFECTO, PASOS_POR_DEFECTO, objetivo_del_dia
+from ..margen import (
+    NIVELES_POR_DEFECTO, PASOS_POR_DEFECTO, dias_de_retraso, objetivo_del_dia, origen_del_objetivo, texto_retraso,
+)
 from ..objetivo_dia import PREVISTOS_MAX, _porcentaje, niveles_validos, pasos_validos
 from ..recetas import normalizar
 from ..registro import MACROS, SECCIONES, Alimento, RegistroComidas, macros_al_cambiar
@@ -58,6 +67,7 @@ YA_PASO = "ese día ya pasó: sus pasos los trae Garmin"
 YA_PASO_PLAN = "ese día ya pasó: un día pasado se reparte en Balance"
 NO_ESTA = "Ese alimento ya no está apuntado."
 NO_ENCUENTRO = "no encuentro ese entreno en los últimos 14 días"
+RANGO_MAX = 60  # S-114: a change of several days spans at most 60 days in a row
 
 
 # -- R-77: what Andrés says of the before ------------------------------------------------------------------------------
@@ -207,6 +217,8 @@ def _buscar(cambio: Any, ctx: Contexto, peticion: Peticion, accion: str, que: st
         return no(f"{cuando} no tienes ningún {cambio.objeto} apuntado")
     eleccion = getattr(cambio, "eleccion", None)
     if eleccion is not None:  # bug 085: the one said by its number, only among those of that name and day
+        if isinstance(eleccion, bool) or not isinstance(eleccion, int):  # unit 111 (R-339): a whole number only
+            return no("la elección tiene que ser un número entero: el número de uno de los que te he enseñado")
         elegido = [a for a in encontrados if a["id"] == eleccion]
         return elegido or no(f"el número {eleccion} no es ningún {cambio.objeto} del {corta(dia)}: elige uno de "
                              f"los que te he enseñado")
@@ -557,7 +569,7 @@ def _aplicar_hora_seccion(parametros: dict, ctx: Contexto) -> str:
     return f"la {NOMBRE_SECCION[parametros['seccion']]} del {corta(dia)} está a las {parametros['hora']}"
 
 
-# -- niveles_dia, objetivo_dia ------------------------------------------------------------------------------------------
+# -- niveles_dia, objetivo_dia: the texts ---------------------------------------------------------------------------------
 
 def _pct(n: float) -> str:
     """«−20», «0», «+10»: a level with its sign."""
@@ -575,46 +587,249 @@ def _niveles_crudos(valor: Any) -> Any:
     return valor
 
 
+# -- where the objective of a day comes from, and a range of days (unit 111) -------------------------------------------
+
+def _del_dia(ctx: Contexto, dia: date, vigentes: Any = None) -> dict:
+    """What a card of the levels or the % needs of one day: its row, its %, where it comes from and its race."""
+    objetivo = ctx.objetivos.del_dia(dia) or {}
+    vigentes = vigentes if vigentes is not None else ctx.ajustes.vigentes(dia)
+    plan = plan_del_dia(vigentes)
+    del_dia = objetivo_del_dia(objetivo, plan)
+    motivo = plan.get("motivo") or ""
+    carrera = motivo[len("carrera "):] if del_dia["origen"] == "plan" and motivo.startswith("carrera ") else None
+    return {"dia": dia, "objetivo": objetivo, "vigentes": vigentes, "pct": del_dia["porcentaje"],
+            "origen": origen_del_objetivo(objetivo, plan), "carrera": carrera}
+
+
+def _dias_texto(dias: list[date]) -> str:
+    """«el 07-12», «del 01-12 al 06-12, del 08-12 al 13-12 y el 15-12»: days in a row go together."""
+    tramos: list[list[date]] = []
+    for d in sorted(dias):
+        if tramos and d - tramos[-1][1] == timedelta(days=1):
+            tramos[-1][1] = d
+        else:
+            tramos.append([d, d])
+    partes = [f"el {corta(a)}" if a == b else f"del {corta(a)} al {corta(b)}" for a, b in tramos]
+    return partes[0] if len(partes) == 1 else ", ".join(partes[:-1]) + " y " + partes[-1]
+
+
+def _por_grupos(pares: list[tuple[date, str]]) -> str:
+    """What each day had: «A» if all the same, else «A: del 01-12 al 02-12; B: el 03-12»."""
+    grupos: dict[str, list[date]] = {}
+    for d, texto in pares:
+        grupos.setdefault(texto, []).append(d)
+    if len(grupos) == 1:
+        return next(iter(grupos))
+    return "; ".join(f"{texto}: {_dias_texto(dias)}" for texto, dias in grupos.items())
+
+
+def _rango(parametros: dict, valores: dict, peticion: Peticion) -> tuple[date, date | None, str | None]:
+    """The first day, the last one (None: one day, as before) and why the range does not pass (R-338, S-114)."""
+    desde, error = _dia_corregido(parametros, valores)
+    crudo = valores.get("hasta", parametros.get("hasta"))
+    if crudo is None:
+        return desde, None, error
+    try:
+        hasta = fecha_de(crudo)
+    except TarjetaMal:
+        if "hasta" not in valores or parametros.get("hasta") is None:
+            raise
+        hasta, error = fecha_de(parametros["hasta"]), error or "el último día no es una fecha"
+    if hasta == desde:
+        return desde, None, error
+    if desde < peticion.fecha:  # resolved with the day it was said, as one day
+        return desde, hasta, f"el rango no puede empezar antes de hoy (empieza el {corta(desde)})"
+    if hasta < desde:
+        return desde, hasta, f"el rango acaba antes de empezar (del {corta(desde)} al {corta(hasta)})"
+    n = (hasta - desde).days + 1
+    if n > RANGO_MAX:
+        return desde, hasta, (f"el rango pasa de {RANGO_MAX} días (del {corta(desde)} al {corta(hasta)} son {n}): "
+                              f"pídelo en trozos de {RANGO_MAX} días como mucho")
+    return desde, hasta, error
+
+
+def _dias_del_rango(ctx: Contexto, desde: date, hasta: date) -> list[dict]:
+    return [_del_dia(ctx, desde + timedelta(days=i)) for i in range((hasta - desde).days + 1)]
+
+
+def _no_cambian(ya: list[date], carreras: list[tuple[date, str]]) -> list[str]:
+    """G-74, S-113: the days of the range left as they are, and why («el 07-12 ya lo tiene; el 14-12 es …»)."""
+    partes = []
+    if ya:
+        partes.append(f"{_dias_texto(ya)} ya lo {'tiene' if len(ya) == 1 else 'tienen'}")
+    por_carrera: dict[str, list[date]] = {}
+    for d, nombre in carreras:
+        por_carrera.setdefault(nombre, []).append(d)
+    for nombre, dias in por_carrera.items():
+        partes.append(f"{_dias_texto(dias)} {'es' if len(dias) == 1 else 'son'} mantenimiento por la carrera {nombre}")
+    return partes
+
+
+def _avisos_no_cambian(partes: list[str], con_carrera: bool) -> list[str]:
+    if not partes:
+        return []
+    solo = " (un día de carrera se cambia pidiéndolo él solo)" if con_carrera else ""
+    return [f"No cambian: {'; '.join(partes)}{solo}"]
+
+
+def _cuantos(desde: date, hasta: date, n: int) -> str:
+    total = (hasta - desde).days + 1
+    return f"del {corta(desde)} al {corta(hasta)} ({n} días)" if n == total else \
+        f"del {corta(desde)} al {corta(hasta)} ({n} de {total} días)"
+
+
+def _separar(infos: list[dict], ya_lo_tiene: Any) -> tuple[list[dict], list[date], list[tuple[date, str]]]:
+    """The days that change, the ones that already have it and the race ones (G-74: never changed in a range)."""
+    cambian, ya, carreras = [], [], []
+    for info in infos:
+        if info["carrera"]:
+            carreras.append((info["dia"], info["carrera"]))
+        elif ya_lo_tiene(info):
+            ya.append(info["dia"])
+        else:
+            cambian.append(info)
+    return cambian, ya, carreras
+
+
+def _rango_mal(accion: str, parametros: dict, peticion: Peticion, desde: date, hasta: date, error: str) -> dict:
+    """A range that does not pass (R-338): shown with its fields, never proposed (`proponer` turns it into a `no`)."""
+    return tarjeta(accion=accion, parametros={**parametros, "dia": desde.isoformat(), "hasta": hasta.isoformat()},
+                   peticion=peticion, texto=f"Voy a cambiar del {corta(desde)} al {corta(hasta)}", dia=desde,
+                   campos=[campo("dia", "Desde", "fecha", desde.isoformat()),
+                           campo("hasta", "Hasta", "fecha", hasta.isoformat())],
+                   error=error)
+
+
+def _retraso_del_rango(ctx: Contexto, infos: list[dict], porcentaje: float) -> str | None:
+    """R-18 over the range: the days of delay of each day changed (the same computation as one day), added up."""
+    plan: dict[date, float | None] = {}
+
+    def del_plan(d: date) -> float | None:
+        if d not in plan:
+            plan[d] = ctx.ajustes.vigentes(d).objetivo_pct
+        return plan[d]
+
+    total, alguno = 0.0, False
+    for info in infos:
+        dia, meta = info["dia"], info["vigentes"].objetivo_peso
+        if meta is None or meta.fecha < dia:
+            continue
+        hasta = min(meta.fecha, dia + timedelta(days=DIAS_RETRASO_MAX))
+        dias = dias_de_retraso({dia + timedelta(days=i): del_plan(dia + timedelta(days=i))
+                                for i in range((hasta - dia).days + 1)}, dia, porcentaje)
+        if dias is not None:
+            total, alguno = total + dias, True
+    total = round(total, 2)
+    if not alguno or total == 0:
+        return None
+    return texto_retraso(total).replace("al objetivo", "a tu objetivo de peso", 1)
+
+
+# -- niveles_dia, objetivo_dia ------------------------------------------------------------------------------------------
+
+def _primer_dia(cambio: Any, peticion: Peticion) -> date:
+    """The day said; with `hasta`, the first of the range (`dia`, or `desde`), and without one, today (R-338)."""
+    return cambio.dia or (cambio.desde if getattr(cambio, "hasta", None) else None) or peticion.fecha
+
+
+def _con_hasta(parametros: dict, cambio: Any) -> dict:
+    hasta = getattr(cambio, "hasta", None)
+    return {**parametros, "hasta": hasta.isoformat()} if hasta else parametros
+
+
 def _proponer_niveles(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
     if not cambio.valores:
         return no("No sé qué niveles quieres para ese día")
-    dia = cambio.dia or peticion.fecha
-    return _rehacer_niveles({"dia": dia.isoformat(), "niveles": list(cambio.valores)}, {}, ctx, peticion)
+    dia = _primer_dia(cambio, peticion)
+    return _rehacer_niveles(_con_hasta({"dia": dia.isoformat(), "niveles": list(cambio.valores)}, cambio), {}, ctx,
+                            peticion)
+
+
+def _sufijo(limpios: list | None) -> str:
+    if limpios and all(n < 0 for n in limpios):
+        return " (déficit)"
+    if limpios and all(n > 0 for n in limpios):
+        return " (superávit)"
+    return ""
+
+
+def _niveles_de(info: dict) -> list:
+    return sorted(info["objetivo"].get("niveles") or NIVELES_POR_DEFECTO)
+
+
+def _antes_niveles(info: dict) -> str:
+    """«−10 / 0 / +10 % (objetivo −15 %, de Ajustes)»: the levels of the day and where its objective comes from."""
+    return f"{_niveles_texto(_niveles_de(info))} (objetivo {_pct_objetivo(info['pct'])}, {info['origen']})"
 
 
 def _rehacer_niveles(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
-    dia, error = _dia_corregido(parametros, valores)
+    dia, hasta, error = _rango(parametros, valores, peticion)
     crudos = _niveles_crudos(valores.get("niveles", parametros["niveles"]))
     limpios: list | None = None
     try:
         limpios = niveles_validos(crudos)
     except ValueError as exc:
         error = error or str(exc)
+    nuevos = limpios if limpios is not None else (crudos if isinstance(crudos, list) else [])
+    despues = _niveles_texto(limpios) if limpios is not None else ", ".join(str(n) for n in nuevos)
+    campo_niveles = campo("niveles", "Niveles (%)", "texto", ", ".join(numero(n) if isinstance(n, (int, float))
+                                                                       else str(n) for n in nuevos))
+    if hasta is not None:
+        return _niveles_rango(dia, hasta, error, limpios, nuevos, despues, campo_niveles, ctx, peticion)
     if dia < peticion.fecha:
         error = YA_PASO_PLAN
-    objetivo = ctx.objetivos.del_dia(dia) or {}
-    antes = sorted(objetivo.get("niveles") or NIVELES_POR_DEFECTO)
+    info = _del_dia(ctx, dia)
+    antes = _niveles_de(info)
     if error is None and limpios == antes:
         return no(f"Los niveles del {corta(dia)} ya son {_niveles_texto(antes)}")
-    nuevos = limpios if limpios is not None else (crudos if isinstance(crudos, list) else [])
-    sufijo = ""
-    if limpios and all(n < 0 for n in limpios):
-        sufijo = " (déficit)"
-    elif limpios and all(n > 0 for n in limpios):
-        sufijo = " (superávit)"
-    despues = _niveles_texto(limpios) if limpios is not None else ", ".join(str(n) for n in nuevos)
     return tarjeta(accion="niveles_dia", parametros={"dia": dia.isoformat(), "niveles": nuevos}, peticion=peticion,
-                   texto=f"Voy a cambiar los niveles del {corta(dia)}: {_niveles_texto(antes)} → {despues}{sufijo}",
-                   antes=_niveles_texto(antes), despues=despues, dia=dia,
+                   texto=f"Voy a cambiar los niveles del {corta(dia)}: {_niveles_texto(antes)} → {despues}"
+                         f"{_sufijo(limpios)}",
+                   antes=_antes_niveles(info), despues=despues, dia=dia,
                    donde="solo ese día, en sus márgenes de Hoy y Nutrición › Día",
-                   campos=[campo("niveles", "Niveles (%)", "texto", ", ".join(numero(n) if isinstance(n, (int, float))
-                                                                             else str(n) for n in nuevos)),
-                           campo("dia", "Día", "fecha", dia.isoformat())],
+                   campos=[campo_niveles, campo("dia", "Día", "fecha", dia.isoformat())],
                    error=error)
+
+
+def _niveles_rango(desde: date, hasta: date, error: str | None, limpios: list | None, nuevos: list, despues: str,
+                   campo_niveles: dict, ctx: Contexto, peticion: Peticion) -> dict:
+    """R-334, R-337: ONE card for the range; the days that already have those levels and the race ones apart."""
+    if error is not None and (desde < peticion.fecha or hasta < desde or (hasta - desde).days >= RANGO_MAX):
+        return _rango_mal("niveles_dia", {"niveles": nuevos}, peticion, desde, hasta, error)
+    cambian, ya, carreras = _separar(_dias_del_rango(ctx, desde, hasta),
+                                     lambda info: limpios is not None and _niveles_de(info) == limpios)
+    partes = _no_cambian(ya, carreras)
+    if error is None and not cambian:
+        return no(f"No cambia ningún día del {corta(desde)} al {corta(hasta)}: {'; '.join(partes)}")
+    distintos = {_niveles_texto(_niveles_de(i)) for i in cambian}
+    antes_corto = next(iter(distintos)) if len(distintos) == 1 else "lo de cada día"
+    return tarjeta(accion="niveles_dia",
+                   parametros={"dia": desde.isoformat(), "hasta": hasta.isoformat(), "niveles": nuevos,
+                               "dias": [i["dia"].isoformat() for i in cambian]},
+                   peticion=peticion,
+                   texto=f"Voy a cambiar los niveles {_cuantos(desde, hasta, len(cambian))}: {antes_corto} → "
+                         f"{despues}{_sufijo(limpios)}",
+                   antes=_por_grupos([(i["dia"], _antes_niveles(i)) for i in cambian]) or None, despues=despues,
+                   dia=desde, donde=f"esos {len(cambian)} días, en sus márgenes de Hoy y Nutrición › Día",
+                   avisos=_avisos_no_cambian(partes, bool(carreras)),
+                   campos=[campo_niveles, campo("dia", "Desde", "fecha", desde.isoformat()),
+                           campo("hasta", "Hasta", "fecha", hasta.isoformat())],
+                   error=error)
+
+
+def _dias_a_cambiar(parametros: dict) -> list[date]:
+    dias = parametros.get("dias")
+    if not isinstance(dias, list) or not dias:
+        raise TarjetaMal("la tarjeta no dice qué días cambian")
+    return [fecha_de(d) for d in dias]
 
 
 def _aplicar_niveles(parametros: dict, ctx: Contexto) -> str:
     dia = fecha_de(parametros["dia"])
+    if parametros.get("hasta") is not None:  # unit 111: all the days of the range in one transaction, or none
+        guardados = ctx.objetivos.cambiar_varios(_dias_a_cambiar(parametros), niveles=parametros["niveles"])
+        return (f"los niveles de {len(guardados)} días del {corta(dia)} al {corta(fecha_de(parametros['hasta']))} "
+                f"son {_niveles_texto(guardados[0]['niveles'])}")
     guardado = ctx.objetivos.cambiar(dia, niveles=parametros["niveles"])  # the same method as «Ajustar el día»
     return f"los niveles del {corta(dia)} son {_niveles_texto(guardado['niveles'])}"
 
@@ -626,12 +841,18 @@ def _pct_objetivo(n: float) -> str:
 def _proponer_objetivo(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
     if cambio.valor is None:
         return no("No sé qué % quieres para ese día")
-    dia = cambio.dia or peticion.fecha
-    return _rehacer_objetivo({"dia": dia.isoformat(), "porcentaje": cambio.valor}, {}, ctx, peticion)
+    dia = _primer_dia(cambio, peticion)
+    return _rehacer_objetivo(_con_hasta({"dia": dia.isoformat(), "porcentaje": cambio.valor}, cambio), {}, ctx,
+                             peticion)
+
+
+def _antes_objetivo(info: dict) -> str:
+    """«−20 % (de Ajustes)»: the % of the day and where it comes from (R-336)."""
+    return f"{_pct_objetivo(info['pct'])} ({info['origen']})"
 
 
 def _rehacer_objetivo(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
-    dia, error = _dia_corregido(parametros, valores)
+    dia, hasta, error = _rango(parametros, valores, peticion)
     crudo = valores.get("porcentaje", parametros["porcentaje"])
     porcentaje: Any = crudo
     try:
@@ -640,29 +861,67 @@ def _rehacer_objetivo(parametros: dict, valores: dict, ctx: Contexto, peticion: 
             porcentaje, error = crudo, error or "falta el % del objetivo del día"
     except ValueError as exc:
         error = error or str(exc)
+    despues = _pct_objetivo(porcentaje) if error is None else str(porcentaje)
+    if hasta is not None:
+        return _objetivo_rango(dia, hasta, error, porcentaje, despues, ctx, peticion)
     if dia < peticion.fecha:
         error = YA_PASO_PLAN
-    vigentes = ctx.ajustes.vigentes(dia)
-    antes = objetivo_del_dia(ctx.objetivos.del_dia(dia), plan_del_dia(vigentes))["porcentaje"]
+    info = _del_dia(ctx, dia)
+    antes = info["pct"]
     if error is None and porcentaje == antes:
         return no(f"El objetivo del {corta(dia)} ya es {_pct_objetivo(antes)}")
     avisos = []
     if error is None:
-        retraso = _retraso(ctx.ajustes, dia, vigentes, porcentaje)  # the same as the sheet «Cambiar %» (R-18)
+        retraso = _retraso(ctx.ajustes, dia, info["vigentes"], porcentaje)  # the same as the sheet «Cambiar %» (R-18)
         if retraso is not None and retraso["dias"] != 0:
             avisos.append(retraso["texto"].replace("al objetivo", "a tu objetivo de peso", 1))
     despues = _pct_objetivo(porcentaje) if error is None else str(porcentaje)
     return tarjeta(accion="objetivo_dia", parametros={"dia": dia.isoformat(), "porcentaje": porcentaje},
                    peticion=peticion, texto=f"Voy a cambiar el objetivo del {corta(dia)}: {_pct_objetivo(antes)} → {despues}",
-                   antes=_pct_objetivo(antes), despues=despues, dia=dia,
+                   antes=_antes_objetivo(info), despues=despues, dia=dia,
                    donde="solo ese día; el plan de Ajustes no cambia", avisos=avisos,
                    campos=[campo("porcentaje", "Objetivo (%)", "numero", porcentaje),
                            campo("dia", "Día", "fecha", dia.isoformat())],
                    error=error)
 
 
+def _objetivo_rango(desde: date, hasta: date, error: str | None, porcentaje: Any, despues: str, ctx: Contexto,
+                    peticion: Peticion) -> dict:
+    """R-335, R-337: ONE card for the range, with the delay of the weight target over the days that change."""
+    if error is not None and (desde < peticion.fecha or hasta < desde or (hasta - desde).days >= RANGO_MAX):
+        return _rango_mal("objetivo_dia", {"porcentaje": porcentaje}, peticion, desde, hasta, error)
+    cambian, ya, carreras = _separar(_dias_del_rango(ctx, desde, hasta),
+                                     lambda info: error is None and info["pct"] == porcentaje)
+    partes = _no_cambian(ya, carreras)
+    if error is None and not cambian:
+        return no(f"No cambia ningún día del {corta(desde)} al {corta(hasta)}: {'; '.join(partes)}")
+    avisos = []
+    if error is None:
+        retraso = _retraso_del_rango(ctx, cambian, porcentaje)
+        if retraso is not None:
+            avisos.append(retraso)
+    avisos += _avisos_no_cambian(partes, bool(carreras))
+    distintos = {_pct_objetivo(i["pct"]) for i in cambian}
+    antes_corto = next(iter(distintos)) if len(distintos) == 1 else "lo de cada día"
+    return tarjeta(accion="objetivo_dia",
+                   parametros={"dia": desde.isoformat(), "hasta": hasta.isoformat(), "porcentaje": porcentaje,
+                               "dias": [i["dia"].isoformat() for i in cambian]},
+                   peticion=peticion,
+                   texto=f"Voy a cambiar el objetivo {_cuantos(desde, hasta, len(cambian))}: {antes_corto} → {despues}",
+                   antes=_por_grupos([(i["dia"], _antes_objetivo(i)) for i in cambian]) or None, despues=despues,
+                   dia=desde, donde=f"esos {len(cambian)} días; el plan de Ajustes no cambia", avisos=avisos,
+                   campos=[campo("porcentaje", "Objetivo (%)", "numero", porcentaje),
+                           campo("dia", "Desde", "fecha", desde.isoformat()),
+                           campo("hasta", "Hasta", "fecha", hasta.isoformat())],
+                   error=error)
+
+
 def _aplicar_objetivo(parametros: dict, ctx: Contexto) -> str:
     dia = fecha_de(parametros["dia"])
+    if parametros.get("hasta") is not None:  # unit 111: all the days of the range in one transaction, or none
+        guardados = ctx.objetivos.cambiar_varios(_dias_a_cambiar(parametros), porcentaje=parametros["porcentaje"])
+        return (f"el objetivo de {len(guardados)} días del {corta(dia)} al {corta(fecha_de(parametros['hasta']))} "
+                f"es {_pct_objetivo(guardados[0]['porcentaje'])}, cambiado a mano")
     guardado = ctx.objetivos.cambiar(dia, porcentaje=parametros["porcentaje"])  # as «Cambiar %»
     return f"el objetivo del {corta(dia)} es {_pct_objetivo(guardado['porcentaje'])}"
 
@@ -784,6 +1043,11 @@ def _aplicar_entreno(parametros: dict, ctx: Contexto) -> str:
     return f"los entrenos previstos del {corta(dia)} son {_previstos_texto(guardado['previstos'])}"
 
 
+_HASTA = ("hasta: el último día si habla de varios días seguidos (como mucho dos meses, desde hoy o un día que "
+          "aún no ha llegado), o null; con hasta, dia es el primero (o null: hoy) y se prepara UN cambio para todos "
+          "esos días; los que ya lo tienen y los de mantenimiento por una carrera no cambian (esos se piden de uno en "
+          "uno).")
+
 ACCIONES = [
     Accion("pasos_dia", "cambiar los pasos previstos de hoy o de un día que aún no ha llegado. valor: los pasos "
            "nuevos, como número entero; dia: el día del que habla, o null; antes_dicho: los de antes, solo si los dice.",
@@ -813,11 +1077,11 @@ ACCIONES = [
            _proponer_hora_seccion, _rehacer_hora_seccion, _aplicar_hora_seccion),
     Accion("niveles_dia", "cambiar los niveles del margen de hoy o de un día que aún no ha llegado (como mucho "
            "cinco). valores: los % de cada nivel con su signo, negativo si es déficit y positivo si es superávit; "
-           "dia: el día del que habla, o null.",
+           "dia: el día del que habla, o null; " + _HASTA,
            _proponer_niveles, _rehacer_niveles, _aplicar_niveles),
     Accion("objetivo_dia", "cambiar el % del objetivo de hoy o de un día que aún no ha llegado («hoy "
            "mantenimiento»). valor: el % con su signo, negativo si es déficit, cero si es mantenimiento; dia: el día "
-           "del que habla, o null.",
+           "del que habla, o null; " + _HASTA,
            _proponer_objetivo, _rehacer_objetivo, _aplicar_objetivo),
     Accion("entreno_previsto", "poner un entreno previsto de hoy o de un día que aún no ha llegado (se suma a los que "
            "ya haya; solo sustituye al de la misma actividad) como uno de los últimos días («hoy además tantos minutos de bici como el del domingo»). objeto: qué entreno es, como lo "

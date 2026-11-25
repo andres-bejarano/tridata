@@ -19,6 +19,8 @@ Unit 047: `previsto` keeps a LIST of planned trainings (natación, bici y carrer
 `PREVISTOS_MAX`. A row saved before keeps ONE object and is read as a list of one, with no migration. `del_dia`
 gives `previstos` (the list, `[]` without any) and `previsto` (the first or None, as before). `cambiar(dia,
 previsto=obj|None)` leaves only that one or none, as always; `cambiar(dia, previstos=[…])` saves the whole list.
+
+Unit 111 (R-334, R-335): `cambiar_varios(dias, **campos)`, the same change on several days in ONE transaction.
 """
 from __future__ import annotations
 
@@ -191,41 +193,66 @@ class ObjetivosDia:
         default levels, no planned training). Everything is checked first: a `ValueError` changes nothing.
         Unit 018: a % given with `repartido=True` comes from the Balance spread; a % given without it does not.
         """
-        if repartido and "porcentaje" not in campos:
-            raise ValueError("solo un % del objetivo del día puede venir del reparto")
-        if not campos:
-            raise ValueError("no hay nada que cambiar en el objetivo del día")
-        desconocidos = sorted(set(campos) - set(CAMBIABLES))
-        if desconocidos:
-            raise ValueError(f"no se puede cambiar {', '.join(desconocidos)} del objetivo del día")
-        valores: dict[str, Any] = {}
-        if "porcentaje" in campos:
-            valores["porcentaje"] = _porcentaje(campos["porcentaje"], "el % del objetivo del día")
-            valores["repartido"] = 1 if repartido and valores["porcentaje"] is not None else None
-        if "niveles" in campos:
-            valores["niveles"] = None if campos["niveles"] is None else json.dumps(niveles_validos(campos["niveles"]))
-        if "previsto" in campos and "previstos" in campos:
-            raise ValueError("el entreno previsto se cambia de una forma o de la otra, no de las dos")
-        if "previsto" in campos:  # the old shape: only that one, or none
-            valores["previsto"] = None if campos["previsto"] is None else json.dumps([previsto_valido(campos["previsto"])])
-        if "previstos" in campos:
-            lista = previstos_validos(campos["previstos"])
-            valores["previsto"] = json.dumps(lista) if lista else None
-        if "pasos" in campos:
-            valores["pasos"] = pasos_validos(campos["pasos"])
+        valores = _valores_a_cambiar(repartido, campos)
         ahora = datetime.now().isoformat(timespec="seconds")
-        nombres = list(valores)
         with self._connect() as conn:
-            conn.execute("INSERT OR IGNORE INTO objetivo_dia (dia, creado) VALUES (?, ?)", (dia.isoformat(), ahora))
-            conn.execute(
-                f"UPDATE objetivo_dia SET {', '.join(f'{n} = ?' for n in nombres)}, creado = ? "  # noqa: S608 - fixed
-                "WHERE dia = ?",
-                (*[valores[n] for n in nombres], ahora, dia.isoformat()),
-            )
+            self._escribir(conn, dia, valores, ahora)
         resultado = self.del_dia(dia)
         if resultado is None:  # the row was just written
             raise RuntimeError("SQLite did not keep the objective of the day")
         return resultado
+
+    def cambiar_varios(self, dias: list[date], **campos: Any) -> list[dict]:
+        """Unit 111 (R-334, R-335): the same change as `cambiar` on every day of `dias`, in ONE transaction: all of
+        them or none (a day that fails rolls back the ones written before it). Checked as `cambiar` checks it."""
+        if not dias:
+            raise ValueError("no hay ningún día que cambiar")
+        valores = _valores_a_cambiar(False, campos)
+        ahora = datetime.now().isoformat(timespec="seconds")
+        with self._connect() as conn:  # commits only if every day was written
+            for dia in dias:
+                self._escribir(conn, dia, valores, ahora)
+        guardados = [self.del_dia(dia) for dia in dias]
+        if any(g is None for g in guardados):  # the rows were just written
+            raise RuntimeError("SQLite did not keep the objective of the days")
+        return [g for g in guardados if g is not None]
+
+    def _escribir(self, conn: sqlite3.Connection, dia: date, valores: dict[str, Any], ahora: str) -> None:
+        """The checked values on the row of `dia` (created if there is none), inside the caller's transaction."""
+        nombres = list(valores)
+        conn.execute("INSERT OR IGNORE INTO objetivo_dia (dia, creado) VALUES (?, ?)", (dia.isoformat(), ahora))
+        conn.execute(
+            f"UPDATE objetivo_dia SET {', '.join(f'{n} = ?' for n in nombres)}, creado = ? "  # noqa: S608 - fixed
+            "WHERE dia = ?",
+            (*[valores[n] for n in nombres], ahora, dia.isoformat()),
+        )
+
+
+def _valores_a_cambiar(repartido: bool, campos: dict[str, Any]) -> dict[str, Any]:
+    """The columns a change writes, checked as the screen by hand checks them; `ValueError` says what is wrong."""
+    if repartido and "porcentaje" not in campos:
+        raise ValueError("solo un % del objetivo del día puede venir del reparto")
+    if not campos:
+        raise ValueError("no hay nada que cambiar en el objetivo del día")
+    desconocidos = sorted(set(campos) - set(CAMBIABLES))
+    if desconocidos:
+        raise ValueError(f"no se puede cambiar {', '.join(desconocidos)} del objetivo del día")
+    valores: dict[str, Any] = {}
+    if "porcentaje" in campos:
+        valores["porcentaje"] = _porcentaje(campos["porcentaje"], "el % del objetivo del día")
+        valores["repartido"] = 1 if repartido and valores["porcentaje"] is not None else None
+    if "niveles" in campos:
+        valores["niveles"] = None if campos["niveles"] is None else json.dumps(niveles_validos(campos["niveles"]))
+    if "previsto" in campos and "previstos" in campos:
+        raise ValueError("el entreno previsto se cambia de una forma o de la otra, no de las dos")
+    if "previsto" in campos:  # the old shape: only that one, or none
+        valores["previsto"] = None if campos["previsto"] is None else json.dumps([previsto_valido(campos["previsto"])])
+    if "previstos" in campos:
+        lista = previstos_validos(campos["previstos"])
+        valores["previsto"] = json.dumps(lista) if lista else None
+    if "pasos" in campos:
+        valores["pasos"] = pasos_validos(campos["pasos"])
+    return valores
 
 
 def niveles_validos(crudos: Any) -> list[float | int]:

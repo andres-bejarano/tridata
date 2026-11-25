@@ -410,8 +410,10 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
                 "Say it is done only if the answer starts with «Hecho»; otherwise tell Andrés what it says: nothing "
                 "was done.")
     forma = ("cambio: an object with `accion` (an id of the list below) and the fields that action uses: objeto, "
-             "campo, valor, valores, texto, cantidad, unidad, kcal_estimadas, lineas, dia, desde, fecha (dates "
-             "YYYY-MM-DD), antes_dicho, falta, hora (HH:MM, only when Andrés says it), eleccion; the rest omitted or null.")
+             "campo, valor, valores, texto, cantidad, unidad, kcal_estimadas, lineas, dia, desde, hasta, fecha (dates "
+             "YYYY-MM-DD; hasta: the last day of several days in a row, only for niveles_dia and objetivo_dia), "
+             "antes_dicho, falta, hora (HH:MM, only when Andrés says it), eleccion (a whole number); the rest omitted "
+             "or null.")
     preparar_desc = (
         "Say what ONE change to Andrés's data or plan would do, exactly as the app would do it (its text, before and "
         "after, where, the lines for the watch and its warnings), and its fingerprint (`Huella`). It changes "

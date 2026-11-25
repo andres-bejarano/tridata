@@ -239,7 +239,8 @@ def detalle_actividad(store: DataStore, historial: HistorialFC | None, actividad
     exist. `zonas` says whether zones were confirmed for its day (without them no lap gets a zone); `clima` None: none
     synced. Unit 094: `curva` (see `_curva`), None without detail second by second (not brought yet, or tried, R-254).
     Unit 096: every zone with its sport's of that day; `zonas_deporte` says which and whether estimated. Unit 107
-    (R-130): `actividad` also carries the cadence and climb of its sport (`_cadencia_y_desnivel`), for Plan's summary."""
+    (R-130): `actividad` also carries the cadence and climb of its sport (`_cadencia_y_desnivel`), for Plan's summary.
+    Unit 110 (R7): and `fuente`, «strava» for one imported from Strava's export, «garmin» for the rest."""
     a = store.get_activity(actividad_id)
     if a is None:
         return None
@@ -247,7 +248,8 @@ def detalle_actividad(store: DataStore, historial: HistorialFC | None, actividad
     zonas, estimadas = zonas_sesion(pulso, a.get("activity_type"))
     vueltas = [_vuelta(i, v, a.get("activity_type"), zonas)
                for i, v in enumerate(store.get_laps(actividad_id), start=1)]
-    actividad = {**_resumen(store, historial, a), **_cadencia_y_desnivel(a, a.get("activity_type"))}
+    actividad = {**_resumen(store, historial, a), **_cadencia_y_desnivel(a, a.get("activity_type")),
+                 "fuente": a.get("fuente") or "garmin"}  # unit 110 (R7, C-420): «de Strava» for the imported
     return {"actividad": actividad, "vueltas": vueltas, "clima": store.get_weather(actividad_id),
             "zonas": zonas is not None, "pulso": texto_pulso(pulso),
             "curva": _curva(store.leer_detalle(actividad_id), vueltas, zonas),

@@ -47,6 +47,10 @@ Examples:
     tridata importar-detalle --md deficit.md --simular
     tridata importar-detalle --md deficit.md
 
+    # Unit 110: the old activities (before 18/1/2026) from the zip of Strava's export, once: first a dry run
+    tridata importar-strava --zip ~/Downloads/export.zip --simular
+    tridata importar-strava --zip ~/Downloads/export.zip
+
     # Unit 031: how many times the stress-test values saved in Ajustes appear in the repo and the logs (never which);
     # unit 032: also the values of the blood test and stress test transcribed for the Asistente
     tridata comprobar-privados --registros ~/.tridata /path/to/sync.log
@@ -312,6 +316,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Dry run: show what each day would get, write nothing.",
     )
 
+    strava_zip_cmd = sub.add_parser(
+        "importar-strava",
+        help="Import once the activities before 18/1/2026 from the zip of Strava's export (laps from the track)",
+    )
+    strava_zip_cmd.add_argument("--zip", type=Path, required=True, help="The zip of Strava's export.")
+    strava_zip_cmd.add_argument(
+        "--simular", action="store_true", default=False,
+        help="Dry run: say what would be imported, skipped and not read, write nothing.",
+    )
+
     privados_cmd = sub.add_parser(
         "comprobar-privados",
         help="Count how many times the stress-test values saved in Ajustes appear in the repo and the logs",
@@ -408,6 +422,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_importar_recetas(args.md, args.simular)
     if args.command == "importar-detalle":
         return _cmd_importar_detalle(args.md, args.simular, db_path=DEFAULT_DB_PATH, backup_dir=DEFAULT_BACKUP_DIR)
+    if args.command == "importar-strava":  # unit 110: before opening the store, a dry run writes nothing
+        return _cmd_importar_strava(args.zip, args.simular, db_path=DEFAULT_DB_PATH, backup_dir=DEFAULT_BACKUP_DIR)
     if args.command == "export-nutricion":
         return _cmd_export_nutricion(args.out)
     if args.command == "comprobar-privados":
@@ -574,6 +590,29 @@ def _traer_detalle(svc: SyncService) -> None:
     except Exception as exc:  # noqa: BLE001 - G-63: never fails the sync; one line, no response body
         motivo, _ = _motivo_del_fallo(exc)
         print(f"detail sync stopped: {motivo} ({type(exc).__name__}); the next pass goes on", file=sys.stderr)
+
+
+def _cmd_importar_strava(zip_path: Path, simular: bool, *, db_path: Path = DEFAULT_DB_PATH,
+                         backup_dir: Path = DEFAULT_BACKUP_DIR) -> int:
+    """Unit 110 (R-324..R-332): the old activities of the zip of Strava's export. A zip that cannot be imported: one
+    line and exit 1, nothing written. Before the first write, a verified copy of the base (none removed); if it fails,
+    exit 1 and nothing imported. Then the summary (`Informe.texto`), also with `--simular`, which writes nothing."""
+    from . import importar_strava as imp
+
+    def copia() -> None:
+        if _cmd_backup(_SoloCopia(db_path), backup_dir, 0, []) != 0:
+            raise imp.CopiaFallida("la copia no se pudo hacer")
+
+    try:
+        informe = imp.importar(zip_path.expanduser(), db_path, simular=simular, copia=copia)
+    except imp.ZipNoValido as exc:
+        print(f"No se importa nada: {exc}", file=sys.stderr)
+        return 1
+    except imp.CopiaFallida as exc:
+        print(f"La copia de la base ha fallado ({exc}): no se ha importado nada.", file=sys.stderr)
+        return 1
+    print(informe.texto())
+    return 0
 
 
 def _cmd_cadencia_bici(store: DataStore, svc: SyncService) -> int:

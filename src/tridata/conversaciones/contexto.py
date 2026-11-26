@@ -56,12 +56,18 @@ Unit 112 (R-344, C-438): a food marked as dessert carries `postre: true` (only t
 variants of each saved recipe with their kcal/100 g and macros per 100 g, only when there are some (read without
 creating anything).
 
+Unit 114 (R4, R5): the plan carries its `comparativa` (its notes of that type, apart from `notas`) and each race not
+yet run its `anteriores`: the activities of earlier years whose name shares a word of its own with the name of the
+race (`_PALABRAS_GENERICAS` left out) and whose date falls within `DIAS_EDICION` of the same day of the year, with its
+id, so the coach opens its laps with `get_activity`.
+
 None of it carries the hour: with the same data it is the same text byte to byte. It changes only when a datum
 changes (a food, a weight, a sync) or the day does. Read only: nothing here writes.
 """
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
@@ -81,6 +87,7 @@ from ..nutricion.macros import vista as vista_macros
 from ..nutricion.margen import objetivo_del_dia, origen_del_objetivo
 from ..nutricion.objetivo_dia import ObjetivosDia
 from ..nutricion.peso import RegistroPeso
+from ..nutricion.recetas import normalizar
 from ..nutricion.registro import DIAS_MACROS, MACROS, SECCIONES, RegistroComidas, sin_macros_desde
 from ..nutricion.suplementacion import horas_de_secciones, leer_productos, leer_todo, resumen_dia
 from ..plan import ABIERTA, Planes
@@ -397,7 +404,8 @@ def plan_en_curso(planes: Planes | None, store: DataStore | None, hoy: date) -> 
     vista = semanas_del_plan.vista(plan, store, hoy)
     datos = {
         "nombre": plan["nombre"],
-        "carreras": [_limpio({**c, "resultado": _limpio(c["resultado"]) if c["resultado"] else None})
+        "carreras": [_limpio({**c, "resultado": _limpio(c["resultado"]) if c["resultado"] else None,
+                              "anteriores": _ediciones_anteriores(store, c) if not c["resultado"] else None})
                      for c in vista["carreras"]],
         "semanas": [{**s, "desde_dia": _dia(s["desde"]), "hasta_dia": _dia(s["hasta"])} for s in vista["semanas"]],
         "fases": [{k: f[k] for k in ("nombre", "desde_n", "hasta_n")} for f in vista["fases"]],  # unit 067
@@ -406,11 +414,65 @@ def plan_en_curso(planes: Planes | None, store: DataStore | None, hoy: date) -> 
                       **({"hora": x["hora"]} if x.get("hora") else {})} for x, ident in sorted(_con_id(planes, plan), key=lambda x: x[0]["fecha"])],
         "nutricion": [{"producto": n["producto"], "pauta": n["pauta"]} for n in plan["nutricion"]],
         "notas": [n["texto"] for n in plan["notas"] if n["tipo"] == "nota"],
+        "comparativa": [n["texto"] for n in plan["notas"] if n["tipo"] == "comparativa"],  # unit 114 (R5)
     }
     notas_del_dia = planes.notas_del_dia(plan["id"]) if planes is not None else {}
     datos["notas_del_dia"] = [{"fecha": dia, "texto": texto} for dia, textos in sorted(notas_del_dia.items())
                               for texto in textos]
     return _limpio(datos), _incidencias(planes, plan["id"]) if planes is not None else []
+
+
+# unit 114 (R4): the earlier editions of a race, by a word of its own and the same days of the year
+DIAS_EDICION = 30
+_PALABRAS_GENERICAS = frozenset({
+    "carrera", "carreras", "media", "medio", "maraton", "trail", "popular", "triatlon", "duatlon", "sprint",
+    "olimpico", "olimpica", "half", "ironman", "cross", "nocturna", "solidaria", "internacional", "edicion", "vuelta",
+    "prueba", "desde", "para", "hasta", "entre", "running", "race", "marathon"})
+_PALABRA = re.compile(r"[a-z]+")
+
+
+def _palabras_propias(nombre: str | None) -> set[str]:
+    """The words of a name that say which race it is: 4 letters or more, no digits, not a generic word."""
+    return {p for p in _PALABRA.findall(normalizar(nombre)) if len(p) >= 4 and p not in _PALABRAS_GENERICAS}
+
+
+def _mismo_dia(dia: date, ano: int) -> date:
+    """The same day of the year in `ano` (the 29th of February, the 28th)."""
+    return dia.replace(year=ano, day=min(dia.day, 28)) if (dia.month, dia.day) == (2, 29) else dia.replace(year=ano)
+
+
+def _hms(segundos: float) -> str:
+    s = round(segundos)
+    h, m, s = s // 3600, s // 60 % 60, s % 60
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _ediciones_anteriores(store: DataStore | None, carrera: dict) -> list[dict[str, Any]]:
+    """The activities of earlier years that are this race (R4): a word of its own in common with its name and a date
+    within `DIAS_EDICION` days of its day of the year; the newest first. Without Garmin's history, none."""
+    propias = _palabras_propias(carrera.get("nombre"))
+    if store is None or not propias or not carrera.get("fecha"):
+        return []
+    dia = date.fromisoformat(str(carrera["fecha"]))
+    primera = store.primera_fecha_actividad()
+    if primera is None:
+        return []
+    salida = []
+    for ano in range(dia.year - 1, primera.year - 1, -1):
+        centro = _mismo_dia(dia, ano)
+        for a in reversed(store.activities_between(centro - timedelta(days=DIAS_EDICION),
+                                                   centro + timedelta(days=DIAS_EDICION))):
+            if not propias & _palabras_propias(a.get("name")):
+                continue
+            segundos, metros = float(a.get("duration_seconds") or 0), float(a.get("distance_meters") or 0)
+            ritmo = None
+            if segundos and metros and a.get("activity_type") in RUNNING_TYPES:
+                s = round(segundos / metros * 1000)
+                ritmo = f"{s // 60}:{s % 60:02d}"
+            salida.append(_limpio({"id": a["activity_id"], "fecha": a.get("activity_date"), "nombre": a.get("name"),
+                                   "km": _r(metros / 1000, 2) if metros else None,
+                                   "tiempo": _hms(segundos) if segundos else None, "ritmo_km": ritmo}))
+    return salida
 
 
 def _con_id(planes: Planes | None, plan: dict) -> list[tuple[dict, int | None]]:

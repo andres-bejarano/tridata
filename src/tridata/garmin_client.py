@@ -531,10 +531,6 @@ class GarminClient:
         """Delete a workout template from the library."""
         self._workout_call("delete the workout", lambda api, w: api.delete_workout(w), workout_id, missing_ok=True)
 
-    def bajar_fit(self, workout_id: int) -> bytes:
-        """The FIT file of a workout of the library, as Garmin Connect gives it."""
-        return bytes(self._workout_call("download the workout", lambda api, w: api.download_workout(w), workout_id))
-
     # -- The calendar of Garmin Connect (unit 061, «Garmin manda») ---------------------------------------------------
 
     def entrenos_programados(self, desde: date, hasta: date) -> list[dict[str, Any]]:

@@ -227,11 +227,10 @@ class TestGetHRV:
 class TestEntrenos:
     ENTRENO = {"workoutName": "Series de prueba", "sportType": {"sportTypeId": 1, "sportTypeKey": "running"}}
 
-    def test_subir_programar_quitar_borrar_y_bajar(self, client):  # R2, R4
+    def test_subir_programar_quitar_y_borrar(self, client):  # R2, R4 (unit 114: no bajar_fit)
         c, api = client
         api.upload_workout.return_value = {"workoutId": 123, "workoutName": "Series de prueba"}
         api.schedule_workout.return_value = {"workoutScheduleId": 456, "calendarDate": "2026-10-28"}
-        api.download_workout.return_value = b".FIT de prueba"
         assert c.subir_entreno(self.ENTRENO) == 123
         api.upload_workout.assert_called_once_with(self.ENTRENO)
         assert c.programar(123, date(2026, 10, 28)) == 456
@@ -240,8 +239,6 @@ class TestEntrenos:
         api.unschedule_workout.assert_called_once_with(456)
         c.borrar_entreno(123)
         api.delete_workout.assert_called_once_with(123)
-        assert c.bajar_fit(123) == b".FIT de prueba"
-        api.download_workout.assert_called_once_with(123)
 
     def test_el_programado_que_sale_en_dos_meses_se_da_una_vez(self, client):  # bug 064
         c, api = client

@@ -111,6 +111,12 @@ metrics, sleep, HRV, training load) of one triathlete.
   preparar_cambio returns (or the estimated meal, or the weight) and wait
   for his «sí» before hacer_cambio, apuntar_comida or apuntar_peso; say it
   is done only when the tool says «Hecho».
+- Before judging a training or a race, open its laps with get_activity
+  (its id is in get_contexto or list_activities): the average hides a
+  progressive run or a split that went wrong. Before talking about a race
+  of the plan, look at its `anteriores` in get_contexto (the same race in
+  other years, with their ids: open their laps too) and at the
+  `comparativa` of the plan.
 - To import a plan .md, read a new medical PDF, log with his recipes or
   see the profile of a route: preparar_plan / importar_plan,
   get_analiticas_pendientes / preparar_transcripcion /
@@ -402,7 +408,10 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         the day. Unit 109: `suplementacion` also carries the gels and salt tablets (by hour, and «en_carrera» by
         minute of the race), the caffeine by origin (`cafeina_cafe_mg`, `cafeina_geles_mg`) and the sodium; the days
         after today with gels or salt carry it in `planeado_despues_de_hoy`; `productos_suplemento`, his saved gels
-        and salts. Read-only."""
+        and salts. Unit 114: the plan carries its `comparativa` (with other years) and each race not yet run its
+        `anteriores` (the same race in other years: id, date, km, time and pace). The laps are not here: before
+        judging a training or a race, open its laps with get_activity, and before talking about a race look at its
+        `anteriores` (and their laps) and the `comparativa`. Read-only."""
         return texto_contexto(equipo)
 
     papeles = f"papel: who you are, one of {', '.join(PAPELES_PC)}."
@@ -742,7 +751,8 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
 
     @server.tool(name="get_rutas", annotations=garmin_lee, structured_output=False, description=(
         "The routes saved in Andrés's Garmin Connect and his last runs done, each with its id, to ask for the profile "
-        "of one with get_perfil_ruta. If Garmin does not answer it says so: then ask him for the GPX. Read-only."))
+        "of one with get_perfil_ruta. If Garmin does not answer it says so: then ask him for the GPX; if Garmin is "
+        "limiting the requests it says to wait: tell him so and do not ask for the GPX. Read-only."))
     def get_rutas_tool() -> str:
         return rutas_desde_pc(equipo)
 
@@ -752,7 +762,7 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
         "Give one of: garmin (the id of a route saved in Garmin, from get_rutas), actividad (the id of a run done) or "
         "gpx (the path of a GPX file inside Andrés's sports folder, e.g. routes/x.gpx; files outside it are not read). "
         "Without altitude, or if Garmin does not answer, it says so: ask "
-        "Andrés for a GPX. Read-only."))
+        "Andrés for a GPX (if Garmin is limiting the requests, it says to wait: no GPX then). Read-only."))
     def get_perfil_ruta_tool(garmin: int | None = None, actividad: str | None = None, gpx: str | None = None) -> str:
         return perfil_ruta_desde_pc(equipo, garmin, actividad, gpx)
 

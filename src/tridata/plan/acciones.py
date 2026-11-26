@@ -30,6 +30,11 @@ session is gone says so and touches no other one; one whose id now has another d
 of the last row deleted) is redone with what is there now and nothing is applied. A card from before (by title) is
 still confirmed if its title is unique that day.
 
+Unit 114 (R-206, R-157..R-161): removing a session from the coach removes from Garmin what was sent of it
+(`reloj.quitar`, as Fitness › Plan does); if Garmin fails, it is removed from the plan anyway and the «Hecho» says it
+is still in the watch. Adding a session the watch can follow (`a_garmin` translates it) ends its «Hecho» with
+`OFRECER_RELOJ`, so the coach offers `mandar_a_garmin`.
+
 Unit 076 (R-217, C-267): `plan_anadir_sesion` and `plan_cambiar_sesion` take the hour Andrés says in `hora` («HH:MM»):
 the card shows it («Voy a añadir en el plan: vie 30/10 · 20:00 · Rodaje») and confirming saves it in the session.
 Changing a session without saying an hour keeps the one it had; an hour that is not «HH:MM» (00:00 to 23:59) is a
@@ -50,11 +55,12 @@ from typing import Any
 from ..nutricion.asistente import Accion, Contexto, NoValida, Peticion, TarjetaMal, campo, fecha_de, no, tarjeta
 from ..nutricion.recetas import normalizar
 from . import ABIERTA, con_hora, hora_de, texto_sesion, titulo_incidencia
-from .reloj import GarminNoLlega, NoTraducible, lineas, mandar
+from .reloj import GarminNoLlega, NoTraducible, a_garmin, lineas, mandar, quitar
 
 SIN_PLAN = "No tienes ningún plan de entrenamiento: impórtalo en Fitness › Plan"
 YA_PASO = "Ese día ya pasó: lo hecho lo trae Garmin"
 NO_ESTA = "Esa sesión ya no está en el plan"
+OFRECER_RELOJ = "¿Te la mando al reloj?"  # unit 114 (R2): the end of the «Hecho» of a session the watch can follow
 _DIAS = ("lun", "mar", "mié", "jue", "vie", "sáb", "dom")
 SEPARADOR = "|"
 
@@ -206,30 +212,58 @@ def _aplicar_sesion(que: str) -> Any:
     def aplicar(parametros: dict, ctx: Contexto) -> str:
         if ctx.planes is None:
             raise TarjetaMal("no hay planes")
+        planes = ctx.planes
         plan_id, fecha = parametros["plan_id"], parametros["fecha"]
         dia = dia_corto(fecha_de(fecha))
-        with ctx.planes._connect() as conn:  # the same SQLite and connection of `Planes`
-            if que == "anadir":
+        if que == "anadir":
+            with planes._connect() as conn:  # the same SQLite and connection of `Planes`
                 apartado, orden = _sitio(conn, "plan_sesion", plan_id, fecha)
                 conn.execute("INSERT INTO plan_sesion (plan_id, orden, apartado, fecha, titulo, bloques, clave, hora) "
                              "VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
                              (plan_id, orden, apartado, fecha, parametros["nuevo_titulo"],
                               json.dumps(parametros["bloques"], ensure_ascii=False), parametros.get("hora")))
-                return f"el {dia} tienes en el plan «{parametros['nuevo_titulo']}»"
-            # by its id, and only if it is still the session of the card (the redone card always carries it)
-            fila = conn.execute("SELECT rowid FROM plan_sesion WHERE rowid = ? AND plan_id = ? AND fecha = ? "
-                                "AND titulo = ?", (int(parametros["sesion"]), plan_id, fecha,
-                                                   parametros["titulo"])).fetchone()
+            hecho = f"el {dia} tienes en el plan «{parametros['nuevo_titulo']}»"
+            return f"{hecho}. {OFRECER_RELOJ}" if _sabe_guiarla(parametros) else hecho
+        # by its id, and only if it is still the session of the card (the redone card always carries it)
+        donde = "rowid = ? AND plan_id = ? AND fecha = ? AND titulo = ?"
+        clave = (int(parametros["sesion"]), plan_id, fecha, parametros["titulo"])
+        if que == "quitar":
+            sesion = planes.sesion(clave[0])
+            if sesion is None or (sesion["plan_id"], sesion["fecha"], sesion["titulo"]) != clave[1:]:
+                raise TarjetaMal(NO_ESTA.lower())
+            aviso = _quitar_del_reloj(planes, sesion)  # unit 114 (R-206): as Fitness › Plan, Garmin first
+            with planes._connect() as conn:
+                conn.execute(f"DELETE FROM plan_sesion WHERE {donde}", clave)  # noqa: S608 - fixed text
+            hecho = f"el {dia} ya no tienes «{parametros['titulo']}» en el plan"
+            return f"{hecho}. {aviso}" if aviso else hecho
+        with planes._connect() as conn:
+            fila = conn.execute(f"SELECT rowid FROM plan_sesion WHERE {donde}", clave).fetchone()  # noqa: S608
             if fila is None:
                 raise TarjetaMal(NO_ESTA.lower())
-            if que == "quitar":
-                conn.execute("DELETE FROM plan_sesion WHERE rowid = ?", (fila[0],))
-                return f"el {dia} ya no tienes «{parametros['titulo']}» en el plan"
             conn.execute("UPDATE plan_sesion SET titulo = ?, bloques = ?, hora = COALESCE(?, hora) WHERE rowid = ?",
                          (parametros["nuevo_titulo"], json.dumps(parametros["bloques"], ensure_ascii=False),
                           parametros.get("hora"), fila[0]))
-            return f"el {dia} tienes en el plan «{parametros['nuevo_titulo']}»"
+        return f"el {dia} tienes en el plan «{parametros['nuevo_titulo']}»"
     return aplicar
+
+
+def _sabe_guiarla(parametros: dict) -> bool:
+    """Whether the watch can follow the session added (unit 114, R2): `a_garmin` translates it. Never talks to Garmin."""
+    try:
+        a_garmin({"titulo": parametros["nuevo_titulo"], "bloques": list(parametros.get("bloques") or [])})
+    except NoTraducible:
+        return False
+    return True
+
+
+def _quitar_del_reloj(planes: Any, sesion: dict) -> str | None:
+    """Removes from Garmin what was sent of that session (unit 114, R-206: never sent, Garmin is not called); the
+    warning if Garmin failed, the same as Fitness › Plan says, else None."""
+    try:
+        quitar(sesion, planes.garmin)
+    except GarminNoLlega as exc:
+        return f"«{sesion['titulo']}» sigue en tu reloj: bórrala allí ({exc})"
+    return None
 
 
 def _sitio(conn: Any, tabla: str, plan_id: int, fecha: str | None = None) -> tuple[int, int]:
@@ -668,7 +702,8 @@ ACCIONES = [
            f"llegado. dia: el día de la sesión; {_OBJETO}; {_SESION}; {_HORA}.",
            _proponer_sesion("cambiar"), _rehacer_sesion("cambiar"), _aplicar_sesion("cambiar")),
     Accion("plan_anadir_sesion", "añadir una sesión al plan en curso, hoy o un día que aún no ha llegado. dia: el día; "
-           f"{_SESION}; {_HORA}.", _proponer_sesion("anadir"), _rehacer_sesion("anadir"), _aplicar_sesion("anadir")),
+           f"{_SESION}; {_HORA}. Si el «Hecho» termina con «{OFRECER_RELOJ}», ofrécele mandarla a su reloj y, si dice "
+           "que sí, prepárala con mandar_a_garmin.", _proponer_sesion("anadir"), _rehacer_sesion("anadir"), _aplicar_sesion("anadir")),
     Accion("plan_quitar_sesion", "quitar una sesión prevista del plan en curso. dia: el día de la sesión; "
            f"{_OBJETO}.",
            _proponer_sesion("quitar"), _rehacer_sesion("quitar"), _aplicar_sesion("quitar")),
@@ -701,4 +736,4 @@ ACCIONES = [
            "por gel que empiece por gel, con su km.", _proponer_estrategia, _rehacer_estrategia, _aplicar_estrategia),
 ]
 
-__all__ = ["ACCIONES", "dia_corto", "tarjeta_garmin"]
+__all__ = ["ACCIONES", "OFRECER_RELOJ", "dia_corto", "tarjeta_garmin"]

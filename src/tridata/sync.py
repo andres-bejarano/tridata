@@ -8,6 +8,10 @@ Unit 061 («Garmin manda»): at the end of each sync (the routine of 08:00 and �
 (`plan_desde_garmin`). In its own `try` (R6): a 429 or a failure there leaves the plan as it was, the rest of the sync
 ends the same and the next one tries again. Only counts are logged, never a text of the plan.
 
+Unit 113 (R-180, R-185): the detail of a workout already paired is read at most once a day (`ya_leido`); the new ones
+and the ones moved in Garmin always. A 429 on a detail waits `ESPERA_429` seconds and tries once more; a second one
+goes up as before (the plan as it was, the next sync tries again).
+
 Unit 096 (R-259): after saving the laps (`sync_laps`) or the detail (`sync_detalle`) of a session, `umbral.revisar_sesion`
 looks in it for an effort that proposes a new threshold. In its own `try`: a failure there never stops the sync.
 
@@ -19,6 +23,7 @@ from __future__ import annotations
 import fcntl
 import logging
 import os
+import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -28,7 +33,7 @@ from typing import Any
 from .calendario import DESDE_HECHOS
 from .garmin_client import GarminAuthError, GarminClient, GarminRateLimitError, _es_429
 from .plan import Planes
-from .plan.desde_garmin import cambios, programado
+from .plan.desde_garmin import cambios, programado, ya_leido
 from .storage import DataStore
 
 logger = logging.getLogger(__name__)
@@ -79,6 +84,7 @@ DIAS_NUEVA = 2
 HORAS_AVISO = 26  # one day plus the margin of the routine: older than this, today's screen warns
 REINTENTO_HASTA = 14  # the routine tries again every hour until 14:00 (the timer says 08..14)
 DIAS_ATRAS_PLAN = 3  # unit 061: the scheduled workouts of Garmin are read from 3 days ago to the end of the plan
+ESPERA_429 = 30  # unit 113 (R-185): seconds waited after a 429 on the detail of a workout, before trying once more
 MAX_DIAS_ATRAS = 45  # «Actualizar Garmin» brings at most these days, the same window as `tridata sync`
 MOTIVOS = {"sesion": "Garmin no dejó iniciar sesión", "limite": "Garmin estaba limitando las peticiones",
            "conexion": "se cortó la conexión"}
@@ -313,12 +319,25 @@ class SyncService:
         desde = hoy - timedelta(days=DIAS_ATRAS_PLAN)
         if plan_id is None or fin is None or fin < desde:
             return None
-        programados = [programado(item, self._client.entreno(item["entreno"]))
+        sesiones = planes.sesiones_garmin(plan_id, desde, fin, fuera=True)
+        dia = hoy.isoformat()
+        programados = [programado(item) if ya_leido(sesiones, item, dia)
+                       else programado(item, self._detalle(item["entreno"]), dia)
                        for item in self._client.entrenos_programados(desde, fin)]
-        resumen = planes.aplicar_garmin(plan_id, cambios(planes.sesiones_garmin(plan_id, desde, fin), programados))
-        logger.info("Plan from Garmin: %d workouts read, %d sessions changed, %d added, %d warnings",
-                    len(programados), resumen["cambiadas"], resumen["anadidas"], resumen["avisos"])
+        resumen = planes.aplicar_garmin(plan_id, cambios(sesiones, programados))
+        logger.info("Plan from Garmin: %d workouts (%d details read), %d sessions changed, %d added, %d warnings",
+                    len(programados), sum(1 for p in programados if p.leido), resumen["cambiadas"],
+                    resumen["anadidas"], resumen["avisos"])
         return resumen
+
+    def _detalle(self, workout_id: int) -> dict[str, Any]:
+        """Unit 113 (R-185): the detail of a workout; after a 429, waits and tries once more (a second one goes up)."""
+        try:
+            return self._client.entreno(workout_id)
+        except GarminRateLimitError:
+            logger.info("Garmin limited the requests reading a workout; trying again in %d s", ESPERA_429)
+            time.sleep(ESPERA_429)
+            return self._client.entreno(workout_id)
 
     def rellenar_horas(self, hasta: date) -> int:
         """Unit 054 (R4): the activities since `DESDE_HECHOS` saved without their hour (before the 054) get it, with

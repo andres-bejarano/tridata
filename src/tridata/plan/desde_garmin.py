@@ -15,6 +15,14 @@ Each workout scheduled in Garmin (from 3 days ago to the end of the plan in cour
 
 A session with ids that no workout of Garmin has any more is not deleted: it says «Ya no está en tu Garmin» (R5).
 Rows are changed IN PLACE, so `<plan>-<orden>` (the key of Google Calendar and of the team) stays.
+
+Unit 113 (R-180..R-185): a workout paired and read today (`garmin_revisado`) on the same day is not read again
+(`ya_leido`): it comes without its detail (`Programado.leido` False) and only its day, ids and sport are compared. A
+session keeps its sport (`deporte`, Garmin's on pairing or adding): pairing by day and sport uses it, the title only
+when it is empty. Pairing by ids also looks at the sessions out of the window (`fuera`, from `Planes.sesiones_garmin`),
+so an old one Garmin moves into the window moves instead of coming twice; they never get a warning nor are paired by
+day. Among them, a workout id only pairs a session sent from TriData (`garmin_enviada`): a workout of the library of
+Garmin can be scheduled again, and that copy must not take an old session away from its day.
 """
 from __future__ import annotations
 
@@ -48,6 +56,8 @@ class Programado:
     titulo: str
     bloques: tuple[str, ...]
     actualizado: str | None
+    leido: bool = True  # unit 113: False = its detail was not read (paired and read today): no title nor blocks
+    revisado: str | None = None  # unit 113: the day its detail was read (`garmin_revisado`)
 
 
 @dataclass
@@ -66,19 +76,40 @@ def deporte_de_sesion(titulo: str) -> str:
     return next((deporte for patron, deporte in _DEPORTES if patron.search(plano)), "carrera")
 
 
-def programado(item: Mapping[str, Any], detalle: Mapping[str, Any]) -> Programado:
-    """One item of `GarminClient.entrenos_programados` with the detail of its workout (`GarminClient.entreno`)."""
+def programado(item: Mapping[str, Any], detalle: Mapping[str, Any] | None = None,
+               revisado: str | None = None) -> Programado:
+    """One item of `GarminClient.entrenos_programados` with the detail of its workout (`GarminClient.entreno`), read
+    on the day `revisado`; without the detail (unit 113), only its ids, day and sport count."""
+    ids = (int(item["programado"]), int(item["entreno"]), str(item["fecha"]),
+           _DE_GARMIN.get(str(item.get("deporte") or ""), "otro"))
+    if detalle is None:
+        return Programado(*ids, titulo=str(item.get("titulo") or ""), bloques=(), actualizado=None, leido=False)
     titulo, bloques = de_garmin(detalle)
-    return Programado(programado=int(item["programado"]), entreno=int(item["entreno"]), fecha=str(item["fecha"]),
-                      deporte=_DE_GARMIN.get(str(item.get("deporte") or ""), "otro"), titulo=titulo,
-                      bloques=tuple(bloques), actualizado=detalle.get("updatedDate"))
+    return Programado(*ids, titulo=titulo, bloques=tuple(bloques), actualizado=detalle.get("updatedDate"),
+                      revisado=revisado)
+
+
+def _de_la_sesion(s: Mapping[str, Any], item: Mapping[str, Any]) -> bool:
+    """Whether a session is the one of that scheduling, by its ids (the scheduling first, see `_por_ids`)."""
+    if s.get("garmin_schedule_id") is not None and s.get("garmin_schedule_id") == item["programado"]:
+        return True
+    return s.get("garmin_workout_id") == item["entreno"] and (not s.get("fuera") or s.get("garmin_enviada") is not None)
+
+
+def ya_leido(sesiones: Sequence[Mapping[str, Any]], item: Mapping[str, Any], hoy: str) -> bool:
+    """Unit 113 (R-180): whether the detail of this item of the calendar needs no reading: the session it is paired
+    with by its scheduling was read today, Garmin knows its `updatedDate` and has it on the same day. A new one, one
+    moved in Garmin or one paired another day is read."""
+    s = next((s for s in sesiones if s.get("garmin_schedule_id") == int(item["programado"])), None)
+    return (s is not None and s.get("garmin_revisado") == hoy and s.get("garmin_actualizado") is not None
+            and (s.get("garmin_fecha") or s["fecha"]) == str(item["fecha"]))
 
 
 def _todo(p: Programado) -> dict[str, Any]:
     bloques = list(p.bloques)
     return {"titulo": p.titulo, "bloques": bloques, "fecha": p.fecha, "garmin_workout_id": p.entreno,
             "garmin_schedule_id": p.programado, "garmin_actualizado": p.actualizado,
-            "garmin_texto": texto_sesion(p.titulo, bloques)}
+            "garmin_texto": texto_sesion(p.titulo, bloques), "deporte": p.deporte, "garmin_revisado": p.revisado}
 
 
 def _mismo(a: str, b: str) -> bool:
@@ -115,10 +146,25 @@ def varias(titulo: str) -> str:
     return f"En tu Garmin hay «{titulo}» este día y no sé a cuál de estas sesiones sustituye"
 
 
+def _por_ids(sesiones: Sequence[Mapping[str, Any]], p: Programado, emparejadas: set[int]) -> Mapping[str, Any] | None:
+    """The session of a workout by its ids: the one of its scheduling, else the one of its workout (unit 113)."""
+    libres = [s for s in sesiones if int(s["id"]) not in emparejadas]
+    item = {"programado": p.programado, "entreno": p.entreno}
+    return next((s for s in libres if s.get("garmin_schedule_id") == p.programado),
+                next((s for s in libres if _de_la_sesion(s, item)), None))
+
+
+def _deporte(s: Mapping[str, Any]) -> str:
+    """The sport of a session: the one kept (unit 113), else from its title."""
+    return str(s.get("deporte") or deporte_de_sesion(str(s["titulo"])))
+
+
 def cambios(sesiones: Sequence[Mapping[str, Any]], programados: Sequence[Programado]) -> Cambios:
-    """What changes in the sessions of the window (`Planes.sesiones_garmin`) for the workouts scheduled in Garmin."""
-    salida = Cambios(avisos={int(s["id"]): None for s in sesiones})
-    por_id = {int(s["id"]): s for s in sesiones}
+    """What changes in the sessions of the window (`Planes.sesiones_garmin`) for the workouts scheduled in Garmin.
+    The sessions marked `fuera` (out of the window, with ids) are only paired by their ids (unit 113)."""
+    ventana = [s for s in sesiones if not s.get("fuera")]
+    salida = Cambios(avisos={int(s["id"]): None for s in ventana})
+    por_id = {int(s["id"]): s for s in ventana}
     emparejadas: set[int] = set()
     sueltos: list[Programado] = []
 
@@ -127,14 +173,18 @@ def cambios(sesiones: Sequence[Mapping[str, Any]], programados: Sequence[Program
         if p.programado in vistos:  # bug 064: the same scheduling twice is one
             continue
         vistos.add(p.programado)
-        s = next((s for s in sesiones if int(s["id"]) not in emparejadas
-                  and (s.get("garmin_workout_id") == p.entreno or s.get("garmin_schedule_id") == p.programado)), None)
+        s = _por_ids(sesiones, p, emparejadas)
         if s is None:
-            sueltos.append(p)
+            if p.leido:  # one not read always has its session (`ya_leido`); else it waits for the next pass
+                sueltos.append(p)
             continue
         emparejadas.add(int(s["id"]))
+        if s.get("fuera"):  # moved into the window: no old warning stays
+            salida.avisos[int(s["id"])] = None
         campos: dict[str, Any] = {}
-        if s.get("garmin_actualizado") is None and _el_mismo(*_como_se_mando(s), p):  # as it was sent
+        if not p.leido:  # unit 113: read today already, only its day, ids and sport
+            pass
+        elif s.get("garmin_actualizado") is None and _el_mismo(*_como_se_mando(s), p):  # as it was sent
             campos["garmin_actualizado"] = p.actualizado
         elif s.get("garmin_actualizado") is None:  # sent from TriData and changed in Garmin since
             campos = _todo(p)
@@ -144,12 +194,16 @@ def cambios(sesiones: Sequence[Mapping[str, Any]], programados: Sequence[Program
             campos["fecha"] = p.fecha
         if (s.get("garmin_workout_id"), s.get("garmin_schedule_id")) != (p.entreno, p.programado):
             campos.update(garmin_workout_id=p.entreno, garmin_schedule_id=p.programado)
+        if s.get("deporte") != p.deporte:  # unit 113 (R4): it keeps Garmin's sport
+            campos["deporte"] = p.deporte
+        if p.revisado is not None and s.get("garmin_revisado") != p.revisado:
+            campos["garmin_revisado"] = p.revisado
         if campos:
             salida.actualizar[int(s["id"])] = campos
 
     for p in sueltos:  # 2. the session of that day and sport; 3. a new one
-        candidatas = [s for s in sesiones if int(s["id"]) not in emparejadas and s["fecha"] == p.fecha
-                      and deporte_de_sesion(str(s["titulo"])) == p.deporte]
+        candidatas = [s for s in ventana if int(s["id"]) not in emparejadas and s["fecha"] == p.fecha
+                      and _deporte(s) == p.deporte]
         if len(candidatas) > 1:
             iguales = [s for s in candidatas if _mismo(str(s["titulo"]), p.titulo)]
             if len(iguales) != 1:
@@ -171,4 +225,4 @@ def cambios(sesiones: Sequence[Mapping[str, Any]], programados: Sequence[Program
     return salida
 
 
-__all__ = ["YA_NO_ESTA", "Cambios", "Programado", "cambios", "deporte_de_sesion", "programado", "varias"]
+__all__ = ["YA_NO_ESTA", "Cambios", "Programado", "cambios", "deporte_de_sesion", "programado", "varias", "ya_leido"]

@@ -20,8 +20,10 @@ HOY = date(2026, 10, 30)
 
 def sesion(ident: int, fecha: str, titulo: str, bloques: list[str] | None = None, *, workout: int | None = None,
            schedule: int | None = None, actualizado: str | None = None) -> dict:
+    # unit 113: a session sent to the watch keeps `carrera` as its sport (`Planes.marcar_garmin`); the others, none
     return {"id": ident, "fecha": fecha, "titulo": titulo, "bloques": bloques or ["40' a 5:40"],
-            "garmin_workout_id": workout, "garmin_schedule_id": schedule, "garmin_actualizado": actualizado}
+            "garmin_workout_id": workout, "garmin_schedule_id": schedule, "garmin_actualizado": actualizado,
+            "deporte": "carrera" if workout is not None else None}
 
 
 def prog(sched: int, workout: int, fecha: str, titulo: str, bloques: list[str] | None = None, *,
@@ -34,7 +36,8 @@ def _todo(p: Programado) -> dict:
     """The columns a session takes from Garmin when Garmin wins."""
     return {"titulo": p.titulo, "bloques": list(p.bloques), "fecha": p.fecha, "garmin_workout_id": p.entreno,
             "garmin_schedule_id": p.programado, "garmin_actualizado": p.actualizado,
-            "garmin_texto": texto_sesion(p.titulo, list(p.bloques))}
+            "garmin_texto": texto_sesion(p.titulo, list(p.bloques)), "deporte": p.deporte,
+            "garmin_revisado": p.revisado}
 
 
 # -- R1: a session sent by TriData and changed in Garmin --------------------------------------------------------------

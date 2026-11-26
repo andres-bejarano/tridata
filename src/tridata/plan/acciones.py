@@ -44,6 +44,16 @@ Unit 045 (REC-25, R-155, R-156): `guardar_estrategia`, «Voy a guardar en el pla
 geles)», the strategy by stretches the coach answered with a route attached, one line per stretch (its km, terrain,
 pace or effort and time of passage) and one per gel, in that race of the plan in course; it replaces the one it had
 (the card says it). Confirming redoes it (G-41): another strategy saved in between, and the card is redone.
+
+Unit 115 (REC-56, REC-57; R-348, R-349, R-353..R-357): every action of the plan takes the plan it speaks of (`plan`:
+its name or its id, `plan_dicho`); not said, the one in course, as before. `plan_anadir_semana`,
+`plan_cambiar_semana` and `plan_quitar_semana` (dates, planned time and km, key sessions; checked as Fitness › Plan
+checks them, `Planes.semana_propuesta`; removing one says how many sessions go with it and removes from Garmin the ones
+sent, as the web does), `plan_anadir_fase`, `plan_cambiar_fase` and `plan_quitar_fase` (a name over weeks).
+`estrategia_al_reloj` turns the strategy saved in a race into a session of the plan on the day of the race,
+«‹carrera› · estrategia», a step per stretch, every x km or every x minutes (`plan.estrategia_reloj`), shown whole on
+its card; confirming sends it to the watch first (`reloj.mandar`, the one sent before replaced) and only then saves it
+in the plan (the one of before, replaced in its row): if Garmin fails, nothing is saved.
 """
 from __future__ import annotations
 
@@ -54,7 +64,8 @@ from typing import Any
 
 from ..nutricion.asistente import Accion, Contexto, NoValida, Peticion, TarjetaMal, campo, fecha_de, no, tarjeta
 from ..nutricion.recetas import normalizar
-from . import ABIERTA, con_hora, hora_de, texto_sesion, titulo_incidencia
+from . import ABIERTA, Planes, con_hora, hora_de, texto_sesion, titulo_incidencia
+from .estrategia_reloj import COMO, EstrategiaMal, pasos
 from .reloj import GarminNoLlega, NoTraducible, a_garmin, lineas, mandar, quitar
 
 SIN_PLAN = "No tienes ningún plan de entrenamiento: impórtalo en Fitness › Plan"
@@ -70,11 +81,40 @@ def dia_corto(dia: date) -> str:
     return f"{_DIAS[dia.weekday()]} {dia.day}/{dia.month}"
 
 
-def _plan(ctx: Contexto, peticion: Peticion) -> dict | None:
+def plan_dicho(planes: Any, dicho: Any) -> int | str:
+    """Unit 115 (R-349): the id of the plan named by its name (whole, or a piece of it, without capitals or accents)
+    or by its id («#3», «3»); else what to say, with the plans there are."""
+    lista = planes.lista()
+    nombres = ", ".join(f"«{p['nombre']}» (id {p['id']})" for p in lista) or "ninguno"
+    texto = " ".join(str(dicho).split())
+    buscado = normalizar(texto)
+    iguales = [p for p in lista if normalizar(p["nombre"]) == buscado]
+    if not iguales:
+        ident = _id_de(texto)
+        iguales = [p for p in lista if ident is not None and p["id"] == ident]
+    if not iguales:
+        iguales = [p for p in lista if buscado and buscado in normalizar(p["nombre"])]
+    if len(iguales) == 1:
+        return int(iguales[0]["id"])
+    if not iguales:
+        return f"No hay ningún plan «{texto}»: tus planes son {nombres}"
+    return f"Hay varios planes que se llaman así ({', '.join(p['nombre'] for p in iguales)}): dime cuál por su id"
+
+
+def _plan(ctx: Contexto, peticion: Peticion, cambio: Any = None) -> dict | str:
+    """The plan a change speaks of: the one it names (`plan`, unit 115, R-349), else the one in course, as before; or
+    why there is none."""
     if ctx.planes is None:
-        return None
-    ident = ctx.planes.en_curso(peticion.fecha)
-    return ctx.planes.leer(ident) if ident is not None else None
+        return SIN_PLAN
+    dicho = getattr(cambio, "plan", None)
+    if isinstance(dicho, str) and dicho.strip():
+        ident: int | str | None = plan_dicho(ctx.planes, dicho)
+        if isinstance(ident, str):
+            return ident
+    else:
+        ident = ctx.planes.en_curso(peticion.fecha)
+    plan = ctx.planes.leer(ident) if ident is not None else None
+    return plan if plan is not None else SIN_PLAN
 
 
 def _partes(texto: Any) -> tuple[str, list[str]] | None:
@@ -129,9 +169,9 @@ def _la_sesion(cambio: Any, ctx: Contexto, plan: dict, dia: date) -> tuple[dict,
 
 def _proponer_sesion(que: str) -> Any:
     def proponer(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
-        plan = _plan(ctx, peticion)
-        if plan is None:
-            return no(SIN_PLAN)
+        plan = _plan(ctx, peticion, cambio)
+        if isinstance(plan, str):
+            return no(plan)
         if cambio.dia is None:
             return no("No sé qué día del plan es")
         nueva = _partes(cambio.texto) if que != "quitar" else None
@@ -288,9 +328,9 @@ def _sitio(conn: Any, tabla: str, plan_id: int, fecha: str | None = None) -> tup
 # -- plan_objetivo_carrera ------------------------------------------------------------------------------------------
 
 def _proponer_objetivo(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
-    plan = _plan(ctx, peticion)
-    if plan is None:
-        return no(SIN_PLAN)
+    plan = _plan(ctx, peticion, cambio)
+    if isinstance(plan, str):
+        return no(plan)
     buscado = normalizar(cambio.objeto) if isinstance(cambio.objeto, str) else ""
     carreras = [c for c in plan["carreras"] if buscado and buscado in normalizar(c["nombre"])]
     if len(carreras) != 1:
@@ -327,9 +367,9 @@ def _aplicar_objetivo(parametros: dict, ctx: Contexto) -> str:
 # -- plan_nota ----------------------------------------------------------------------------------------------------
 
 def _proponer_nota(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
-    plan = _plan(ctx, peticion)
-    if plan is None:
-        return no(SIN_PLAN)
+    plan = _plan(ctx, peticion, cambio)
+    if isinstance(plan, str):
+        return no(plan)
     if not isinstance(cambio.texto, str) or not cambio.texto.strip():
         return no("No sé qué nota quieres añadir")
     return _rehacer_nota({"plan_id": plan["id"], "texto": cambio.texto.strip()}, {}, ctx, peticion)
@@ -357,9 +397,9 @@ def _aplicar_nota(parametros: dict, ctx: Contexto) -> str:
 # -- mandar_a_garmin (unit 042) --------------------------------------------------------------------------------
 
 def _proponer_garmin(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
-    plan = _plan(ctx, peticion)
-    if plan is None:
-        return no(SIN_PLAN)
+    plan = _plan(ctx, peticion, cambio)
+    if isinstance(plan, str):
+        return no(plan)
     if cambio.dia is None:
         return no("No sé qué día del plan es")
     if cambio.dia < peticion.fecha:
@@ -478,9 +518,9 @@ def _visita(v: dict) -> str:
 # abrir_incidencia
 
 def _proponer_abrir(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
-    plan = _plan(ctx, peticion)
-    if plan is None:
-        return no(SIN_PLAN)
+    plan = _plan(ctx, peticion, cambio)
+    if isinstance(plan, str):
+        return no(plan)
     zona, que_paso = _texto(cambio.objeto), _texto(cambio.texto)
     if not zona:
         return no("No sé dónde lo notas: dime la zona (el tobillo, el gemelo…)")
@@ -594,9 +634,9 @@ def _aplicar_cerrar(parametros: dict, ctx: Contexto) -> str:
 # nota_del_dia
 
 def _proponer_nota_dia(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
-    plan = _plan(ctx, peticion)
-    if plan is None:
-        return no(SIN_PLAN)
+    plan = _plan(ctx, peticion, cambio)
+    if isinstance(plan, str):
+        return no(plan)
     texto = _texto(cambio.texto)
     if not texto:
         return no("No sé qué nota quieres apuntar")
@@ -638,9 +678,9 @@ def _es_gel(linea: str) -> bool:
 
 
 def _proponer_estrategia(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
-    plan = _plan(ctx, peticion)
-    if plan is None:
-        return no(SIN_PLAN)
+    plan = _plan(ctx, peticion, cambio)
+    if isinstance(plan, str):
+        return no(plan)
     nombre = _texto(cambio.objeto)
     if not nombre:
         return no("No sé de qué carrera del plan es la estrategia: dime cuál")
@@ -682,6 +722,357 @@ def _aplicar_estrategia(parametros: dict, ctx: Contexto) -> str:
     return f"la estrategia de {parametros['carrera']} está en tu plan"
 
 
+# -- unit 115: the weeks and the phases of any plan (R-348) ---------------------------------------------------------
+
+def _hm(segundos: Any) -> str:
+    return f"{int(segundos) // 3600}:{int(segundos) % 3600 // 60:02d}"
+
+
+def _coma(x: Any) -> str:
+    return f"{float(x):g}".replace(".", ",")
+
+
+def _texto_semana(s: dict) -> str:
+    """«15/3–21/3 · prev. ~5:00 · 45 km · tirada»: a week as its card says it."""
+    partes = [f"{_dm(s['desde'])}–{_dm(s['hasta'])}"]
+    partes += [f"prev. ~{_hm(s['previsto_s'])}"] if s.get("previsto_s") is not None else []
+    partes += [f"{_coma(s['previsto_km'])} km"] if s.get("previsto_km") is not None else []
+    partes += [s["clave"]] if s.get("clave") else []
+    return " · ".join(partes)
+
+
+def _entero(valor: Any) -> int | None:
+    if isinstance(valor, bool) or not isinstance(valor, (int, float)) or float(valor) != int(valor):
+        return None
+    return int(valor)
+
+
+def _cambios_semana(cambio: Any) -> dict[str, Any]:
+    """What the coach says of a week: its days, its planned time (`campo`), its km (`cantidad`), its key sessions."""
+    cambios: dict[str, Any] = {}
+    if cambio.desde is not None:
+        cambios["desde"] = cambio.desde.isoformat()
+    if cambio.hasta is not None:
+        cambios["hasta"] = cambio.hasta.isoformat()
+    if _texto(cambio.campo):
+        cambios["previsto"] = _texto(cambio.campo)
+    if cambio.cantidad is not None:
+        cambios["km"] = cambio.cantidad
+    if _texto(cambio.texto):
+        cambios["clave"] = _texto(cambio.texto)
+    return cambios
+
+
+def _proponer_semana(que: str) -> Any:
+    def proponer(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
+        plan = _plan(ctx, peticion, cambio)
+        if isinstance(plan, str):
+            return no(plan)
+        n = _entero(cambio.valor)
+        if n is None:
+            return no("No sé qué semana del plan es: dime su número")
+        cambios = _cambios_semana(cambio) if que != "quitar" else {}
+        if que == "cambiar" and not cambios:
+            return no(f"No sé qué quieres cambiar de la semana {n}")
+        return _rehacer_semana(que)({"plan_id": plan["id"], "n": n, "cambios": cambios}, {}, ctx, peticion)
+    return proponer
+
+
+def _mandadas(planes: Any, plan_id: int, semana: dict) -> list[dict]:
+    """The sessions of that week sent to the watch (what removing it removes from Garmin, as the web does)."""
+    return [s for s in planes.sesiones_garmin(plan_id, fecha_de(semana["desde"]), fecha_de(semana["hasta"]))
+            if s["garmin_workout_id"] is not None or s["garmin_schedule_id"] is not None]
+
+
+def _rehacer_semana(que: str) -> Any:
+    accion = {"anadir": "plan_anadir_semana", "cambiar": "plan_cambiar_semana", "quitar": "plan_quitar_semana"}[que]
+
+    def rehacer(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
+        plan = ctx.planes.leer(parametros["plan_id"]) if ctx.planes is not None else None
+        if plan is None:
+            return no(SIN_PLAN)
+        n, cambios = int(parametros["n"]), dict(parametros.get("cambios") or {})
+        actual = next((s for s in plan["semanas"] if s["n"] == n), None)
+        if que == "anadir" and actual is not None:
+            return no(f"Ya hay una semana {n} en el plan {plan['nombre']}")
+        if que != "anadir" and actual is None:
+            return no(f"El plan {plan['nombre']} no tiene semana {n}")
+        actual = actual or {}
+        avisos: list[str] = []
+        antes = despues = None
+        if que == "quitar":
+            antes = _texto_semana(actual)
+            cuantas = ctx.planes.sesiones_de_semana(plan["id"], n)
+            if cuantas:
+                avisos.append(f"se van con ella {cuantas} {'sesión' if cuantas == 1 else 'sesiones'}")
+            if _mandadas(ctx.planes, plan["id"], actual):
+                avisos.append("las que están en tu reloj se quitan también de tu Garmin")
+            texto = f"Voy a quitar del plan la semana {n}: {antes}"
+        else:
+            try:
+                nueva = ctx.planes.semana_propuesta(plan["id"], None if que == "anadir" else n,
+                                                    {**cambios, "n": n} if que == "anadir" else cambios)
+            except (ValueError, LookupError) as exc:
+                return no(str(exc) or f"El plan {plan['nombre']} no tiene semana {n}")
+            despues = _texto_semana(nueva)
+            if que == "cambiar":
+                antes = _texto_semana(actual)
+                if antes == despues and (nueva["clave"] or "") == (actual.get("clave") or ""):
+                    return no(f"La semana {n} ya es así")
+            texto = (f"Voy a añadir en el plan la semana {n}: {despues}" if que == "anadir"
+                     else f"Voy a cambiar en el plan la semana {n}: {antes} → {despues}")
+        return tarjeta(accion=accion, parametros=parametros, peticion=peticion, texto=texto, antes=antes,
+                       despues=despues, avisos=avisos, donde=f"en tu plan {plan['nombre']}, en Fitness › Plan")
+    return rehacer
+
+
+def _aplicar_semana(que: str) -> Any:
+    def aplicar(parametros: dict, ctx: Contexto) -> str:
+        if ctx.planes is None:
+            raise TarjetaMal("no hay planes")
+        planes, plan_id, n = ctx.planes, int(parametros["plan_id"]), int(parametros["n"])
+        cambios = dict(parametros.get("cambios") or {})
+        try:
+            if que == "anadir":
+                planes.anadir_semana(plan_id, {**cambios, "n": n})
+                return f"la semana {n} está en tu plan"
+            if que == "cambiar":
+                planes.cambiar_semana(plan_id, n, cambios)
+                return f"la semana {n} de tu plan ha cambiado"
+            semana = next((s for s in (planes.leer(plan_id) or {}).get("semanas", []) if s["n"] == n), None)
+            if semana is None:
+                raise LookupError(n)
+            fallos = [aviso for s in _mandadas(planes, plan_id, semana) if (aviso := _quitar_del_reloj(planes, s))]
+            borradas = planes.borrar_semana(plan_id, n)
+        except (ValueError, LookupError) as exc:
+            raise NoValida(f"No se ha podido: {exc}") from None
+        hecho = f"la semana {n} ya no está en tu plan" + (
+            f" (se han ido con ella {borradas} {'sesión' if borradas == 1 else 'sesiones'})" if borradas else "")
+        return ". ".join([hecho, *fallos])
+    return aplicar
+
+
+def _la_fase(plan: dict, nombre: Any) -> dict | str:
+    fases = plan.get("fases") or []
+    buscado = normalizar(nombre) if isinstance(nombre, str) else ""
+    if not buscado:
+        return "No sé de qué fase hablas: dime su nombre"
+    elegidas = [f for f in fases if normalizar(f["nombre"]) == buscado] or [
+        f for f in fases if buscado in normalizar(f["nombre"])]
+    if len(elegidas) != 1:
+        return (f"El plan {plan['nombre']} no tiene ninguna fase «{nombre}»" if not elegidas
+                else f"Hay varias fases que se llaman así en el plan {plan['nombre']}: dime cuál")
+    return elegidas[0]
+
+
+def _tramo_fase(valores: Any) -> tuple[int, int] | None:
+    numeros = [_entero(v) for v in valores or []]
+    if not numeros or None in numeros or len(numeros) > 2:
+        return None
+    return int(numeros[0]), int(numeros[-1])  # type: ignore[arg-type]
+
+
+def _texto_fase(nombre: str, desde_n: int, hasta_n: int) -> str:
+    return f"{nombre}: semanas {desde_n}-{hasta_n}" if desde_n != hasta_n else f"{nombre}: semana {desde_n}"
+
+
+def _proponer_fase(que: str) -> Any:
+    def proponer(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
+        plan = _plan(ctx, peticion, cambio)
+        if isinstance(plan, str):
+            return no(plan)
+        tramo = _tramo_fase(cambio.valores)
+        if que == "anadir":
+            nombre = _texto(cambio.objeto)
+            if not nombre:
+                return no("No sé cómo se llama la fase: dime su nombre")
+            if tramo is None:
+                return no("No sé qué semanas abarca la fase: dime la primera y la última")
+            return _rehacer_fase(que)({"plan_id": plan["id"], "nombre": nombre, "desde_n": tramo[0],
+                                       "hasta_n": tramo[1]}, {}, ctx, peticion)
+        fase = _la_fase(plan, cambio.objeto)
+        if isinstance(fase, str):
+            return no(fase)
+        parametros = {"plan_id": plan["id"], "fase": fase["id"], "era": fase["nombre"]}
+        if que == "cambiar":
+            nuevo = _texto(cambio.texto) or fase["nombre"]
+            desde_n, hasta_n = tramo if tramo is not None else (fase["desde_n"], fase["hasta_n"])
+            if (nuevo, desde_n, hasta_n) == (fase["nombre"], fase["desde_n"], fase["hasta_n"]):
+                return no(f"La fase {fase['nombre']} ya es así")
+            parametros.update(nombre=nuevo, desde_n=desde_n, hasta_n=hasta_n)
+        return _rehacer_fase(que)(parametros, {}, ctx, peticion)
+    return proponer
+
+
+def _rehacer_fase(que: str) -> Any:
+    accion = {"anadir": "plan_anadir_fase", "cambiar": "plan_cambiar_fase", "quitar": "plan_quitar_fase"}[que]
+
+    def rehacer(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
+        plan = ctx.planes.leer(parametros["plan_id"]) if ctx.planes is not None else None
+        if plan is None:
+            return no(SIN_PLAN)
+        antes = despues = None
+        actual = None
+        if que != "anadir":
+            actual = next((f for f in plan.get("fases") or [] if f["id"] == parametros["fase"]), None)
+            if actual is None:
+                return no(f"La fase {parametros['era']} ya no está en el plan {plan['nombre']}")
+            antes = _texto_fase(actual["nombre"], actual["desde_n"], actual["hasta_n"])
+        if que != "quitar":
+            try:
+                with ctx.planes._connect() as conn:  # the check of Fitness › Plan, writing nothing
+                    nombre, desde_n, hasta_n = Planes._fase_valida(conn, plan["id"], parametros["nombre"],
+                                                                   parametros["desde_n"], parametros["hasta_n"],
+                                                                   parametros.get("fase"))
+            except ValueError as exc:
+                return no(str(exc))
+            despues = _texto_fase(nombre, desde_n, hasta_n)
+        texto = {"anadir": f"Voy a añadir en el plan la fase {despues}",
+                 "cambiar": f"Voy a cambiar en el plan la fase {antes} → {despues}",
+                 "quitar": f"Voy a quitar del plan la fase {antes} (sus semanas se quedan)"}[que]
+        return tarjeta(accion=accion, parametros=parametros, peticion=peticion, texto=texto, antes=antes,
+                       despues=despues, donde=f"en tu plan {plan['nombre']}, en Fitness › Plan")
+    return rehacer
+
+
+def _aplicar_fase(que: str) -> Any:
+    def aplicar(parametros: dict, ctx: Contexto) -> str:
+        if ctx.planes is None:
+            raise TarjetaMal("no hay planes")
+        try:
+            if que == "anadir":
+                ctx.planes.anadir_fase(int(parametros["plan_id"]), parametros["nombre"], parametros["desde_n"],
+                                       parametros["hasta_n"])
+            elif que == "cambiar":
+                ctx.planes.cambiar_fase(int(parametros["fase"]), parametros["nombre"], parametros["desde_n"],
+                                        parametros["hasta_n"])
+            else:
+                ctx.planes.borrar_fase(int(parametros["fase"]))
+        except (ValueError, LookupError) as exc:
+            raise NoValida(f"No se ha podido: {exc}") from None
+        nombre = parametros.get("nombre") or parametros.get("era")
+        return {"anadir": f"la fase {nombre} está en tu plan", "cambiar": f"la fase {nombre} ha cambiado",
+                "quitar": f"la fase {nombre} ya no está en tu plan; sus semanas se quedan"}[que]
+    return aplicar
+
+
+# -- unit 115: the strategy of a race to the watch (R-353..R-357) ---------------------------------------------------
+
+def _titulo_estrategia(carrera: str) -> str:
+    return f"{carrera} · estrategia"
+
+
+def _la_carrera(plan: dict, objeto: Any) -> dict | str:
+    nombre = _texto(objeto)
+    if not nombre:
+        return "No sé de qué carrera del plan hablas: dime cuál"
+    buscado = normalizar(nombre)
+    carreras = [c for c in plan["carreras"] if normalizar(c["nombre"]) == buscado] or [
+        c for c in plan["carreras"] if buscado in normalizar(c["nombre"])]
+    if len(carreras) != 1:
+        return "Esa carrera no está en tu plan" if not carreras else "Hay varias carreras con ese nombre en tu plan"
+    return carreras[0]
+
+
+def _proponer_al_reloj(cambio: Any, ctx: Contexto, peticion: Peticion) -> dict:
+    plan = _plan(ctx, peticion, cambio)
+    if isinstance(plan, str):
+        return no(plan)
+    carrera = _la_carrera(plan, cambio.objeto)
+    if isinstance(carrera, str):
+        return no(carrera)
+    como = COMO.get(normalizar(_texto(cambio.campo) or "tramos"))
+    if como is None:
+        return no(f"No sé partirla «{cambio.campo}»: por los tramos de la estrategia, cada tantos km o cada tantos "
+                  "minutos")
+    cada = cambio.valor if como != "tramos" else None
+    return _rehacer_al_reloj({"plan_id": plan["id"], "carrera": carrera["nombre"], "como": como, "cada": cada}, {},
+                             ctx, peticion)
+
+
+def _la_de_estrategia(planes: Any, plan_id: int, fecha: str, titulo: str) -> dict | None:
+    """The session of the strategy already in the plan that day (the one to replace), as `Planes.sesion` gives it."""
+    ya = next((s for s in planes.sesiones_reloj(plan_id) if s["fecha"] == fecha and s["titulo"] == titulo), None)
+    return planes.sesion(int(ya["id"])) if ya is not None else None
+
+
+def _sesion_estrategia(parametros: dict, ctx: Contexto, peticion: Peticion) -> tuple[dict, dict, dict] | str:
+    """(the plan, the race, the session as it would be: titulo, fecha, bloques), or why not."""
+    plan = ctx.planes.leer(parametros["plan_id"]) if ctx.planes is not None else None
+    carrera = next((c for c in plan["carreras"] if c["nombre"] == parametros["carrera"]), None) if plan else None
+    if plan is None or carrera is None:
+        return "Esa carrera ya no está en tu plan"
+    if not carrera.get("fecha"):
+        return f"La carrera {carrera['nombre']} no tiene fecha en el plan: pónsela antes"
+    if fecha_de(carrera["fecha"]) < peticion.fecha:
+        return YA_PASO
+    try:
+        bloques = pasos(ctx.planes.estrategia(plan["id"], carrera["nombre"]), parametros["como"], parametros["cada"])
+    except EstrategiaMal as exc:
+        return str(exc)
+    return plan, carrera, {"titulo": _titulo_estrategia(carrera["nombre"]), "fecha": carrera["fecha"],
+                           "bloques": bloques}
+
+
+def _rehacer_al_reloj(parametros: dict, valores: dict, ctx: Contexto, peticion: Peticion) -> dict:
+    hecho = _sesion_estrategia(parametros, ctx, peticion)
+    if isinstance(hecho, str):
+        return no(hecho)
+    plan, carrera, sesion = hecho
+    try:
+        al_reloj = lineas(sesion)
+    except NoTraducible as exc:
+        return no(f"No puedo mandarla a tu Garmin: {exc}")
+    dia = fecha_de(sesion["fecha"])
+    ya = _la_de_estrategia(ctx.planes, plan["id"], sesion["fecha"], sesion["titulo"])
+    avisos = []
+    if ya is not None:
+        donde_ya = " y en tu Garmin" if ya["garmin_workout_id"] is not None else ""
+        avisos.append(f"ya tienes «{ya['titulo']}» ese día: esta la sustituye en el plan{donde_ya}, queda una sola")
+    return tarjeta(accion="estrategia_al_reloj", parametros=parametros, peticion=peticion,
+                   texto=f"Voy a mandar a tu Garmin la estrategia de {carrera['nombre']}: {sesion['titulo']} "
+                         f"({dia_corto(dia)}, {len(sesion['bloques'])} pasos)",
+                   antes=texto_sesion(ya["titulo"], ya["bloques"]) if ya is not None else None,
+                   despues=texto_sesion(sesion["titulo"], sesion["bloques"]), dia=dia,
+                   donde=(f"en tu plan {plan['nombre']} el {dia_corto(dia)} y en tu Garmin Connect, programada ese "
+                          "día: el reloj la coge al sincronizar"),
+                   avisos=avisos, lineas=al_reloj)
+
+
+def _aplicar_al_reloj(parametros: dict, ctx: Contexto) -> str:
+    if ctx.planes is None:
+        raise TarjetaMal("no hay planes")
+    planes = ctx.planes
+    hecho = _sesion_estrategia(parametros, ctx, Peticion(texto="", fecha=ctx.hoy()))
+    if isinstance(hecho, str):
+        raise NoValida(hecho)
+    plan, carrera, sesion = hecho
+    ya = _la_de_estrategia(planes, plan["id"], sesion["fecha"], sesion["titulo"])
+    a_mandar = {**sesion, "garmin_workout_id": ya["garmin_workout_id"] if ya else None,
+                "garmin_schedule_id": ya["garmin_schedule_id"] if ya else None}
+    try:  # Garmin first: if it fails, the plan is not touched (nothing half done)
+        workout_id, schedule_id = mandar(a_mandar, planes.garmin,
+                                         al_quitar=lambda: planes.marcar_garmin(ya["id"], None, None) if ya else None)
+    except (GarminNoLlega, NoTraducible) as exc:
+        raise NoValida(f"No ha llegado a tu Garmin: {exc}. No se ha guardado en el plan.") from None
+    bloques = json.dumps(sesion["bloques"], ensure_ascii=False)
+    with planes._connect() as conn:
+        if ya is not None:  # replaced in its row: its `orden` stays (Google Calendar keeps it as the same session)
+            conn.execute("UPDATE plan_sesion SET bloques = ? WHERE rowid = ?", (bloques, ya["id"]))
+            ident = int(ya["id"])
+        else:
+            apartado, orden = _sitio(conn, "plan_sesion", plan["id"], sesion["fecha"])
+            ident = int(conn.execute(
+                "INSERT INTO plan_sesion (plan_id, orden, apartado, fecha, titulo, bloques, clave) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1)",
+                (plan["id"], orden, apartado, sesion["fecha"], sesion["titulo"], bloques)).lastrowid or 0)
+    planes.marcar_garmin(ident, workout_id, schedule_id, datetime.now(), texto_sesion(sesion["titulo"],
+                                                                                    sesion["bloques"]))
+    dia = dia_corto(fecha_de(sesion["fecha"]))
+    return (f"la estrategia de {carrera['nombre']} está en tu plan el {dia} («{sesion['titulo']}») y en tu Garmin: "
+            "el reloj la coge al sincronizar")
+
+
 # no figure in a line for Claude (G-38): the example goes in words
 # bug 055: the blocks as the watch reads them (`plan.reloj`), told in words because the list carries no figure (G-38)
 _SESION = ("texto: «título | bloque | bloque…», cada bloque como lo lee su reloj: su tiempo en minutos con apóstrofo "
@@ -697,29 +1088,61 @@ _HORA = ("hora: la hora de empezar solo si Andrés la dice, en HH:MM de veinticu
 _OBJETO = ("objeto: si ese día hay varias sesiones, su id tal como viene en esa sesión de \"plan\" (con # delante) o "
            "su título; si solo hay una, null")
 
+# unit 115 (R-349): every action of the plan takes the plan it speaks of; not said, the one in course
+_PLAN = ("plan: el plan del que habla si no es el que está en curso, por su nombre o su id de get_plan; si no lo dice, "
+         "null y es el plan en curso")
+# unit 115 (R-348): the fields of a week, in words (G-38)
+_SEMANA = ("valor: el número de la semana en el plan; desde y hasta: su primer y su último día; campo: su tiempo "
+           "previsto en horas y minutos separados por dos puntos; cantidad: sus km previstos; texto: sus sesiones "
+           "clave en pocas palabras")
+
 ACCIONES = [
-    Accion("plan_cambiar_sesion", "cambiar una sesión prevista del plan en curso, de hoy o de un día que aún no ha "
-           f"llegado. dia: el día de la sesión; {_OBJETO}; {_SESION}; {_HORA}.",
+    Accion("plan_cambiar_sesion", "cambiar una sesión prevista de un plan, de hoy o de un día que aún no ha "
+           f"llegado. dia: el día de la sesión; {_OBJETO}; {_SESION}; {_HORA}; {_PLAN}.",
            _proponer_sesion("cambiar"), _rehacer_sesion("cambiar"), _aplicar_sesion("cambiar")),
-    Accion("plan_anadir_sesion", "añadir una sesión al plan en curso, hoy o un día que aún no ha llegado. dia: el día; "
-           f"{_SESION}; {_HORA}. Si el «Hecho» termina con «{OFRECER_RELOJ}», ofrécele mandarla a su reloj y, si dice "
-           "que sí, prepárala con mandar_a_garmin.", _proponer_sesion("anadir"), _rehacer_sesion("anadir"), _aplicar_sesion("anadir")),
-    Accion("plan_quitar_sesion", "quitar una sesión prevista del plan en curso. dia: el día de la sesión; "
-           f"{_OBJETO}.",
+    Accion("plan_anadir_sesion", "añadir una sesión a un plan, hoy o un día que aún no ha llegado. dia: el día; "
+           f"{_SESION}; {_HORA}; {_PLAN}. Si el «Hecho» termina con «{OFRECER_RELOJ}», ofrécele mandarla a su reloj y, "
+           "si dice que sí, prepárala con mandar_a_garmin.", _proponer_sesion("anadir"), _rehacer_sesion("anadir"),
+           _aplicar_sesion("anadir")),
+    Accion("plan_quitar_sesion", "quitar una sesión prevista de un plan. dia: el día de la sesión; "
+           f"{_OBJETO}; {_PLAN}.",
            _proponer_sesion("quitar"), _rehacer_sesion("quitar"), _aplicar_sesion("quitar")),
-    Accion("plan_objetivo_carrera", "cambiar el objetivo de una carrera del plan en curso (p. ej. un tiempo). objeto: "
-           "el nombre de la carrera; texto: el objetivo nuevo.",
+    Accion("plan_objetivo_carrera", "cambiar el objetivo de una carrera de un plan (p. ej. un tiempo). objeto: "
+           f"el nombre de la carrera; texto: el objetivo nuevo; {_PLAN}.",
            _proponer_objetivo, _rehacer_objetivo, _aplicar_objetivo),
-    Accion("plan_nota", "añadir una nota al plan en curso. texto: la nota.", _proponer_nota, _rehacer_nota,
+    Accion("plan_nota", f"añadir una nota a un plan. texto: la nota; {_PLAN}.", _proponer_nota, _rehacer_nota,
            _aplicar_nota),
-    Accion("mandar_a_garmin", "mandar a su reloj Garmin una sesión de carrera a pie del plan en curso, de hoy o de un "
+    Accion("plan_anadir_semana", f"añadir una semana a un plan. {_SEMANA}; {_PLAN}.",
+           _proponer_semana("anadir"), _rehacer_semana("anadir"), _aplicar_semana("anadir")),
+    Accion("plan_cambiar_semana", "cambiar una semana de un plan: sus días, su tiempo previsto, sus km previstos o sus "
+           f"sesiones clave; solo lo que cambia, lo demás null. {_SEMANA}; {_PLAN}.",
+           _proponer_semana("cambiar"), _rehacer_semana("cambiar"), _aplicar_semana("cambiar")),
+    Accion("plan_quitar_semana", "quitar una semana de un plan con sus sesiones (las que están en su reloj se quitan "
+           f"también de Garmin). valor: el número de la semana; {_PLAN}.",
+           _proponer_semana("quitar"), _rehacer_semana("quitar"), _aplicar_semana("quitar")),
+    Accion("plan_anadir_fase", "poner nombre a un tramo de semanas de un plan (p. ej. Base de la primera a la cuarta). "
+           f"objeto: el nombre de la fase; valores: el número de su primera semana y el de la última; {_PLAN}.",
+           _proponer_fase("anadir"), _rehacer_fase("anadir"), _aplicar_fase("anadir")),
+    Accion("plan_cambiar_fase", "cambiar el nombre o las semanas de una fase de un plan. objeto: el nombre que tiene; "
+           "texto: su nombre nuevo, o null; valores: el número de su primera semana y el de la última, o null; "
+           f"{_PLAN}.", _proponer_fase("cambiar"), _rehacer_fase("cambiar"), _aplicar_fase("cambiar")),
+    Accion("plan_quitar_fase", "quitar una fase de un plan (sus semanas se quedan). objeto: el nombre de la fase; "
+           f"{_PLAN}.", _proponer_fase("quitar"), _rehacer_fase("quitar"), _aplicar_fase("quitar")),
+    Accion("mandar_a_garmin", "mandar a su reloj Garmin una sesión de carrera a pie de un plan, de hoy o de un "
            "día que aún no ha llegado, para que el reloj le guíe bloque a bloque (si la cambias, primero la cambias "
-           f"en el plan). dia: el día de la sesión; {_OBJETO}.",
+           f"en el plan). dia: el día de la sesión; {_OBJETO}; {_PLAN}.",
            _proponer_garmin, _rehacer_garmin, _aplicar_garmin),
+    Accion("estrategia_al_reloj", "mandar a su reloj Garmin la estrategia por tramos guardada en una carrera de un plan, "
+           "como un entreno con un paso por tramo, guardado en el plan el día de la carrera (si ya la mandó, la "
+           "sustituye); la app parte la estrategia y pone a cada paso el ritmo de su parte (un tramo por esfuerzo va "
+           "sin ritmo). Si no tiene estrategia guardada, propón hacerla antes sobre su ruta. objeto: el nombre de la "
+           "carrera; campo: cómo partirla, tramos (los de la estrategia, y si no lo dice), km o minutos; valor: cada "
+           f"cuántos km o minutos, o null con tramos; {_PLAN}.",
+           _proponer_al_reloj, _rehacer_al_reloj, _aplicar_al_reloj),
     Accion("abrir_incidencia", "abrir una incidencia en el plan en curso cuando Andrés cuenta una molestia, un dolor o "
            "un problema físico (sobrecarga, rampas…); pregúntale antes lo que falte. objeto: la zona (p. ej. tobillo); "
            "campo: el lado y la parte (p. ej. derecho, lateral), o null; desde: desde qué día lo nota, o null si es de "
-           "hoy; texto: qué pasó, en sus palabras.", _proponer_abrir, _rehacer_abrir, _aplicar_abrir),
+           f"hoy; texto: qué pasó, en sus palabras; {_PLAN}.", _proponer_abrir, _rehacer_abrir, _aplicar_abrir),
     Accion("anadir_visita", "añadir a una incidencia abierta lo que le dijo el fisio o el médico en una visita. objeto: "
            "la zona de la incidencia, o null si solo hay una abierta; campo: quién (fisio, médico…); dia: el día de la "
            "visita, o null si es hoy; texto: qué le dijo.", _proponer_visita, _rehacer_visita, _aplicar_visita),
@@ -730,10 +1153,13 @@ ACCIONES = [
            "cargadas) como nota de ese día en lo hecho del plan en curso; si es una molestia, abrir_incidencia. dia: "
            "el día, o null si es hoy; texto: la nota, en sus palabras.",
            _proponer_nota_dia, _rehacer_nota_dia, _aplicar_nota_dia),
-    Accion("guardar_estrategia", "guardar en una carrera del plan en curso la estrategia por tramos que le has "
+    Accion("guardar_estrategia", "guardar en una carrera de un plan la estrategia por tramos que le has "
            "propuesto con una ruta adjunta, cuando Andrés la quiere. objeto: el nombre de la carrera; texto: «tramo | "
-           "tramo | gel: …», cada tramo con sus km, su terreno, su ritmo o esfuerzo y su tiempo de paso, y una línea "
-           "por gel que empiece por gel, con su km.", _proponer_estrategia, _rehacer_estrategia, _aplicar_estrategia),
+           "tramo | gel: …», cada tramo empezando por sus km («km», el primero, un guion y el último), su terreno, su "
+           "ritmo («a» y los minutos y segundos por km separados por dos puntos) o «por esfuerzo», y su tiempo de "
+           "paso («paso» y el tiempo desde la salida), para que luego pueda ir a su reloj con estrategia_al_reloj, y "
+           f"una línea por gel que empiece por gel, con su km; {_PLAN}.", _proponer_estrategia, _rehacer_estrategia,
+           _aplicar_estrategia),
 ]
 
-__all__ = ["ACCIONES", "OFRECER_RELOJ", "dia_corto", "tarjeta_garmin"]
+__all__ = ["ACCIONES", "OFRECER_RELOJ", "dia_corto", "plan_dicho", "tarjeta_garmin"]

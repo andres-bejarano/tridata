@@ -45,8 +45,8 @@
     POST /api/plan/sesion/borrar      unit 067: {sesion}: out of the plan; sent to Garmin, it is removed from Garmin
                                       first (`plan.reloj.quitar`, R-206); if Garmin fails it is deleted anyway and the
                                       answer brings `aviso` «… sigue en tu reloj: bórrala allí»
-    POST /api/plan/semana/anadir      unit 067: {id, n, desde, hasta, previsto, clave}: a week of that plan
-    POST /api/plan/semana/cambiar     unit 067: {id, semana, n?, desde?, hasta?, previsto?, clave?}
+    POST /api/plan/semana/anadir      unit 067: {id, n, desde, hasta, previsto, clave, km?}: a week of that plan
+    POST /api/plan/semana/cambiar     unit 067: {id, semana, n?, desde?, hasta?, previsto?, clave?, km?}
     POST /api/plan/semana/borrar      unit 067: {id, semana}: the week with its sessions (the sent ones out of Garmin
                                       first); the answer brings `borradas`, how many went with it
     POST /api/plan/fase/anadir        unit 067: {id, nombre, desde, hasta}: a phase over weeks desde..hasta
@@ -65,6 +65,9 @@ and its `estrategia` (unit 045), both from `plan.semanas.vista`.
 Unit 076: each session of a day with an hour also brings its `hora` («HH:MM»); one without it, as before.
 Unit 044: each day also brings its `notas` (how it went, R-150), and GET /api/plan its `abiertas`, how many incidents
 are open («⚠️ Incidencias (1)»).
+
+Unit 115 (R5): each week of GET /api/plan and of GET /api/plan/semana/N with planned km brings `previsto_km`; one
+without them, as before. The two forms of a week send `km` («45», «45,5»; empty: none).
 
 Unit 080: importing a .md (/api/plan/importar, /api/plan/confirmar) called the AI and is gone: the coach imports it
 from the PC. Nothing here logs a text of the plan (R9).
@@ -133,6 +136,8 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, contexto: C
         vista = semanas.vista(plan, store, dia) if plan is not None else None
         if plan is not None and vista is not None:
             vista["abiertas"] = len([i for i in planes.incidencias(plan["id"]) if i["estado"] == ABIERTA])
+            for semana in vista["semanas"]:
+                _con_km(plan, semana)
         return {"hoy": dia.isoformat(), "plan": vista,
                 "planes": [{"id": p["id"], "nombre": p["nombre"], "en_curso": p["id"] == en_curso}
                            for p in planes.lista()]}
@@ -143,10 +148,17 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, contexto: C
             return _error(NO_ESTA, 404)
         return JSONResponse(await run_in_threadpool(_vista, plan))
 
+    def _con_km(plan: dict, semana: dict[str, Any]) -> None:
+        """Unit 115 (R5): the planned km of that week, only when it has them."""
+        km = next((s.get("previsto_km") for s in plan["semanas"] if s["n"] == semana["n"]), None)
+        if km is not None:
+            semana["previsto_km"] = km
+
     def _semana(plan: dict, n: int) -> dict[str, Any] | None:
         vista = semanas.semana(plan, n, store, hoy(), notas=planes.notas_del_dia(plan["id"]))
         if vista is None:
             return None
+        _con_km(plan, vista)
         reloj = planes.sesiones_reloj(plan["id"])  # the same order as plan["sesiones"]
         for dia in vista["dias"]:
             del_dia = [s for s in reloj if s["fecha"] == dia["fecha"]]
@@ -341,10 +353,10 @@ def rutas(planes: Planes, store: DataStore | None, ajustes: Ajustes, contexto: C
         respuesta = await _hacer(lambda: _juntar(extra, accion(cuerpo, ident)), lambda: planes.leer(ident), falta)
         return _con(respuesta, extra)
 
-    _SEMANA = ("n", "desde", "hasta", "previsto", "clave")
+    _SEMANA = ("n", "desde", "hasta", "previsto", "clave", "km")  # unit 115: its planned km
 
     def _semana_de(cuerpo: dict) -> dict[str, Any]:
-        return {c: cuerpo[c] for c in _SEMANA if c in cuerpo and isinstance(cuerpo[c], (str, int))
+        return {c: cuerpo[c] for c in _SEMANA if c in cuerpo and isinstance(cuerpo[c], (str, int, float))
                 and not isinstance(cuerpo[c], bool)}
 
     def _n(cuerpo: dict, clave: str) -> int:

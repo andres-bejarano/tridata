@@ -137,7 +137,8 @@ Ajustes», «mantenimiento por la carrera …» o «cambiado a mano»); "objetiv
 cuyo objetivo no sale de Ajustes (mantenimiento por una carrera o cambiado a mano) con su %; "carreras", sus carreras; "pulso", su frecuencia cardiaca máxima, de reposo \
 y sus zonas, y de dónde salen; "plan", su plan de entrenamiento en curso (sus carreras con su objetivo, su resultado —"a mano" si lo escribió él, \
 "garmin" si sale de su actividad de ese día— y la estrategia por tramos que guardó, tal cual; sus semanas \
-con lo previsto en segundos, su fase si la tiene y lo hecho según Garmin, sus fases con las semanas que abarcan, sus sesiones por día con su id, sus bloques y su hora de empezar (HH:MM) si la tiene, y la nutrición en carrera); \
+con lo previsto en segundos y sus km previstos si los tiene, su fase si la tiene y lo hecho según Garmin, sus fases con las semanas que abarcan, sus sesiones por día con su id, sus bloques y su hora de empezar (HH:MM) si la tiene, y la nutrición en carrera); los demás planes guardados, pasados o futuros, \
+los lees enteros con la herramienta get_plan; \
 "incidencias", sus molestias y lesiones apuntadas en el plan: las abiertas (estado abierta) siguen ahí, tenlas en \
 cuenta antes de proponerle cualquier sesión; las cerradas de su plan en curso, con su lección; cada una con sus \
 visitas al fisio o al médico (fecha, quién y qué le dijo); las que no dicen estado vienen de su .md; \
@@ -401,13 +402,22 @@ def plan_en_curso(planes: Planes | None, store: DataStore | None, hoy: date) -> 
     plan = planes.leer(ident) if planes is not None and ident is not None else None
     if plan is None:
         return None, []
+    return plan_del_equipo(planes, plan, store, hoy), _incidencias(planes, plan["id"]) if planes is not None else []
+
+
+def plan_del_equipo(planes: Planes | None, plan: dict, store: DataStore | None, hoy: date) -> dict[str, Any]:
+    """Any plan (`Planes.leer`) as the team sees the plan in course (unit 115, R-345: `get_plan` reads any of them the
+    same way): races, weeks with planned (time and, unit 115, km) and done, phases, sessions by day with their id,
+    nutrition, notes, comparison and notes of a day."""
     vista = semanas_del_plan.vista(plan, store, hoy)
+    kms = {s["n"]: s["previsto_km"] for s in plan["semanas"] if s.get("previsto_km") is not None}
     datos = {
         "nombre": plan["nombre"],
         "carreras": [_limpio({**c, "resultado": _limpio(c["resultado"]) if c["resultado"] else None,
                               "anteriores": _ediciones_anteriores(store, c) if not c["resultado"] else None})
                      for c in vista["carreras"]],
-        "semanas": [{**s, "desde_dia": _dia(s["desde"]), "hasta_dia": _dia(s["hasta"])} for s in vista["semanas"]],
+        "semanas": [{**s, **({"previsto_km": _r(kms[s["n"]])} if s["n"] in kms else {}),
+                     "desde_dia": _dia(s["desde"]), "hasta_dia": _dia(s["hasta"])} for s in vista["semanas"]],
         "fases": [{k: f[k] for k in ("nombre", "desde_n", "hasta_n")} for f in vista["fases"]],  # unit 067
         "sesiones": [{"id": ident, "fecha": x["fecha"], "dia": _dia(x["fecha"]), "titulo": x["titulo"],
                       "bloques": x["bloques"], "clave": x["clave"],
@@ -419,7 +429,7 @@ def plan_en_curso(planes: Planes | None, store: DataStore | None, hoy: date) -> 
     notas_del_dia = planes.notas_del_dia(plan["id"]) if planes is not None else {}
     datos["notas_del_dia"] = [{"fecha": dia, "texto": texto} for dia, textos in sorted(notas_del_dia.items())
                               for texto in textos]
-    return _limpio(datos), _incidencias(planes, plan["id"]) if planes is not None else []
+    return _limpio(datos)
 
 
 # unit 114 (R4): the earlier editions of a race, by a word of its own and the same days of the year
@@ -487,15 +497,19 @@ def _incidencias(planes: Planes, plan_id: int) -> list[dict]:
     abiertas = [i for i in planes.abiertas() if i["plan_id"] != plan_id]
     del_plan = planes.incidencias(plan_id)  # its open ones first
     todas = [i for i in del_plan if i["estado"] == ABIERTA] + abiertas + [i for i in del_plan if i["estado"] != ABIERTA]
-    salida = []
-    for i in todas:
-        if i["importada"]:  # the ones of the .md, as before (unit 041)
-            salida.append({"fecha": i["desde"], "texto": i["texto"]})
-            continue
-        salida.append(_limpio({"fecha": i["desde"], "texto": i["texto"], "zona": i["zona"], "lado": i["lado"],
-                               "estado": i["estado"], "visitas": i["visitas"], "leccion": i["leccion"],
-                               "cerrada": i["cerrada"]}))
-    return salida
+    return [_incidencia(i) for i in todas]
+
+
+def incidencias_del_plan(planes: Planes, plan_id: int) -> list[dict]:
+    """Unit 115 (R-345): the incidents of that plan only, the open ones first, as the context gives them."""
+    return [_incidencia(i) for i in planes.incidencias(plan_id)]
+
+
+def _incidencia(i: dict) -> dict:
+    if i["importada"]:  # the ones of the .md, as before (unit 041)
+        return {"fecha": i["desde"], "texto": i["texto"]}
+    return _limpio({"fecha": i["desde"], "texto": i["texto"], "zona": i["zona"], "lado": i["lado"],
+                    "estado": i["estado"], "visitas": i["visitas"], "leccion": i["leccion"], "cerrada": i["cerrada"]})
 
 
 DIAS_PREVISTOS = 14  # unit 071: the planned trainings from today to two weeks ahead

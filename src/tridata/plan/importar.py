@@ -25,6 +25,12 @@ Unit 083: the orderer of the paid API (`ia.plan.OrdenadorPlan`) is gone; the coa
 modelo)`, because tests outside that unit build their plans through them with a double
 (`test_plan_importar.OrdenadorFalso`). The phases are saved with the plan in ONE write (`Planes.crear(fases=…)`, R4).
 
+Unit 115 (R5, R-346, R-351, R-352): the same path saves a plan the coach designs. A «semana» row takes an eighth
+field, its planned km (`previsto_km`; the rows of before, without it, read the same). `proponer_ordenado` refuses
+(`ErrorPlan`, naming the week) a proposal with a week that ends before it starts or two weeks that overlap, instead
+of keeping that row as a note, and, given the plans (`planes`), says in `avisos` each race already in another plan the
+same day (it is saved only if Andrés says «sí» seeing it).
+
 Nothing here logs a text of the plan (R9).
 """
 from __future__ import annotations
@@ -37,7 +43,8 @@ from datetime import date, datetime
 from typing import Any
 
 from ..storage import DataStore
-from . import Planes, hora_de, semanas as semanas_del_plan
+from ..nutricion.recetas import normalizar
+from . import Planes, comprobar_semanas, hora_de, semanas as semanas_del_plan
 
 TOLERANCIA_S = 120  # ±2 min per week: Strava and Garmin round differently, that is no difference
 TOLERANCIA_KM = 0.3  # ±0,3 km per week
@@ -191,13 +198,17 @@ def _carrera(c: list[str]) -> dict | None:
 
 
 def _semana(c: list[str]) -> dict | None:
-    numero, desde, hasta, previsto, clave, hecho_s, hecho_km = _campos(c, 7)
+    """Unit 115: a week that ends before it starts is read too, so `proponer_ordenado` refuses it naming it (R-352);
+    its eighth field, the planned km, only when it has them."""
+    numero, desde, hasta, previsto, clave, hecho_s, hecho_km, previsto_km = _campos(c, 8)
     n = re.search(r"\d+", numero)
     desde_iso, hasta_iso = _fecha(desde), _fecha(hasta)
-    if n is None or desde_iso is None or hasta_iso is None or hasta_iso < desde_iso:
+    if n is None or desde_iso is None or hasta_iso is None:
         return None
-    return {"n": int(n[0]), "desde": desde_iso, "hasta": hasta_iso, "previsto_s": duracion(previsto), "clave": clave,
-            "hecho_s": duracion(hecho_s), "hecho_km": kilometros(hecho_km)}
+    semana = {"n": int(n[0]), "desde": desde_iso, "hasta": hasta_iso, "previsto_s": duracion(previsto),
+              "clave": clave, "hecho_s": duracion(hecho_s), "hecho_km": kilometros(hecho_km)}
+    km = kilometros(previsto_km) if previsto_km.strip() else None
+    return semana | {"previsto_km": km} if km is not None else semana
 
 
 def _sesion(c: list[str]) -> dict | None:
@@ -353,18 +364,44 @@ def ordenar(texto: str, ordenador: Any, hoy: date) -> list[Apartado]:
             for t, r in zip(con_texto, respuestas, strict=True)]
 
 
+def _repetidas(carreras: list[dict], planes: Planes) -> list[str]:
+    """Unit 115 (R-351): what to say of each race of the proposal already in a plan the same day (by its name: one
+    is the other, or one has the other inside, without capitals or accents)."""
+    avisos = []
+    for c in carreras:
+        if not c.get("fecha"):
+            continue
+        nombre = normalizar(c["nombre"])
+        for otra in planes.carreras_el_dia(c["fecha"]):
+            suya = normalizar(otra["nombre"])
+            if nombre and suya and (nombre in suya or suya in nombre):
+                dia = date.fromisoformat(c["fecha"])
+                avisos.append(f"La carrera «{c['nombre']}» del {dia.day}/{dia.month} ya está en el plan «{otra['plan']}»"
+                              f" (como «{otra['nombre']}»): si dices que sí, estará en los dos planes")
+                break
+    return avisos
+
+
 def proponer_ordenado(apartados: list[Apartado], store: DataStore | None, hoy: date,
-                      nombre: str | None = None) -> dict[str, Any]:
+                      nombre: str | None = None, planes: Planes | None = None) -> dict[str, Any]:
     """The code's half (unit 081): the proposal of sections already ordered (nothing saved). What cannot be read goes
-    to the notes as it was (R6, R-132); each week done is crossed with Garmin (G-54)."""
+    to the notes as it was (R6, R-132); each week done is crossed with Garmin (G-54). Unit 115: `ErrorPlan`, naming
+    the week, for a week that ends before it starts or overlaps another (R-352); with `planes`, `avisos` says each race
+    already in another plan that day (R-351)."""
     propuesta: dict[str, Any] = {"nombre": nombre or NOMBRE_POR_DEFECTO, "apartados": [],
                                  **{k: [] for k in PARTES_DEL_PLAN}, "fases": []}
     for i, a in enumerate(apartados):
         propuesta["apartados"].append({"titulo": a.titulo, "parte": a.parte})
         _leer_apartado(propuesta, i, a.parte, list(a.filas), a.cuerpo)
+    try:
+        comprobar_semanas(propuesta["semanas"])
+    except ValueError as exc:
+        raise ErrorPlan(str(exc)) from None
     _leer_fases(propuesta)
     propuesta["diferencias"] = _diferencias(propuesta["semanas"], store, hoy)
     propuesta["resumen"] = _resumen(propuesta)
+    if planes is not None:
+        propuesta["avisos"] = _repetidas(propuesta["carreras"], planes)
     return propuesta
 
 
@@ -413,7 +450,8 @@ def confirmar(propuesta: dict[str, Any], elecciones: dict[str, str], planes: Pla
     del_plan = {d["semana"] for d in propuesta["diferencias"] if elecciones.get(str(d["semana"])) != "garmin"}
     semanas = [{k: s[k] for k in ("apartado", "n", "desde", "hasta", "previsto_s", "clave")}
                | {"hecho_plan_s": s["hecho_s"] if s["n"] in del_plan else None,
-                  "hecho_plan_km": s["hecho_km"] if s["n"] in del_plan else None}
+                  "hecho_plan_km": s["hecho_km"] if s["n"] in del_plan else None,
+                  "previsto_km": s.get("previsto_km")}  # unit 115
                for s in propuesta["semanas"]]
     datos = {k: propuesta[k] for k in ("nombre", "apartados", *PARTES_DEL_PLAN)} | {"semanas": semanas}
     return planes.crear(datos, ahora, fases=propuesta.get("fases") or [])

@@ -47,6 +47,7 @@ HERRAMIENTAS = {
     "get_comidas",  # unit 100
     "preparar_zapatilla", "apuntar_zapatilla",  # unit 102
     "guardar_producto_suplemento",  # unit 109
+    "get_plan",  # unit 115
 }
 
 # -- R1 (portante): nothing that stays needs the paid AI -------------------------------------------------------------

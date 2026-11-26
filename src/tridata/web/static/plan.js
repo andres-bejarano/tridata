@@ -293,15 +293,16 @@ function gestionSemanas(plan) {
   const [hasta, lHasta] = campo("Hasta", { type: "date", required: true, name: "semana-hasta", value: sigue ? masDias(sigue, 6) : "" });
   desde.addEventListener("change", () => { if (desde.value) hasta.value = masDias(desde.value, 6); });
   const [previsto, lPrevisto] = campo("Previsto (h:mm)", { type: "text", name: "semana-previsto", placeholder: "4:30" });
+  const [kmSemana, lKm] = campoKm("");
   const [clave, lClave] = campo("Sesiones clave", { type: "text", name: "semana-clave", placeholder: "series + tirada" });
   const error = cajaError();
   const guardar = el("button", { type: "submit", className: "principal", textContent: "Añadir semana" });
   const formSemana = el("form", { id: "plan-anadir-semana-form", className: "tarjeta cerrar-incid", hidden: true },
-    lN, lDesde, lHasta, lPrevisto, lClave, error, guardar);
+    lN, lDesde, lHasta, lPrevisto, lKm, lClave, error, guardar);
   formSemana.addEventListener("submit", (evento) => {
     evento.preventDefault();
     enviar("/api/plan/semana/anadir", { id: plan.id, n: Number(n.value), desde: desde.value, hasta: hasta.value,
-      previsto: previsto.value, clave: clave.value }, error, guardar);
+      previsto: previsto.value, km: kmSemana.value, clave: clave.value }, error, guardar);
   });
   const botonSemana = el("button", { type: "button", className: "enlace-boton", id: "plan-anadir-semana", textContent: "➕ Añadir semana",
     onclick: () => { formSemana.hidden = !formSemana.hidden; if (!formSemana.hidden) n.focus(); } });
@@ -415,9 +416,19 @@ function hechoCorto(h) {
     el("small", { textContent: km(c.km) }));
 }
 
+// unit 115 (R5): the planned km of a week, in its two forms («45» or «45,5»; empty: none)
+function campoKm(valor) {
+  return campo("Km previstos", { type: "text", inputMode: "decimal", name: "semana-km", placeholder: "45", value: valor });
+}
+const kmCampo = (n) => (n === null || n === undefined ? "" : String(n).replace(".", ","));
+const hastaUnDecimal = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 1 });
+const kmPrevistos = (n) => `${hastaUnDecimal.format(n)} km`; // «45 km», «45,5 km»
+
 function filaSemana(s) {
   const titulo = `${rango(s.desde, s.hasta)}${s.hoy ? " · hoy" : ""}`;
-  const previsto = [s.previsto_s ? `prev. ~${hm(s.previsto_s)}` : null, s.clave || null].filter(Boolean).join(" · ");
+  const previsto = [s.previsto_s ? `prev. ~${hm(s.previsto_s)}` : null,
+    s.previsto_km !== undefined && s.previsto_km !== null ? kmPrevistos(s.previsto_km) : null, s.clave || null]
+    .filter(Boolean).join(" · ");
   const marcas = [];
   if (s.hecho?.carrera.tiempo_total) marcas.push("con tiempo total en alguna");
   if (s.hecho?.fuente === "plan") marcas.push("según el plan");
@@ -467,6 +478,7 @@ function resumenSemana(s) {
   const partes = [];
   const h = s.hecho;
   if (s.previsto_s) partes.push(el("strong", { textContent: `Prevista ~${hm(s.previsto_s)}` }));
+  if (s.previsto_km !== undefined && s.previsto_km !== null) partes.push(`${kmPrevistos(s.previsto_km)} previstos`);
   if (h) {
     const c = h.carrera;
     const hasta = s.hoy ? "hecha hasta hoy" : "hecha";
@@ -612,22 +624,24 @@ function accionesSesion(d, s, r) {
   return caja;
 }
 
-// «Cambiar semana» (number, dates, planned time, key sessions) and «Borrar semana» of the week seen
+// «Cambiar semana» (number, dates, planned time, km, key sessions) and «Borrar semana» of the week seen
 function gestionSemana(s) {
   const plan = ultimo.plan;
   const [n, lN] = campo("Número", { type: "number", min: 1, required: true, value: String(s.n), name: "semana-n" });
   const [desde, lDesde] = campo("Desde", { type: "date", required: true, value: s.desde, name: "semana-desde" });
   const [hasta, lHasta] = campo("Hasta", { type: "date", required: true, value: s.hasta, name: "semana-hasta" });
   const [previsto, lPrevisto] = campo("Previsto (h:mm)", { type: "text", value: hmm(s.previsto_s), name: "semana-previsto", placeholder: "4:30" });
+  const [kmSemana, lKm] = campoKm(kmCampo(s.previsto_km));
   const [clave, lClave] = campo("Sesiones clave", { type: "text", value: s.clave ?? "", name: "semana-clave" });
   const error = cajaError();
   const guardar = el("button", { type: "submit", className: "principal", textContent: "Guardar semana" });
   const formulario = el("form", { id: "plan-cambiar-semana-form", className: "cerrar-incid", hidden: true },
-    lN, lDesde, lHasta, lPrevisto, lClave, guardar);
+    lN, lDesde, lHasta, lPrevisto, lKm, lClave, guardar);
   formulario.addEventListener("submit", (evento) => {
     evento.preventDefault();
     enSemana("/api/plan/semana/cambiar", { id: plan.id, semana: s.n, n: Number(n.value), desde: desde.value,
-      hasta: hasta.value, previsto: previsto.value, clave: clave.value }, error, guardar, Number(n.value));
+      hasta: hasta.value, previsto: previsto.value, km: kmSemana.value, clave: clave.value }, error, guardar,
+      Number(n.value));
   });
   const cambiar = el("button", { type: "button", className: "enlace-boton", id: "plan-cambiar-semana", textContent: "Cambiar semana",
     onclick: () => { formulario.hidden = !formulario.hidden; } });

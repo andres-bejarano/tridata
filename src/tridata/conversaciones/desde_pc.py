@@ -65,6 +65,12 @@ kcal/100 g and macros); in `apuntar_comida_desde_pc` a food named «Receta · va
 section. The variants are saved, changed and deleted with `preparar_desde_pc` / `hacer_desde_pc` (the actions
 `variante_*` of `nutricion.asistente.recetas`).
 
+Unit 115 (REC-56 of `llevar-plan`, R-345..R-352): `plan_desde_pc` (the tool `get_plan`) gives the list of the plans
+saved or one of them whole, as the team sees the plan in course (`contexto.plan_del_equipo`), with its own incidents; it
+reads only. `preparar_plan_desde_pc` / `importar_plan_desde_pc` also save a plan the coach designs: what is shown is the
+plan whole (its races, phases, weeks with their km, sessions with their blocks) with the warning of a race already in
+another plan that day; a week that ends before it starts or overlaps another is refused naming it.
+
 Each save leaves its message in «Desde el PC» (R-196). Nothing here calls a paid AI.
 
 What a tool answers never carries a value of Andrés beyond what the card says; the logs carry ids and counts only.
@@ -95,9 +101,9 @@ from ..nutricion.suplementacion import (FALTA_HORA_O_MINUTO, FALTA_LA_HORA, Supl
                                         validar_hora)
 from ..garmin_client import GarminRateLimitError
 from ..plan import Planes
-from ..plan.acciones import OFRECER_RELOJ
+from ..plan.acciones import OFRECER_RELOJ, plan_dicho
 from ..plan import rutas as perfiles
-from ..plan.importar import apartados_del_coach, confirmar as confirmar_plan, proponer_ordenado
+from ..plan.importar import ErrorPlan, apartados_del_coach, confirmar as confirmar_plan, proponer_ordenado
 from ..storage import DataStore
 from ..sync import RUNNING_TYPES, dentro_de
 from ..web.app import DIAS_RECIENTES
@@ -106,7 +112,7 @@ from ..zapatillas import (AQUI, ErrorZapatilla, Zapatillas, pregunta, tope_sembr
                           validar_tope, validar_uso, vista as vista_zapatilla)
 from . import Conversaciones
 from .cambios import CambioInterpretado, cambio_no_entendido
-from .contexto import Contexto, detalle_dias, montar
+from .contexto import Contexto, detalle_dias, incidencias_del_plan, montar, plan_del_equipo
 from .medicos import FueraDeLaCarpeta, Medicos, TranscripcionMedica
 
 log = logging.getLogger(__name__)
@@ -952,8 +958,37 @@ def _resumen_plan(p: dict) -> str:
     return ", ".join(partes)
 
 
+def _el_plan_entero(p: dict) -> list[str]:
+    """Unit 115 (R-346): the plan as it would be saved, part by part: its races, phases, weeks (with their km) and
+    sessions (with their blocks)."""
+    lineas = []
+    if p["carreras"]:
+        lineas.append("Carreras:")
+        lineas += [f"- {c['nombre']} · {c['fecha'] or 'sin fecha'}" + (f" · objetivo {c['objetivo']}" if c["objetivo"]
+                                                                       else "")
+                   + (" · principal" if c["principal"] else "") for c in p["carreras"]]
+    if p.get("fases"):
+        lineas.append("Fases:")
+        lineas += [f"- {f['nombre']}: semanas {f['desde_n']}-{f['hasta_n']}" for f in p["fases"]]
+    if p["semanas"]:
+        lineas.append("Semanas:")
+        for s in p["semanas"]:
+            partes = [f"- Semana {s['n']} · {s['desde']} a {s['hasta']}"]
+            partes += [f"prev. ~{_hm(s['previsto_s'])}"] if s.get("previsto_s") is not None else []
+            partes += [f"{_coma(s['previsto_km'])} km"] if s.get("previsto_km") is not None else []
+            partes += [s["clave"]] if s.get("clave") else []
+            lineas.append(" · ".join(partes))
+    if p["sesiones"]:
+        lineas.append("Sesiones:")
+        lineas += [f"- {s['fecha']} · " + (f"{s['hora']} · " if s.get("hora") else "")
+                   + f"{s['titulo']}" + (f": {' · '.join(s['bloques'])}" if s["bloques"] else "")
+                   + (" (clave)" if s["clave"] else "") for s in sorted(p["sesiones"], key=lambda s: s["fecha"])]
+    return lineas
+
+
 def _vista_plan(p: dict, elecciones: dict[str, str]) -> str:
-    lineas = [f"Plan «{p['nombre']}»: {_resumen_plan(p)}."]
+    lineas = [f"Plan «{p['nombre']}»: {_resumen_plan(p)}.", *_el_plan_entero(p)]
+    lineas += [f"Aviso: {a}" for a in p.get("avisos") or []]  # unit 115 (R-351): before saving, never in silence
     if p["diferencias"]:
         lineas.append("Semanas ya hechas en las que Garmin no dice lo mismo que el plan (se guarda lo del plan, que viene "
                       "de Strava, salvo que Andrés elija Garmin):")
@@ -995,7 +1030,10 @@ def _plan_propuesto(equipo: Equipo, entrada: Any, elecciones: Any) -> tuple[dict
         log.warning("plan from the PC not understood (%s)", exc)
         return f"No se entiende el plan: revisa {exc}. {NADA}"
     a = equipo.asistente
-    propuesta = proponer_ordenado(apartados, a.store, a.hoy(), nombre)
+    try:
+        propuesta = proponer_ordenado(apartados, a.store, a.hoy(), nombre, planes=a.planes)
+    except ErrorPlan as exc:  # unit 115 (R-352): impossible weeks, named; nothing is shown to say «sí» to
+        return f"No se puede guardar ese plan: {exc}. Corrígelo y prepáralo otra vez. {NADA}"
     try:
         elegidas = _elecciones(propuesta, elecciones)
     except ValueError as exc:
@@ -1040,6 +1078,51 @@ def importar_plan_desde_pc(equipo: Equipo, papel: str, entrada: Any, huella_vist
     hecho_texto = f"Hecho: plan «{propuesta['nombre']}» importado ({_resumen_plan(propuesta)})."
     _apuntar(equipo, papel, texto, hecho_texto)
     return hecho_texto
+
+
+# -- unit 115 · R1 (R-345, R-350): any plan, read by the coach ---------------------------------------------------------
+
+def _linea_de_plan(planes: Planes, p: dict, en_curso: int | None) -> str:
+    plan = planes.leer(p["id"]) or {"carreras": [], "semanas": []}
+    principal = next((c for c in plan["carreras"] if c["principal"]), None)
+    partes = [f"- id {p['id']} · «{p['nombre']}»"]
+    partes.append(f"carrera principal: {principal['nombre']}, {principal['fecha'] or 'sin fecha'}" if principal
+                  else "sin carrera principal")
+    if plan["semanas"]:
+        partes.append(f"semanas del {min(s['desde'] for s in plan['semanas'])} al "
+                      f"{max(s['hasta'] for s in plan['semanas'])}")
+    else:
+        partes.append("sin semanas")
+    if p["id"] == en_curso:
+        partes.append("en curso")
+    return " · ".join(partes)
+
+
+def plan_desde_pc(equipo: Equipo, plan: Any = None) -> str:
+    """R1 (R-345, R-350): without `plan`, the plans saved (id, name, main race and its date, first and last week, the
+    one in course); with it (its name or its id), that plan whole as the team sees the plan in course, with its
+    incidents. Reads only: nothing changes."""
+    a = equipo.asistente
+    planes = a.planes
+    if planes is None or not planes.lista():
+        return "No tienes ningún plan guardado."
+    en_curso = planes.en_curso(a.hoy())
+    if plan is None or not str(plan).strip():
+        lineas = [_linea_de_plan(planes, p, en_curso) for p in planes.lista()]
+        return ("Tus planes guardados (el que está en curso lo dice):\n" + "\n".join(lineas)
+                + "\nPara leer uno entero, get_plan con su nombre o su id.")
+    ident = plan_dicho(planes, plan)
+    if isinstance(ident, str):
+        return ident
+    leido = planes.leer(ident)
+    if leido is None:
+        return f"Ese plan ya no está. {NADA}"
+    incidencias = incidencias_del_plan(planes, ident)
+    datos = {"id": ident, **plan_del_equipo(planes, leido, a.store, a.hoy()),
+             **({"incidencias": incidencias} if incidencias else {})}
+    cual = "el plan en curso" if ident == en_curso else "no es el plan en curso"
+    return (f"Plan «{leido['nombre']}» (id {ident}, {cual}), entero; leerlo no cambia nada:\n"
+            + json.dumps(datos, ensure_ascii=False, default=str))
 
 
 # -- unit 081 · R2 (R-221, R-222): a medical PDF read by the coach -----------------------------------------------------

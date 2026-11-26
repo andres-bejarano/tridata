@@ -11,6 +11,9 @@ Bug 085: `eleccion`, the number (id) of the one meant when what is named is ther
 
 Unit 111 (R-334, R-339): `hasta`, the last day of a change of several days in a row (the levels or the % of the
 objective); `eleccion` only takes a whole number (`true`, «1» or 1,5 are not one, P-20261115-52eaa3db).
+
+Unit 115 (R-349): `plan`, the plan a change of the plan speaks of (its name or its id, a number given as one too);
+null, the plan in course.
 """
 from __future__ import annotations
 
@@ -73,6 +76,8 @@ class CambioInterpretado(BaseModel):
         for campo in ("valor", "cantidad", "kcal_estimadas"):  # bug 055: a number given as text, or not a number at all
             if isinstance(datos.get(campo), str):
                 datos[campo] = _numero_enviado(datos[campo])
+        if isinstance(datos.get("plan"), int) and not isinstance(datos.get("plan"), bool):  # unit 115: its id
+            datos["plan"] = str(datos["plan"])
         if isinstance(datos.get("valores"), str):
             numeros = (_numero_enviado(v) for v in datos["valores"].split(";"))
             datos["valores"] = [n for n in numeros if n is not None] or None
@@ -98,6 +103,8 @@ class CambioInterpretado(BaseModel):
     hora: str | None = Field(default=None, description="Una hora que dice (HH:MM), si la acción la pide; o null")
     eleccion: StrictInt | None = Field(
         default=None, description="Bug 085: el número de cuál es, si hay más de uno con ese nombre; o null")
+    plan: str | None = Field(
+        default=None, description="Unit 115: el plan del que habla, por su nombre o su id, si no es el en curso; o null")
     falta: str | None = Field(
         default=None, description="Si no entiendes una parte o falta un dato, una frase corta que lo diga; o null")
 

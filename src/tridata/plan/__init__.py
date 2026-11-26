@@ -71,6 +71,13 @@ it stays; empty, it goes) and checked with `hora_de` («25:00» is a ValueError 
 and «Garmin manda» (`aplicar_garmin`) never touch it, and it is not part of what goes to the watch, so changing only
 the hour never marks a sent session «cambiada». `leer` gives `hora` only to a session that has one; `sesion` and
 `sesiones_reloj` always (None without one).
+
+Unit 115 (R5, R-346..R-348, R-351, R-352): a week keeps its planned km (`plan_semana.previsto_km`, NULL: none, as every
+week of before), set when the plan is saved (`crear`), when a week is added (`anadir_semana`) or changed
+(`cambiar_semana`: «km» not said, they stay; empty, they go) and given by `leer` only to a week that has them.
+`semana_propuesta` checks a week as `anadir_semana` / `cambiar_semana` would, writing nothing (the cards of the coach);
+`comprobar_semanas` is the same rule over the weeks of a plan proposed whole (none ends before it starts, none overlaps
+another), and `carreras_el_dia` finds a race of a proposal already in a plan the same day.
 """
 from __future__ import annotations
 
@@ -195,6 +202,8 @@ _COLUMNAS_GARMIN = {"titulo", "bloques", "fecha", "garmin_workout_id", "garmin_s
 # unit 044: the columns of a live incident, added to an older base without them
 _VIVA = (("zona", "TEXT"), ("lado", "TEXT"), ("que_paso", "TEXT"), ("estado", "TEXT"), ("leccion", "TEXT"),
          ("cerrada", "TEXT"), ("abierta", "TEXT"))
+# unit 115: the planned km of a week, added to an older base without them (NULL: none)
+_KM = (("previsto_km", "REAL"),)
 # unit 045: the strategy of a race, added to an older base without it
 _ESTRATEGIA = (("estrategia", "TEXT"),)
 # unit 059: the result of a race written by hand, added to an older base without it
@@ -240,7 +249,8 @@ class Planes:
             conn.executescript(_SCHEMA)
             for tabla, columnas in (("plan_sesion", _RELOJ), ("plan_incidencia", _VIVA), ("plan_carrera", _ESTRATEGIA),
                                     ("plan_carrera", _RESULTADO), ("plan_sesion", _DESDE_GARMIN),
-                                    ("plan_sesion", _EN_GARMIN), ("plan_sesion", _HORA), ("plan_sesion", _DEPORTE)):
+                                    ("plan_sesion", _EN_GARMIN), ("plan_sesion", _HORA), ("plan_sesion", _DEPORTE),
+                                    ("plan_semana", _KM)):
                 tiene = {f["name"] for f in conn.execute(f"PRAGMA table_info({tabla})")}
                 for columna, tipo in columnas:
                     if columna not in tiene:
@@ -269,10 +279,13 @@ class Planes:
             for clave, (tabla, columnas) in _FILAS.items():
                 if tabla == "plan_sesion":  # unit 077: its hour too, when a session brings one
                     columnas = (*columnas, "hora")
+                if tabla == "plan_semana":  # unit 115: its planned km too, when a week brings them
+                    columnas = (*columnas, "previsto_km")
                 marcas = ", ".join("?" * (len(columnas) + 2))
                 conn.executemany(
                     f"INSERT INTO {tabla} (plan_id, orden, {', '.join(columnas)}) VALUES ({marcas})",  # noqa: S608
-                    [(ident, orden, *(hora_de(fila.get(c)) if c == "hora" else _a_la_base(tabla, c, fila.get(c))
+                    [(ident, orden, *(hora_de(fila.get(c)) if c == "hora" else
+                                      km_de(fila.get(c)) if c == "previsto_km" else _a_la_base(tabla, c, fila.get(c))
                                       for c in columnas))
                      for orden, fila in enumerate(datos.get(clave, []))])
             for orden, fase in enumerate(fases or []):
@@ -298,7 +311,12 @@ class Planes:
                                  (ident,)).fetchall()
             horas = [f["hora"] for f in conn.execute("SELECT hora FROM plan_sesion WHERE plan_id = ? ORDER BY orden",
                                                      (ident,))]
+            kms = [f[0] for f in conn.execute("SELECT previsto_km FROM plan_semana WHERE plan_id = ? ORDER BY orden",
+                                              (ident,))]
             fases = self._fases(conn, ident)
+        for semana, km in zip(plan["semanas"], kms, strict=True):  # unit 115: only when it has them
+            if km is not None:
+                semana["previsto_km"] = km
         for sesion, hora in zip(plan["sesiones"], horas, strict=True):  # unit 076: only when it has one
             if hora:
                 sesion["hora"] = hora
@@ -329,6 +347,14 @@ class Planes:
         if proximos:
             return int(min(proximos, key=lambda p: p["principal"])["id"])
         return int(max(planes, key=lambda p: (p["principal"] or "", p["id"]))["id"])
+
+    def carreras_el_dia(self, fecha: str) -> list[dict[str, Any]]:
+        """Unit 115 (R-351): `[{plan_id, plan, nombre}]` of the races of every plan on that day (ISO)."""
+        with self._connect() as conn:
+            filas = conn.execute("SELECT c.plan_id, p.nombre AS plan, c.nombre FROM plan_carrera c JOIN plan p "
+                                 "ON p.id = c.plan_id WHERE c.fecha = ? ORDER BY c.plan_id, c.orden",
+                                 (fecha,)).fetchall()
+        return [{"plan_id": f["plan_id"], "plan": f["plan"], "nombre": f["nombre"]} for f in filas]
 
     # -- unit 042: the sessions sent to the watch ----------------------------------------------------------------
 
@@ -738,35 +764,53 @@ class Planes:
                              (dentro[0], dentro[-1], fase[0]))
 
     def anadir_semana(self, plan_id: int, datos: dict[str, Any]) -> None:
-        """A week (`{n, desde, hasta, previsto, clave}`; `previsto` as «4:30», «4h30» or «270'») of that plan, also of
-        an empty one (R-203). ValueError, with why, for a bad number, dates or planned time, `hasta` before `desde` or
-        a number the plan has; LookupError without that plan."""
-        semana = _semana_nueva(datos)
+        """A week (`{n, desde, hasta, previsto, clave, km}`; `previsto` as «4:30», «4h30» or «270'»; `km`, the planned
+        km, unit 115) of that plan, also of an empty one (R-203). ValueError, with why, for a bad number, dates, planned
+        time or km, `hasta` before `desde` or a number the plan has; LookupError without that plan."""
         with self._connect() as conn:
-            self._plan_existe(conn, plan_id)
-            self._semana_valida(conn, plan_id, semana, None)
+            semana = self._semana_propuesta(conn, plan_id, None, datos)
             apartado = self._apartado_semanas(conn, plan_id)
             (orden,) = conn.execute("SELECT COALESCE(MAX(orden), -1) + 1 FROM plan_semana WHERE plan_id = ?",
                                     (plan_id,)).fetchone()
-            conn.execute("INSERT INTO plan_semana (plan_id, orden, apartado, n, desde, hasta, previsto_s, clave) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            conn.execute("INSERT INTO plan_semana (plan_id, orden, apartado, n, desde, hasta, previsto_s, clave, "
+                         "previsto_km) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                          (plan_id, orden, apartado, semana["n"], semana["desde"], semana["hasta"],
-                          semana["previsto_s"], semana["clave"]))
+                          semana["previsto_s"], semana["clave"], semana["previsto_km"]))
 
     def cambiar_semana(self, plan_id: int, n: int, cambios: dict[str, Any]) -> None:
-        """Changes `n`, `desde`, `hasta`, `previsto` and `clave` of week `n` of that plan, only the ones in `cambios`, in
-        its row (R-203). ValueError, with why, as `anadir_semana`; LookupError without that week."""
+        """Changes `n`, `desde`, `hasta`, `previsto`, `clave` and `km` of week `n` of that plan, only the ones in
+        `cambios`, in its row (R-203). ValueError, with why, as `anadir_semana`; LookupError without that week."""
         with self._connect() as conn:
             fila = self._fila_semana(conn, plan_id, n)
-            actual = {"n": fila["n"], "desde": fila["desde"], "hasta": fila["hasta"], "clave": fila["clave"],
-                      "previsto": fila["previsto_s"]}
-            semana = _semana_nueva({**actual, **cambios}, previsto_s="previsto" not in cambios)
-            self._semana_valida(conn, plan_id, semana, fila["id"])
-            conn.execute("UPDATE plan_semana SET n = ?, desde = ?, hasta = ?, previsto_s = ?, clave = ? WHERE rowid = ?",
+            semana = self._semana_propuesta(conn, plan_id, n, cambios)
+            conn.execute("UPDATE plan_semana SET n = ?, desde = ?, hasta = ?, previsto_s = ?, clave = ?, "
+                         "previsto_km = ? WHERE rowid = ?",
                          (semana["n"], semana["desde"], semana["hasta"], semana["previsto_s"], semana["clave"],
-                          fila["id"]))
+                          semana["previsto_km"], fila["id"]))
             if semana["n"] != fila["n"]:
                 self._ajustar_fases(conn, plan_id)
+
+    def _semana_propuesta(self, conn: sqlite3.Connection, plan_id: int, n: int | None,
+                          cambios: dict[str, Any]) -> dict[str, Any]:
+        """The week as it would be: a new one (`n` None) or week `n` with `cambios`, checked against the others."""
+        if n is None:
+            self._plan_existe(conn, plan_id)
+            semana = _semana_nueva(cambios)
+            self._semana_valida(conn, plan_id, semana, None)
+            return semana
+        fila = self._fila_semana(conn, plan_id, n)
+        actual = {"n": fila["n"], "desde": fila["desde"], "hasta": fila["hasta"], "clave": fila["clave"],
+                  "previsto": fila["previsto_s"], "km": fila["previsto_km"]}
+        semana = _semana_nueva({**actual, **cambios}, previsto_s="previsto" not in cambios)
+        self._semana_valida(conn, plan_id, semana, fila["id"])
+        return semana
+
+    def semana_propuesta(self, plan_id: int, n: int | None, cambios: dict[str, Any]) -> dict[str, Any]:
+        """Unit 115 (R-348): `{n, desde, hasta, previsto_s, clave, previsto_km}` of the week `anadir_semana` (`n` None)
+        or `cambiar_semana` would leave, checked the same way, writing nothing. ValueError with why; LookupError
+        without the plan or the week."""
+        with self._connect() as conn:
+            return self._semana_propuesta(conn, plan_id, n, cambios)
 
     def sesiones_de_semana(self, plan_id: int, n: int) -> int:
         """How many sessions week `n` of that plan has (what goes with it if it is deleted). LookupError without it."""
@@ -1033,9 +1077,29 @@ def _previsto(valor: Any) -> int | None:
     raise ValueError(f"El previsto «{texto}» no se entiende: escríbelo en horas y minutos, como 4:30")
 
 
+def km_de(valor: Any) -> float | None:
+    """Unit 115: the planned km of a week, «45», «45,5» or a number; empty, None. ValueError saying how it goes."""
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        return None
+    if isinstance(valor, bool):
+        raise ValueError("Los km previstos van como un número, como 45")
+    if isinstance(valor, (int, float)):
+        km = float(valor)
+    else:
+        try:
+            km = float(str(valor).strip().lower().removesuffix("km").strip().replace(",", "."))
+        except ValueError:
+            raise ValueError(f"Los km previstos «{str(valor).strip()}» no se entienden: escríbelos como un número, "
+                             "como 45") from None
+    if not 0 <= km < 1000:
+        raise ValueError("Los km previstos van de 0 a 999")
+    return round(km, 1)
+
+
 def _semana_nueva(datos: dict[str, Any], previsto_s: bool = False) -> dict[str, Any]:
-    """`{n, desde, hasta, previsto_s, clave}` of a week typed by hand (`previsto_s`: `previsto` is already seconds);
-    ValueError, with why, for a bad number, a missing or bad date or a planned time it does not understand."""
+    """`{n, desde, hasta, previsto_s, clave, previsto_km}` of a week typed by hand (`previsto_s`: `previsto` is already
+    seconds); ValueError, with why, for a bad number, a missing or bad date, a planned time or km it does not
+    understand."""
     n = _numero(datos.get("n"), "la semana")
     desde, hasta = _fecha(datos.get("desde")), _fecha(datos.get("hasta"))
     if desde is None or hasta is None:
@@ -1043,7 +1107,23 @@ def _semana_nueva(datos: dict[str, Any], previsto_s: bool = False) -> dict[str, 
     previsto = datos.get("previsto")
     return {"n": n, "desde": desde, "hasta": hasta,
             "previsto_s": (int(previsto) if previsto is not None else None) if previsto_s else _previsto(previsto),
-            "clave": _limpio(datos.get("clave"))}
+            "clave": _limpio(datos.get("clave")), "previsto_km": km_de(datos.get("km"))}
+
+
+def comprobar_semanas(semanas: list[dict[str, Any]]) -> None:
+    """Unit 115 (R-352): the rule of `Planes._semana_valida` over the weeks of a plan proposed whole: ValueError naming
+    the first week that ends before it starts or that overlaps another one."""
+    for s in semanas:
+        if s["hasta"] < s["desde"]:
+            raise ValueError(f"La semana {s['n']} acaba ({s['hasta']}) antes de empezar ({s['desde']}): la fecha hasta "
+                             "va después de la fecha desde")
+    vistas: list[dict[str, Any]] = []
+    for s in sorted(semanas, key=lambda s: (s["desde"], s["n"])):
+        pisada = next((v for v in vistas if v["desde"] <= s["hasta"] and v["hasta"] >= s["desde"]), None)
+        if pisada is not None:
+            raise ValueError(f"La semana {s['n']} (del {s['desde']} al {s['hasta']}) pisa la semana {pisada['n']} "
+                             f"(del {pisada['desde']} al {pisada['hasta']}): una semana no comparte días con otra")
+        vistas.append(s)
 
 
 def _carrera_nueva(carrera: dict[str, Any]) -> dict[str, Any]:
@@ -1061,5 +1141,5 @@ def titulo_incidencia(zona: str | None, lado: str | None) -> str:
     return " ".join(x for x in (zona, lado) if x)
 
 
-__all__ = ["ABIERTA", "APARTADOS_NUEVO", "CERRADA", "CONSERVA", "HECHA", "Planes", "con_hora", "hora_de", "texto_sesion",
-           "titulo_incidencia"]
+__all__ = ["ABIERTA", "APARTADOS_NUEVO", "CERRADA", "CONSERVA", "HECHA", "Planes", "comprobar_semanas", "con_hora",
+           "hora_de", "km_de", "texto_sesion", "titulo_incidencia"]

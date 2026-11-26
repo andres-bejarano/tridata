@@ -134,6 +134,7 @@ def test_server_with_the_team_adds_its_tools(tmp_path, store):  # unit 065 R-186
         "get_comidas",  # unit 100: the foods of older days, by dates (R-281)
         "preparar_zapatilla", "apuntar_zapatilla",  # unit 102: the km of a shoe said by Andrés (R-291)
         "guardar_producto_suplemento",  # unit 109
+        "get_plan",  # unit 115: any plan, read whole (R-345)
     }  # `proponer_cambio` (065) is gone: no card is left anywhere
     escriben = {"hacer_cambio", "apuntar_comida", "apuntar_peso", "importar_plan", "guardar_transcripcion",
                 "apuntar_toma", "apuntar_leche_cafes", "guardar_macros", "apuntar_zapatilla",

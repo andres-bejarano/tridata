@@ -33,6 +33,9 @@ Unit 102 (REC-46, R-291): `preparar_zapatilla` (read-only: what the km Andrés s
 fingerprint) and `apuntar_zapatilla` (with his «sí» and that fingerprint, «dicho por ti»); `get_contexto` carries the
 shoes in use with their km, cap and mark. Unit 103 (REC-47, R-292, R-294): the same pair with `accion` «alta» (a shoe
 given here) and «carrera» (the shoe of a run counted here); `get_contexto` carries the runs without a shoe too.
+Unit 115 (REC-56, REC-57): `get_plan` (read-only: the list of plans, or any plan whole); `preparar_plan` /
+`importar_plan` also save a plan the coach designs (with the planned km of each week); `preparar_cambio` takes the plan
+a change of the plan speaks of (`plan`), and its list carries the weeks, the phases and `estrategia_al_reloj`.
 
 Run it with `tridata-mcp` (stdio transport) and register that command in
 your MCP client, e.g. for Claude Code:
@@ -117,8 +120,13 @@ metrics, sleep, HRV, training load) of one triathlete.
   of the plan, look at its `anteriores` in get_contexto (the same race in
   other years, with their ids: open their laps too) and at the
   `comparativa` of the plan.
-- To import a plan .md, read a new medical PDF, log with his recipes or
-  see the profile of a route: preparar_plan / importar_plan,
+- get_contexto carries only the plan in course: read any other plan
+  (past or future) whole with get_plan. To design a whole new plan, or
+  import a plan .md, give it in its parts to preparar_plan and, with his
+  «sí», importar_plan. Weeks, phases and sessions of any plan, and the
+  strategy of a race to the watch: preparar_cambio with its plan.
+- To read a new medical PDF, log with his recipes or
+  see the profile of a route:
   get_analiticas_pendientes / preparar_transcripcion /
   guardar_transcripcion, get_recetas, get_rutas / get_perfil_ruta. Same
   rule: what saves is shown first and done only with his «sí».
@@ -411,7 +419,8 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
         and salts. Unit 114: the plan carries its `comparativa` (with other years) and each race not yet run its
         `anteriores` (the same race in other years: id, date, km, time and pace). The laps are not here: before
         judging a training or a race, open its laps with get_activity, and before talking about a race look at its
-        `anteriores` (and their laps) and the `comparativa`. Read-only."""
+        `anteriores` (and their laps) and the `comparativa`. Unit 115: only the plan in course is here; any other
+        plan, with get_plan. Read-only."""
         return texto_contexto(equipo)
 
     papeles = f"papel: who you are, one of {', '.join(PAPELES_PC)}."
@@ -421,8 +430,9 @@ def _tools_del_equipo(server: MCPServer, equipo: Equipo) -> None:
     forma = ("cambio: an object with `accion` (an id of the list below) and the fields that action uses: objeto, "
              "campo, valor, valores, texto, cantidad, unidad, kcal_estimadas, lineas, dia, desde, hasta, fecha (dates "
              "YYYY-MM-DD; hasta: the last day of several days in a row, only for niveles_dia and objetivo_dia), "
-             "antes_dicho, falta, hora (HH:MM, only when Andrés says it), eleccion (a whole number); the rest omitted "
-             "or null.")
+             "antes_dicho, falta, hora (HH:MM, only when Andrés says it), eleccion (a whole number), plan (the plan a "
+             "change of the plan speaks of, by its name or its id from get_plan, only when it is not the one in "
+             "course); the rest omitted or null.")
     preparar_desc = (
         "Say what ONE change to Andrés's data or plan would do, exactly as the app would do it (its text, before and "
         "after, where, the lines for the watch and its warnings), and its fingerprint (`Huella`). It changes "
@@ -574,7 +584,8 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
     """Unit 081 (P-20261105-cf32bea5): the plan .md, the medical PDF, the recipes and the routes, by the coach."""
     from .conversaciones.desde_pc import (analiticas_pendientes, guardar_macros_desde_pc,
                                           guardar_transcripcion_desde_pc, importar_plan_desde_pc,
-                                          perfil_ruta_desde_pc, preparar_macros_desde_pc, preparar_plan_desde_pc,
+                                          perfil_ruta_desde_pc, plan_desde_pc, preparar_macros_desde_pc,
+                                          preparar_plan_desde_pc,
                                           preparar_transcripcion_desde_pc, recetario_texto, rutas_desde_pc)
     from .conversaciones.desde_pc import MAX_DIAS_COMIDAS, comidas_desde_pc
 
@@ -592,7 +603,7 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
         "YYYY-MM-DD, times H:MM, km with a decimal comma:\n"
         "- carrera|nombre|fecha|objetivo|estado o resultado (pendiente, or ✅ and the time)|principal (sí o no)\n"
         "- semana|número|desde|hasta|tiempo previsto|sesiones clave en pocas palabras|tiempo en movimiento hecho|km "
-        "hechos\n"
+        "hechos|km previstos (the last one optional; a week to come leaves the two done empty)\n"
         "- sesion|fecha|título|bloques separados por «;»|clave (sí o no)|hora (HH:MM, only if it says it)\n"
         "- fase|nombre|semana desde|semana hasta (numbers of weeks of the plan)\n"
         "- nutricion|producto|pauta · incidencia|fecha|texto · comparativa|texto · nota|texto\n"
@@ -600,11 +611,14 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
         "week with a difference, {\"4\": \"garmin\"} to keep Garmin's instead of the plan's.")
 
     @server.tool(name="preparar_plan", annotations=lee, structured_output=False, description=(
-        "Say what importing a training plan .md would save, as the import of the app: its summary, each week already "
-        "done whose Garmin numbers are not the plan's (the plan's is proposed: it comes from Strava) and what fits "
-        "nowhere (saved as a note of the plan, as it is), with its fingerprint (`Huella`). It saves NOTHING. You "
-        "order the .md in its parts; show Andrés the result and ask; only after his «sí» call importar_plan with the "
-        "same plan, elecciones and that huella.\n" + plan_forma))
+        "Say what saving a whole training plan would save, as the import of the app: a plan .md you order in its "
+        "parts, or a new plan you design yourself for an objective (its races, phases, weeks with their dates, "
+        "planned time and km, and sessions with their day and blocks, in the same parts). It shows the plan whole, "
+        "each week already done whose Garmin numbers are not the plan's (the plan's is proposed: it comes from "
+        "Strava), each race already in another plan that day and what fits nowhere (saved as a note of the plan, as "
+        "it is), with its fingerprint (`Huella`); a week that ends before it starts or overlaps another is refused, "
+        "naming it. It saves NOTHING and changes no other plan. Show Andrés the result and ask; only after his «sí» "
+        "call importar_plan with the same plan, elecciones and that huella.\n" + plan_forma))
     def preparar_plan_tool(plan: dict[str, Any] | str, elecciones: dict[str, str] | None = None) -> str:
         return preparar_plan_desde_pc(equipo, plan, elecciones)
 
@@ -617,6 +631,16 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
     def importar_plan_tool(papel: str, plan: dict[str, Any] | str, huella: str,
                            elecciones: dict[str, str] | None = None, texto: str = "") -> str:
         return importar_plan_desde_pc(equipo, papel, plan, huella, elecciones, texto)
+
+    @server.tool(name="get_plan", annotations=lee, structured_output=False, description=(
+        "Read Andrés's training plans. Without plan: the list of the plans saved (past, in course and to come), each "
+        "with its id, name, main race and date, first and last week, and which one is in course. With plan (its name "
+        "or its id): that plan whole, as get_contexto gives the plan in course: races (with their target, result and "
+        "strategy), phases, weeks with planned (time and km) and done, sessions by day with their id and blocks, "
+        "nutrition, notes, comparison and incidents. To give your opinion of a plan («¿qué te parece?») read it "
+        "here; what you propose to change goes with preparar_cambio and his «sí». Read-only: it changes nothing."))
+    def get_plan_tool(plan: str | None = None) -> str:
+        return plan_desde_pc(equipo, plan)
 
     @server.tool(name="get_analiticas_pendientes", annotations=lee, structured_output=False, description=(
         "The PDF of the folder of Andrés's medical documents (blood tests, stress tests) that have no transcription "

@@ -606,7 +606,10 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
         "hechos|km previstos (the last one optional; a week to come leaves the two done empty)\n"
         "- sesion|fecha|título|bloques separados por «;»|clave (sí o no)|hora (HH:MM, only if it says it)\n"
         "- fase|nombre|semana desde|semana hasta (numbers of weeks of the plan)\n"
-        "- nutricion|producto|pauta · incidencia|fecha|texto · comparativa|texto · nota|texto\n"
+        "- nutricion|producto|pauta · comparativa|texto · nota|texto\n"
+        "- incidencia|fecha|texto|estado|lección (estado and lección only for an incident of a .md downloaded from the "
+        "app, which writes them below it: estado «abierta» or «cerrada el YYYY-MM-DD»; without them it is history, "
+        "closed), followed by one visita|fecha|quién|qué dijo row per «Visita» written below it\n"
         "Copy, never invent: a row that cannot be read goes to the notes with its text. elecciones (optional): for a "
         "week with a difference, {\"4\": \"garmin\"} to keep Garmin's instead of the plan's.")
 
@@ -616,7 +619,11 @@ def _tools_081(server: MCPServer, equipo: Equipo, papeles: str, registro: str) -
         "planned time and km, and sessions with their day and blocks, in the same parts). It shows the plan whole, "
         "each week already done whose Garmin numbers are not the plan's (the plan's is proposed: it comes from "
         "Strava), each race already in another plan that day and what fits nowhere (saved as a note of the plan, as "
-        "it is), with its fingerprint (`Huella`); a week that ends before it starts or overlaps another is refused, "
+        "it is: also each line of the text of a section its rows do not cover), with its fingerprint (`Huella`). The "
+        "same race twice in the .md (the same day, one name inside the other) is the misma carrera: it is saved once, "
+        "the one of the objectives, and it says so. A key session of a week said with its day («miércoles: cuestas») "
+        "is saved as a key session of that day, unless a sesion row already gives it. A week that ends before it "
+        "starts or overlaps another is refused, "
         "naming it. It saves NOTHING and changes no other plan. Show Andrés the result and ask; only after his «sí» "
         "call importar_plan with the same plan, elecciones and that huella.\n" + plan_forma))
     def preparar_plan_tool(plan: dict[str, Any] | str, elecciones: dict[str, str] | None = None) -> str:

@@ -953,7 +953,10 @@ def _resumen_plan(p: dict) -> str:
     partes = [f"{r['carreras']} carreras", f"{r['semanas_hechas']} semanas hechas", f"{r['previstas']} previstas",
               f"{len(p['sesiones'])} sesiones ({r['sesiones_clave']} clave)"]
     partes += [f"{r['fases']} fases"] if r.get("fases") else []
-    partes += [f"{r['nutricion']} de nutrición", f"{r['incidencias']} incidencias", f"{r['comparativa']} de comparativa",
+    abiertas = r.get("abiertas")  # unit 116 (R-361): how many come in open, when some do
+    incidencias = f"{r['incidencias']} incidencias" + (f" ({abiertas} abierta{'s' if abiertas > 1 else ''})"
+                                                       if abiertas else "")
+    partes += [f"{r['nutricion']} de nutrición", incidencias, f"{r['comparativa']} de comparativa",
                f"{r['notas']} notas"]
     return ", ".join(partes)
 
@@ -988,7 +991,8 @@ def _el_plan_entero(p: dict) -> list[str]:
 
 def _vista_plan(p: dict, elecciones: dict[str, str]) -> str:
     lineas = [f"Plan «{p['nombre']}»: {_resumen_plan(p)}.", *_el_plan_entero(p)]
-    lineas += [f"Aviso: {a}" for a in p.get("avisos") or []]  # unit 115 (R-351): before saving, never in silence
+    # unit 115 (R-351): before saving, never in silence; unit 116 (R-358): a race twice in the .md, kept once
+    lineas += [f"Aviso: {a}" for a in p.get("avisos") or []]
     if p["diferencias"]:
         lineas.append("Semanas ya hechas en las que Garmin no dice lo mismo que el plan (se guarda lo del plan, que viene "
                       "de Strava, salvo que Andrés elija Garmin):")

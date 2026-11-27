@@ -31,6 +31,14 @@ field, its planned km (`previsto_km`; the rows of before, without it, read the s
 of keeping that row as a note, and, given the plans (`planes`), says in `avisos` each race already in another plan the
 same day (it is saved only if Andrés says «sí» seeing it).
 
+Unit 116 (REC-58, R-358..R-362): nothing is lost or duplicated. `proponer_ordenado` keeps once a race that comes twice
+in the .md (the same day, one name inside the other, `_juntar_carreras`), the one of the objectives, and says it in
+`avisos`; a key session of a week said with its day («miércoles: cuestas») becomes a session of that day of the week,
+unless the proposal already has it (`_sesiones_de_la_clave`). An «incidencia» row takes its state («abierta», or
+«cerrada el F») and its lesson, and «visita|fecha|quién|qué dijo» rows go with the live incident before them, so the
+incidents of a .md downloaded from the app come back alive (`Planes.crear`). And every line of the text of a section
+no row covers goes to the notes as it is; a section with only its heading keeps it as a note (`_leer_apartado`).
+
 Nothing here logs a text of the plan (R9).
 """
 from __future__ import annotations
@@ -39,12 +47,12 @@ import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from ..storage import DataStore
 from ..nutricion.recetas import normalizar
-from . import Planes, comprobar_semanas, hora_de, semanas as semanas_del_plan
+from . import ABIERTA, CERRADA, Planes, comprobar_semanas, hora_de, semanas as semanas_del_plan
 
 TOLERANCIA_S = 120  # ±2 min per week: Strava and Garmin round differently, that is no difference
 TOLERANCIA_KM = 0.3  # ±0,3 km per week
@@ -238,11 +246,37 @@ def _nutricion(c: list[str]) -> dict | None:
     return {"producto": producto, "pauta": pauta} if producto else None
 
 
+_CERRADA = re.compile(r"cerrada(?:\s+(?:el\s+)?(\d{4}-\d{2}-\d{2}))?")
+
+
 def _incidencia(c: list[str]) -> dict | None:
-    fecha, texto = _campos(c, 2)
+    """Unit 116 (R-361): with a state («abierta», or «cerrada» and its day) it is a live incident, with its lesson and
+    the visits of the rows after it; without one, history as before. A state that is none of them: not read."""
+    fecha, texto, estado, leccion = _campos(c, 4)
     if not texto and _fecha(fecha) is None:
         fecha, texto = "", fecha
-    return {"fecha": _fecha(fecha), "texto": texto} if texto else None
+    if not texto:
+        return None
+    incidencia = {"fecha": _fecha(fecha), "texto": texto}
+    if not estado.strip():
+        return incidencia
+    dicho = normalizar(estado)
+    cerrada = _CERRADA.fullmatch(dicho)
+    if dicho == ABIERTA:
+        viva = {"estado": ABIERTA, "cerrada": None}
+    elif cerrada is not None and (cerrada[1] is None or _fecha(cerrada[1]) is not None):
+        viva = {"estado": CERRADA, "cerrada": _fecha(cerrada[1]) if cerrada[1] else None}
+    else:
+        return None
+    return incidencia | viva | {"leccion": leccion.strip() or None, "visitas": []}
+
+
+def _visita(c: list[str]) -> dict | None:
+    """Unit 116 (R-361): «visita|fecha|quién|qué dijo», of the live incident before it."""
+    fecha, quien, que_dijo = _campos(c, 3)
+    if _fecha(fecha) is None or not quien:
+        return None
+    return {"fecha": _fecha(fecha), "quien": quien, "que_dijo": que_dijo}
 
 
 def _comparativa(c: list[str]) -> dict | None:
@@ -264,16 +298,60 @@ _LECTORES: dict[str, tuple[str, Callable[[list[str]], dict | None]]] = {
     "incidencia": ("incidencias", _incidencia), "comparativa": ("notas", _comparativa), "fase": ("fases", _fase),
 }
 PARTES_DEL_PLAN = ("carreras", "semanas", "sesiones", "nutricion", "incidencias", "notas")
+# unit 116 (R-362): the names of the fields of each kind of row, as `plan_forma` gives them to the coach; a line of the
+# text that only says them with the values of the rows («Estado: abierta») is covered by those rows
+_NOMBRES = {"carrera": "carrera nombre fecha objetivo estado resultado principal",
+            "semana": "semana numero desde hasta previsto clave hecho km", "sesion": "sesion fecha titulo bloques clave hora",
+            "sesión": "sesion fecha titulo bloques clave hora", "nutricion": "nutricion producto pauta",
+            "nutrición": "nutricion producto pauta", "incidencia": "incidencia fecha texto estado leccion",
+            "visita": "visita fecha quien que dijo", "comparativa": "comparativa", "fase": "fase nombre semana desde hasta",
+            "nota": "nota"}
+# a separator row of a Markdown table: «|---|:---:|»
+_SEPARADOR = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
 
 
-def _leer_apartado(propuesta: dict[str, Any], i: int, parte: str, filas: list[str], cuerpo: str) -> None:
-    """Adds the rows of section `i`; what cannot be read goes to the notes, so no piece of the .md is lost."""
+def _palabras(texto: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", normalizar(texto))
+
+
+def _cubierta(linea: str, de_las_filas: set[str]) -> bool:
+    """Unit 116 (R-362): more than half of its words of three or more letters and digits are in the rows (without
+    capitals or accents); a line without such words, by all its words; one without any word says nothing."""
+    todas = _palabras(linea)
+    palabras = [p for p in todas if len(p) >= 3] or todas
+    return not palabras or sum(p in de_las_filas for p in palabras) * 2 > len(palabras)
+
+
+def _sin_cubrir(cuerpo: str, filas: list[str]) -> list[str]:
+    """The lines of the text of a section that its rows do not cover (headers and separators of a table apart)."""
+    de_las_filas = {p for f in filas for p in _palabras(f)}
+    de_las_filas |= {p for f in filas for p in _palabras(_NOMBRES.get(f.split("|")[0].strip().lower(), ""))}
+    lineas = cuerpo.splitlines()
+    cabeceras = {k - 1 for k, linea in enumerate(lineas) if _SEPARADOR.match(linea)}
+    return [linea.strip() for k, linea in enumerate(lineas)
+            if linea.strip() and k not in cabeceras and not _SEPARADOR.match(linea)
+            and not _cubierta(linea, de_las_filas)]
+
+
+def _leer_apartado(propuesta: dict[str, Any], i: int, parte: str, filas: list[str], cuerpo: str,
+                   titulo: str = "") -> None:
+    """Adds the rows of section `i`; what cannot be read goes to the notes, so no piece of the .md is lost. Unit 116
+    (R-362): with rows read, each line of its text no row covers goes to the notes too; a section with a heading and
+    nothing else keeps its heading as a note. A «visita» row goes with the live incident before it (R-361)."""
     leidas: dict[str, list[dict]] = {k: [] for k in (*PARTES_DEL_PLAN, "fases")}
     sobran: list[str] = []
     semanas_ya = {s["n"] for s in propuesta["semanas"]}
     for fila in filas:
         campos = [c.strip() for c in fila.split("|")]
         tipo = campos[0].lower()
+        if tipo == "visita":
+            visita = _visita(campos[1:])
+            viva = leidas["incidencias"][-1] if leidas["incidencias"] else None
+            if visita is not None and viva is not None and "estado" in viva:
+                viva["visitas"].append(visita)
+            elif fila.strip():
+                sobran.append(fila.strip())
+            continue
         lector = _LECTORES.get(tipo)
         cosa = lector[1](campos[1:]) if lector is not None else None
         if lector is None or cosa is None or (lector[0] == "semanas" and cosa["n"] in semanas_ya):
@@ -285,12 +363,12 @@ def _leer_apartado(propuesta: dict[str, Any], i: int, parte: str, filas: list[st
             semanas_ya.add(cosa["n"])
         leidas[lector[0]].append({"apartado": i, **cosa})
     if parte == "nota" or not any(leidas.values()):
-        if cuerpo:
-            propuesta["notas"].append({"apartado": i, "tipo": "nota", "texto": cuerpo})
+        sueltos = [cuerpo] if cuerpo else sobran if sobran else [titulo] if titulo and not filas else []
+        propuesta["notas"].extend({"apartado": i, "tipo": "nota", "texto": t} for t in sueltos)
         return
     for clave, cosas in leidas.items():
         propuesta[clave].extend(cosas)
-    propuesta["notas"].extend({"apartado": i, "tipo": "nota", "texto": t} for t in sobran)
+    propuesta["notas"].extend({"apartado": i, "tipo": "nota", "texto": t} for t in [*sobran, *_sin_cubrir(cuerpo, filas)])
 
 
 def _leer_fases(propuesta: dict[str, Any]) -> None:
@@ -338,6 +416,9 @@ def _resumen(p: dict[str, Any]) -> dict[str, int]:
                "notas": len([n for n in p["notas"] if n["tipo"] == "nota"])}
     if p.get("fases"):  # unit 081: only when it has them, so a plan without them reads as before
         resumen["fases"] = len(p["fases"])
+    abiertas = len([x for x in p["incidencias"] if x.get("estado") == ABIERTA])
+    if abiertas:  # unit 116 (R-361): only when some come in open
+        resumen["abiertas"] = abiertas
     return resumen
 
 
@@ -364,6 +445,68 @@ def ordenar(texto: str, ordenador: Any, hoy: date) -> list[Apartado]:
             for t, r in zip(con_texto, respuestas, strict=True)]
 
 
+def _mismo_nombre(uno: str, otro: str) -> bool:
+    a, b = normalizar(uno), normalizar(otro)
+    return bool(a and b and (a in b or b in a))
+
+
+def _dia_mes(fecha: str) -> str:
+    dia = date.fromisoformat(fecha)
+    return f"{dia.day}/{dia.month}"
+
+
+def _juntar_carreras(propuesta: dict[str, Any]) -> list[str]:
+    """Unit 116 (R-358): two races of the proposal the same day, one name inside the other, are the same: the one of
+    the objectives stays (if neither or both are, the first), with the target of the other if it has none; what to
+    say of each other one."""
+    de_objetivos = [a["parte"] == "objetivos" for a in propuesta["apartados"]]
+    carreras: list[dict] = propuesta["carreras"]
+    fuera: set[int] = set()
+    avisos = []
+    for k, c in enumerate(carreras):
+        misma = next((j for j in range(k) if j not in fuera and c.get("fecha") and carreras[j].get("fecha") == c["fecha"]
+                      and _mismo_nombre(carreras[j]["nombre"], c["nombre"])), None)
+        if misma is None:
+            continue
+        queda, sale = (k, misma) if de_objetivos[c["apartado"]] and not de_objetivos[carreras[misma]["apartado"]] \
+            else (misma, k)
+        if not carreras[queda]["objetivo"] and carreras[sale]["objetivo"]:
+            carreras[queda]["objetivo"] = carreras[sale]["objetivo"]
+        fuera.add(sale)
+        avisos.append(f"La carrera «{carreras[sale]['nombre']}» del {_dia_mes(c['fecha'])} era la misma que "
+                      f"«{carreras[queda]['nombre']}»: se guarda una sola vez")
+    propuesta["carreras"] = [c for k, c in enumerate(carreras) if k not in fuera]
+    return avisos
+
+
+_DIA = r"(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)"
+# a piece of the key sessions of a week that starts with its day: at the start, or after «;», «,», «+», «/», a new line
+# or «y»; the day followed or not by «:» or «-»
+_CON_DIA = re.compile(rf"(?:^|[;,+/\n]|\s+y\s+)\s*{_DIA}\b\s*[:\-–]?\s*", re.IGNORECASE)
+_DIAS = {"lunes": 0, "martes": 1, "miercoles": 2, "jueves": 3, "viernes": 4, "sabado": 5, "domingo": 6}
+
+
+def _sesiones_de_la_clave(propuesta: dict[str, Any]) -> None:
+    """Unit 116 (R-359, R-360): each piece of the key sessions of a week that starts with a day of the week is a key
+    session of that day of the week, its text as its title, without blocks, in the section of the week; unless that
+    day falls outside the week, or the proposal already has a session that day with that text."""
+    for s in propuesta["semanas"]:
+        cortes = list(_CON_DIA.finditer(s["clave"] or ""))
+        desde, hasta = date.fromisoformat(s["desde"]), date.fromisoformat(s["hasta"])
+        for k, corte in enumerate(cortes):
+            fin = cortes[k + 1].start() if k + 1 < len(cortes) else len(s["clave"])
+            titulo = s["clave"][corte.end():fin].strip().rstrip(";,.+/").strip()
+            dia = _DIAS[normalizar(corte[1])]
+            fecha = next((desde + timedelta(days=d) for d in range((hasta - desde).days + 1)
+                          if (desde + timedelta(days=d)).weekday() == dia), None)
+            if not titulo or fecha is None:
+                continue
+            if any(x["fecha"] == fecha.isoformat() and _mismo_nombre(x["titulo"], titulo) for x in propuesta["sesiones"]):
+                continue
+            propuesta["sesiones"].append({"apartado": s["apartado"], "fecha": fecha.isoformat(), "titulo": titulo,
+                                          "bloques": [], "clave": True})
+
+
 def _repetidas(carreras: list[dict], planes: Planes) -> list[str]:
     """Unit 115 (R-351): what to say of each race of the proposal already in a plan the same day (by its name: one
     is the other, or one has the other inside, without capitals or accents)."""
@@ -387,21 +530,25 @@ def proponer_ordenado(apartados: list[Apartado], store: DataStore | None, hoy: d
     """The code's half (unit 081): the proposal of sections already ordered (nothing saved). What cannot be read goes
     to the notes as it was (R6, R-132); each week done is crossed with Garmin (G-54). Unit 115: `ErrorPlan`, naming
     the week, for a week that ends before it starts or overlaps another (R-352); with `planes`, `avisos` says each race
-    already in another plan that day (R-351)."""
+    already in another plan that day (R-351). Unit 116: a race twice in the .md is kept once and said in `avisos`
+    (R-358, before the races in another plan, so each one is said once); the key sessions with their day are sessions
+    (R-359, R-360)."""
     propuesta: dict[str, Any] = {"nombre": nombre or NOMBRE_POR_DEFECTO, "apartados": [],
                                  **{k: [] for k in PARTES_DEL_PLAN}, "fases": []}
     for i, a in enumerate(apartados):
         propuesta["apartados"].append({"titulo": a.titulo, "parte": a.parte})
-        _leer_apartado(propuesta, i, a.parte, list(a.filas), a.cuerpo)
+        _leer_apartado(propuesta, i, a.parte, list(a.filas), a.cuerpo, a.titulo)
     try:
         comprobar_semanas(propuesta["semanas"])
     except ValueError as exc:
         raise ErrorPlan(str(exc)) from None
+    juntadas = _juntar_carreras(propuesta)
+    _sesiones_de_la_clave(propuesta)
     _leer_fases(propuesta)
     propuesta["diferencias"] = _diferencias(propuesta["semanas"], store, hoy)
     propuesta["resumen"] = _resumen(propuesta)
-    if planes is not None:
-        propuesta["avisos"] = _repetidas(propuesta["carreras"], planes)
+    if planes is not None or juntadas:
+        propuesta["avisos"] = juntadas + (_repetidas(propuesta["carreras"], planes) if planes is not None else [])
     return propuesta
 
 

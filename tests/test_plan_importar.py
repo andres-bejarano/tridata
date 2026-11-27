@@ -196,7 +196,8 @@ def test_lo_que_la_ia_no_sabe_leer_va_a_notas_tal_cual(store):  # R6: no piece o
     texto = "# Plan raro\n\n## Objetivos\n\nAlgo que no es una tabla.\n"
     p = importar.proponer(texto, Torpe(), store, HOY)
     assert [c["nombre"] for c in p["carreras"]] == ["sin fecha ni nada"]
-    assert [n["texto"] for n in p["notas"]] == ["esto no es una fila"]
+    # unit 116 (R-362): the text no row covers goes to the notes too, after the rows that could not be read
+    assert [n["texto"] for n in p["notas"]] == ["esto no es una fila", "Algo que no es una tabla."]
 
     class Vacia(OrdenadorFalso):
         def ordenar(self, titulo, texto, hoy):

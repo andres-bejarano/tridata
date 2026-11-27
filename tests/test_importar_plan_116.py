@@ -7,7 +7,7 @@
 - R3 (R-360): if that day the proposal already has a session with that text, no other one is added.
 - R4 (R-361): the incidents of a .md downloaded from the app come back alive, with their state, visits and lesson.
 - R5 (R-362): the text of a section no row covers goes to the notes as it is; a section with a title and nothing
-  else keeps its title as a note.
+  else makes no note (its title is already the heading of its section).
 - R6: a .md downloaded from the app, imported and downloaded again, is the same .md.
 
 The week of the examples goes from Tuesday 2026-11-03 to Monday 2026-11-09: its Wednesday is the 4th and its Saturday
@@ -227,12 +227,14 @@ def test_ni_las_cabeceras_de_tabla_ni_lo_que_fue_a_notas_se_repiten():  # R5
     assert [n["texto"] for n in p["notas"]] == ["esto no se lee: algo raro inventado mañana"]
 
 
-def test_un_apartado_con_titulo_y_nada_mas_guarda_su_titulo(planes):  # R5 · C-460
+def test_un_apartado_con_titulo_y_nada_mas_no_crea_nota(planes):  # R5: its heading is the heading of its section
     p = _propuesta(_a("Objetivos", "objetivos", ["carrera|Behobia|2026-11-08|1:25|pendiente|no"]),
                    _a("Comparativa con 2025", "comparativa"))
-    assert [(n["apartado"], n["tipo"], n["texto"]) for n in p["notas"]] == [(1, "nota", "Comparativa con 2025")]
+    assert p["notas"] == []
     ident = confirmar(p, {}, planes, AHORA)
-    assert [n["texto"] for n in planes.leer(ident)["notas"]] == ["Comparativa con 2025"]
+    plan = planes.leer(ident)
+    assert plan["notas"] == [] and plan["apartados"][1]["titulo"] == "Comparativa con 2025"
+    assert "## Comparativa con 2025" in escribir(plan, None, HOY)
 
 
 # -- R6 · the round trip with «Bajar .md» ----------------------------------------------------------------------------

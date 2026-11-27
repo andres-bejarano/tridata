@@ -37,7 +37,7 @@ in the .md (the same day, one name inside the other, `_juntar_carreras`), the on
 unless the proposal already has it (`_sesiones_de_la_clave`). An «incidencia» row takes its state («abierta», or
 «cerrada el F») and its lesson, and «visita|fecha|quién|qué dijo» rows go with the live incident before them, so the
 incidents of a .md downloaded from the app come back alive (`Planes.crear`). And every line of the text of a section
-no row covers goes to the notes as it is; a section with only its heading keeps it as a note (`_leer_apartado`).
+no row covers goes to the notes as it is (`_leer_apartado`).
 
 Nothing here logs a text of the plan (R9).
 """
@@ -333,11 +333,11 @@ def _sin_cubrir(cuerpo: str, filas: list[str]) -> list[str]:
             and not _cubierta(linea, de_las_filas)]
 
 
-def _leer_apartado(propuesta: dict[str, Any], i: int, parte: str, filas: list[str], cuerpo: str,
-                   titulo: str = "") -> None:
+def _leer_apartado(propuesta: dict[str, Any], i: int, parte: str, filas: list[str], cuerpo: str) -> None:
     """Adds the rows of section `i`; what cannot be read goes to the notes, so no piece of the .md is lost. Unit 116
-    (R-362): with rows read, each line of its text no row covers goes to the notes too; a section with a heading and
-    nothing else keeps its heading as a note. A «visita» row goes with the live incident before it (R-361)."""
+    (R-362): with rows read, each line of its text no row covers goes to the notes too (a section with a heading and
+    nothing else makes no note: its heading is kept as the heading of its section). A «visita» row goes with the live
+    incident before it (R-361)."""
     leidas: dict[str, list[dict]] = {k: [] for k in (*PARTES_DEL_PLAN, "fases")}
     sobran: list[str] = []
     semanas_ya = {s["n"] for s in propuesta["semanas"]}
@@ -363,7 +363,7 @@ def _leer_apartado(propuesta: dict[str, Any], i: int, parte: str, filas: list[st
             semanas_ya.add(cosa["n"])
         leidas[lector[0]].append({"apartado": i, **cosa})
     if parte == "nota" or not any(leidas.values()):
-        sueltos = [cuerpo] if cuerpo else sobran if sobran else [titulo] if titulo and not filas else []
+        sueltos = [cuerpo] if cuerpo else sobran
         propuesta["notas"].extend({"apartado": i, "tipo": "nota", "texto": t} for t in sueltos)
         return
     for clave, cosas in leidas.items():
@@ -537,7 +537,7 @@ def proponer_ordenado(apartados: list[Apartado], store: DataStore | None, hoy: d
                                  **{k: [] for k in PARTES_DEL_PLAN}, "fases": []}
     for i, a in enumerate(apartados):
         propuesta["apartados"].append({"titulo": a.titulo, "parte": a.parte})
-        _leer_apartado(propuesta, i, a.parte, list(a.filas), a.cuerpo, a.titulo)
+        _leer_apartado(propuesta, i, a.parte, list(a.filas), a.cuerpo)
     try:
         comprobar_semanas(propuesta["semanas"])
     except ValueError as exc:

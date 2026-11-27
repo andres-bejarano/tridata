@@ -26,8 +26,9 @@ Unit 044 (REC-24, R-145..R-150): an incident comes alive. Opened (only from a co
 keeps its zone, side, since when and what happened (`zona`, `lado`, `que_paso`, `estado` "abierta"), and its row of
 `plan_incidencia` gets the text «zona lado: qué pasó», so the .md writes it among the incidents as before; its
 visits to the physio or the doctor go to `plan_visita` (date, who, what they said); closing it keeps its lesson and
-the day (`leccion`, `cerrada`). The incidents of the .md have no state: they are history, and are shown as closed
-without a lesson (`importada`). The notes of a day («FC alta para el ritmo») go to `plan_nota_dia` and are shown in
+the day (`leccion`, `cerrada`). An incident of the .md without a state is history, and is shown as closed without a
+lesson (`importada`); since unit 116 (R-361) one of the .md with its state (a .md downloaded from the app) comes back
+alive, with its visits and lesson (`crear`). The notes of a day («FC alta para el ritmo») go to `plan_nota_dia` and are shown in
 what was done that day (`plan/semanas.py`). `leer` gives the incidents as before (apartado, fecha, texto).
 
 Unit 045 (REC-25, R-156): a race keeps its strategy by stretches (`plan_carrera.estrategia`, its lines as JSON:
@@ -270,13 +271,21 @@ class Planes:
         """Saves a whole plan (`nombre`, `apartados` and its rows, as `leer` gives them) and returns its id.
 
         Unit 083 (R4): and its `fases` (`[{nombre, desde_n, hasta_n}]`, checked as `anadir_fase` checks them), in the
-        SAME transaction: a phase that does not fit (ValueError) or a failure of the base saves nothing at all."""
+        SAME transaction: a phase that does not fit (ValueError) or a failure of the base saves nothing at all.
+
+        Unit 116 (R-361): an incident with its `estado` (and `leccion`, `cerrada`, `visitas`) is saved alive, its zone
+        and side taken from its text «zona lado: qué pasó» (`zona_lado`), its visits in `plan_visita`, in that same
+        transaction; one without it, as before (history)."""
         with self._connect() as conn:
             cursor = conn.execute("INSERT INTO plan (nombre, apartados, creado) VALUES (?, ?, ?)",
                                   (datos["nombre"], json.dumps(datos["apartados"], ensure_ascii=False),
                                    ahora.isoformat(timespec="seconds")))
             ident = int(cursor.lastrowid or 0)
             for clave, (tabla, columnas) in _FILAS.items():
+                if tabla == "plan_incidencia":  # unit 116: one by one, the live ones with their visits
+                    for orden, fila in enumerate(datos.get(clave, [])):
+                        self._incidencia_nueva(conn, ident, orden, fila, ahora)
+                    continue
                 if tabla == "plan_sesion":  # unit 077: its hour too, when a session brings one
                     columnas = (*columnas, "hora")
                 if tabla == "plan_semana":  # unit 115: its planned km too, when a week brings them
@@ -294,6 +303,28 @@ class Planes:
                 conn.execute("INSERT INTO plan_fase (plan_id, orden, nombre, desde_n, hasta_n) VALUES (?, ?, ?, ?, ?)",
                              (ident, orden, limpio, desde, hasta))
         return ident
+
+    @staticmethod
+    def _incidencia_nueva(conn: sqlite3.Connection, plan_id: int, orden: int, fila: dict[str, Any],
+                          ahora: datetime) -> None:
+        """Unit 116 (R-361): an incident of a plan saved whole; with its state, alive and with its visits."""
+        estado = fila.get("estado")
+        if not estado:
+            conn.execute("INSERT INTO plan_incidencia (plan_id, orden, apartado, fecha, texto) VALUES (?, ?, ?, ?, ?)",
+                         (plan_id, orden, fila["apartado"], fila.get("fecha"), fila["texto"]))
+            return
+        if estado not in (ABIERTA, CERRADA):
+            raise ValueError(f"El estado de una incidencia es {ABIERTA} o {CERRADA}")
+        zona, lado, que_paso = zona_lado(fila["texto"])
+        cuando = ahora.isoformat(timespec="seconds")
+        cursor = conn.execute(
+            "INSERT INTO plan_incidencia (plan_id, orden, apartado, fecha, texto, zona, lado, que_paso, estado, leccion, "
+            "cerrada, abierta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (plan_id, orden, fila["apartado"], fila.get("fecha"), fila["texto"], zona, lado, que_paso, estado,
+             fila.get("leccion"), fila.get("cerrada") if estado == CERRADA else None, cuando))
+        conn.executemany("INSERT INTO plan_visita (incidencia, fecha, quien, que_dijo, creada) VALUES (?, ?, ?, ?, ?)",
+                         [(cursor.lastrowid, v["fecha"], v["quien"], v["que_dijo"], cuando)
+                          for v in fila.get("visitas") or []])
 
     def leer(self, ident: int) -> dict[str, Any] | None:
         """The whole plan, or None if there is no plan with that id."""
@@ -1141,5 +1172,23 @@ def titulo_incidencia(zona: str | None, lado: str | None) -> str:
     return " ".join(x for x in (zona, lado) if x)
 
 
+# unit 116: the words a side starts with («derecho», «izquierda, lateral», «ambos»…)
+_LADOS = ("derech", "izquierd", "ambos", "ambas", "bilateral")
+
+
+def zona_lado(texto: str) -> tuple[str, str | None, str]:
+    """Unit 116 (R-361): (zone, side, what happened) of the text «zona lado: qué pasó» the app writes of a live
+    incident («gemelo derecho: pinchazo» is gemelo, derecho, pinchazo); without a side it finds, the zone is what goes
+    before «:» and what happened the whole text; without «:», both are the whole text."""
+    nombre, dos_puntos, que_paso = texto.partition(":")
+    if not dos_puntos or not nombre.strip() or not que_paso.strip():
+        return texto.strip(), None, texto.strip()
+    palabras = nombre.split()
+    lado = next((k for k, p in enumerate(palabras) if k and p.lower().startswith(_LADOS)), None)
+    if lado is None:
+        return nombre.strip(), None, texto.strip()
+    return " ".join(palabras[:lado]), " ".join(palabras[lado:]), que_paso.strip()
+
+
 __all__ = ["ABIERTA", "APARTADOS_NUEVO", "CERRADA", "CONSERVA", "HECHA", "Planes", "comprobar_semanas", "con_hora",
-           "hora_de", "km_de", "texto_sesion", "titulo_incidencia"]
+           "hora_de", "km_de", "texto_sesion", "titulo_incidencia", "zona_lado"]

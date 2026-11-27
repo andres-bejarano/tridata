@@ -1,9 +1,10 @@
 name: tests
 
-# Same command as locally: scripts/ci/full-suite (see AGENTS.md).
+# Same command as locally: scripts/ci/full-suite (see AGENTS.md). On pull requests and on master only: a push of
+# work in progress to a branch is not checked here (it is checked locally and again in its pull request).
 on:
   push:
-    branches: ["**"]
+    branches: [master]
   pull_request:
     branches: [master]
 
